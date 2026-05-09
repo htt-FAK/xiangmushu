@@ -1,0 +1,27 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="fastapi" />
+          <option value="uvicorn" />
+          <option value="langchain-community" />
+          <option value="alembic" />
+          <option value="opencv-python" />
+          <option value="redis" />
+          <option value="aioredis" />
+          <option value="pytest" />
+          <option value="pytest-asyncio" />
+          <option value="black" />
+          <option value="flake8" />
+          <option value="pandas" />
+          <option value="pytesseract" />
+          <option value="faiss-cpu" />
+          <option value="chromadb" />
+          <option value="sentence-transformers" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
