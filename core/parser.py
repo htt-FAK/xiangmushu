@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 from docx import Document
+from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
 import re
 
 
@@ -10,6 +12,8 @@ class Section:
     title: str
     content: str = ""
     tables: List[List[List[str]]] = field(default_factory=list)
+    # 与 tables[i] 一一对应：在整篇 Document.tables 中的全局下标（供回填定位）
+    table_doc_indices: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -17,59 +21,19 @@ class ParsedDocument:
     filename: str
     sections: List[Section] = field(default_factory=list)
     raw_tables: List[List[List[str]]] = field(default_factory=list)
+    kb_source_type: str = ""
 
 
 class DocumentParser:
-    """解析 Word 文档，按标题层级提取章节和表格。"""
+    """解析 Word：按 body 顺序遍历段落与表格，章节与表格归属一致。"""
 
-    # 兼容：即使样式不是 Heading，文本匹配这些模式也视为标题
     _TITLE_PATTERN = re.compile(r"^(第?[一二三四五六七八九十\d]+[、.．]\s*|(\d+\.)+\s*)")
 
     def parse(self, file_path: str) -> ParsedDocument:
         doc = Document(file_path)
         filename = file_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
 
-        sections: List[Section] = []
-        current_section = Section(level=0, title="文档开头")
-        sections.append(current_section)
-
-        # 先收集所有表格，记录它们在 XML 中的位置，用于判断归属
-        table_elements = list(doc.tables)
-        table_positions = self._map_table_positions(doc)
-
-        # 解析段落
-        for para in doc.paragraphs:
-            style_name = para.style.name if para.style else ""
-            text = para.text.strip()
-
-            if not text:
-                continue
-
-            is_heading = False
-            heading_level = 0
-
-            # 判断是否为标题
-            if style_name.startswith("Heading"):
-                is_heading = True
-                try:
-                    heading_level = int(style_name.replace("Heading", "").strip())
-                except ValueError:
-                    heading_level = 1
-            elif self._TITLE_PATTERN.match(text) and len(text) < 80:
-                # 兼容非标准标题样式
-                is_heading = True
-                heading_level = 1
-
-            if is_heading:
-                current_section = Section(level=heading_level, title=text)
-                sections.append(current_section)
-            else:
-                if current_section.content:
-                    current_section.content += "\n"
-                current_section.content += text
-
-        # 把表格分配到对应的章节
-        all_tables_raw = []
+        all_tables_raw: List[List[List[str]]] = []
         for tbl in doc.tables:
             table_data = []
             for row in tbl.rows:
@@ -77,19 +41,49 @@ class DocumentParser:
                 table_data.append(row_data)
             all_tables_raw.append(table_data)
 
-        # 简单策略：把表格按顺序附加到 sections
-        # 通过 XML 中的位置判断表格属于哪个段落区间
-        for idx, table_data in enumerate(all_tables_raw):
-            assigned = False
-            for si in range(len(sections) - 1, 0, -1):
-                # 简化：把表格追加到最近的标题 section
-                sections[si].tables.append(table_data)
-                assigned = True
-                break
-            if not assigned and sections:
-                sections[0].tables.append(table_data)
+        sections: List[Section] = [Section(level=0, title="文档开头")]
+        current_section = sections[0]
 
-        # 如果第一个 section 没有实际内容，移除
+        def _heading_level(style_name: str) -> int:
+            if not style_name.startswith("Heading"):
+                return 0
+            try:
+                return int(style_name.replace("Heading", "").strip())
+            except ValueError:
+                return 1
+
+        for child in doc.element.body:
+            if child.tag == qn("w:p"):
+                para = Paragraph(child, doc._body)
+                text = para.text.strip()
+                if not text:
+                    continue
+
+                style_name = para.style.name if para.style else ""
+                is_heading = False
+                heading_level = 0
+
+                if style_name.startswith("Heading"):
+                    is_heading = True
+                    heading_level = _heading_level(style_name)
+                elif self._TITLE_PATTERN.match(text) and len(text) < 80:
+                    is_heading = True
+                    heading_level = 1
+
+                if is_heading:
+                    current_section = Section(level=heading_level, title=text)
+                    sections.append(current_section)
+                else:
+                    if current_section.content:
+                        current_section.content += "\n"
+                    current_section.content += text
+
+            elif child.tag == qn("w:tbl"):
+                table_idx = self._table_index_for_element(doc, child)
+                if table_idx is not None and table_idx < len(all_tables_raw):
+                    current_section.tables.append(all_tables_raw[table_idx])
+                    current_section.table_doc_indices.append(table_idx)
+
         if sections[0].level == 0 and not sections[0].content and not sections[0].tables:
             sections = sections[1:]
 
@@ -97,10 +91,18 @@ class DocumentParser:
             filename=filename,
             sections=sections,
             raw_tables=all_tables_raw,
+            kb_source_type="docx",
         )
 
+    @staticmethod
+    def _table_index_for_element(doc: Document, tbl_el) -> Optional[int]:
+        for i, t in enumerate(doc.tables):
+            if t._element is tbl_el:
+                return i
+        return None
+
     def _map_table_positions(self, doc: Document):
-        """记录每个表格在文档 XML 元素中的大致位置。"""
+        """兼容旧调用：记录每个表格前的段落序号。"""
         positions = []
         table_idx = 0
         para_idx = 0
