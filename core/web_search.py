@@ -1,18 +1,17 @@
-"""可选联网检索（Tavily）。未配置 API Key 时返回空列表。"""
+"""可选：Tavily HTTP 检索（独立工具；主生成链路已改用百炼 enable_search）。"""
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, List
 from urllib import request, error
-
-import config
 
 
 def search_web(query: str, max_results: int = 5) -> List[dict[str, Any]]:
     """
     返回 [{"title": str, "url": str, "content": str}, ...]
     """
-    key = (config.TAVILY_API_KEY or "").strip()
+    key = (os.getenv("TAVILY_API_KEY") or "").strip()
     if not key:
         return []
 

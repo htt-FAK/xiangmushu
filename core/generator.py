@@ -1,10 +1,25 @@
-from typing import List, Dict, Optional, Iterator, Tuple
+import logging
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+
 from openai import OpenAI
-from core.vector_store import VectorStore
-from core.fill_task import FillTask
-from core.web_search import search_web
-from core.dashscope_chat import chat_completions_create
+
 import config
+from core.dashscope_chat import chat_completions_create
+from core.fill_task import FillTask
+from core.vector_store import VectorStore
+
+_LOG = logging.getLogger(__name__)
+
+
+def _ensure_gen_logger() -> None:
+    if _LOG.handlers:
+        return
+    h = logging.StreamHandler()
+    h.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    _LOG.addHandler(h)
+    _LOG.setLevel(logging.INFO)
 
 
 SYSTEM_PROMPT = """你是一位资深的项目计划书撰写专家，根据给定「参考资料」撰写申报类正文。
@@ -29,7 +44,7 @@ USER_PROMPT = """【撰写任务】
 
 
 class ContentGenerator:
-    """RAG + 可选联网检索 + 距离阈值；支持流式输出。"""
+    """RAG + 距离阈值；空库/无命中，或（开启联网且）最佳命中估算相似度过低时，走百炼内置搜索（enable_search + 联网档模型）。"""
 
     def __init__(self, vector_store: VectorStore):
         self._vs = vector_store
@@ -46,7 +61,7 @@ class ContentGenerator:
         top_k: int,
         enable_web: bool,
         retrieval_max_distance: Optional[float],
-    ) -> Tuple[List[Dict[str, str]], str, float]:
+    ) -> Tuple[List[Dict[str, str]], str, float, Dict[str, Any], Dict[str, Any]]:
         query = f"{task.target_chapter} {task.description}"
         max_d = (
             retrieval_max_distance
@@ -64,29 +79,24 @@ class ContentGenerator:
 
         weak_kb = kb_empty or len(results) == 0
 
-        web_blocks: List[str] = []
-        if enable_web and weak_kb:
-            snippets = search_web(query, max_results=5)
-            if snippets:
-                for i, s in enumerate(snippets, 1):
-                    title = s.get("title") or "来源"
-                    url = s.get("url") or ""
-                    body = s.get("content") or ""
-                    web_blocks.append(f"【网络参考{i}】{title}\n{body}\n链接：{url}")
-            else:
-                web_blocks.append(
-                    "（已开启联网但未配置 TAVILY_API_KEY 或检索失败，无网络摘要。）"
+        best_hit_distance: Optional[float] = None
+        best_similarity_est: Optional[float] = None
+        low_similarity = False
+        if results:
+            dists = [
+                float(r["distance"])
+                for r in results
+                if r.get("distance") is not None
+            ]
+            if dists:
+                best_hit_distance = min(dists)
+                # 余弦距离族下常近似 sim ≈ 1 - d；其它度量下仅作可调启发式
+                best_similarity_est = max(
+                    0.0, min(1.0, 1.0 - best_hit_distance)
                 )
+                low_similarity = best_similarity_est < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
 
         ref_texts = self._format_kb(results)
-        if web_blocks:
-            ref_texts = ref_texts + "\n\n---\n\n" + "\n\n".join(web_blocks)
-
-        if ref_texts.strip() == "":
-            ref_texts = (
-                "（当前无向量库命中且无可用网络摘要。请仅作极短说明：无法依据资料填写，"
-                "勿编造任何具体事实或专有名词。）"
-            )
 
         word_limit = task.word_limit
         if task.task_type == "table_cell":
@@ -115,7 +125,7 @@ class ContentGenerator:
         else:
             user_msg += (
                 "\n\n【无有效知识库命中】禁止编造具体机构/产品名称、ISIN、费率、日期、评级或监管结论。"
-                "若文中有【网络参考】，仅可谨慎采信其中已写明的事实，勿添加其中未出现的具体数据。"
+                "若模型已通过联网检索补充到公开信息，仅可谨慎采信其中已写明的事实，勿添加其中未出现的具体数据。"
             )
 
         messages: List[Dict[str, str]] = [
@@ -123,11 +133,39 @@ class ContentGenerator:
             {"role": "user", "content": user_msg},
         ]
 
-        # 弱知识库且开启联网（已并入网络侧提示）：与视觉同档 qwen-plus
-        use_plus = enable_web and weak_kb
+        # 弱知识库，或命中质量差且开启联网：走百炼内置联网（extra_body.enable_search），使用 VISION_WEB_MODEL
+        use_plus = enable_web and (weak_kb or low_similarity)
+        extra_body: Dict[str, Any] = {}
         if use_plus:
-            return messages, config.VISION_WEB_MODEL, config.TEMP_WEB_GEN
-        return messages, config.LARGE_LLM_MODEL, config.TEMP_LARGE_LLM
+            extra_body["enable_search"] = True
+            model = config.VISION_WEB_MODEL
+            temperature = config.TEMP_WEB_GEN
+        else:
+            model = config.LARGE_LLM_MODEL
+            temperature = config.TEMP_LARGE_LLM
+
+        route_meta: Dict[str, Any] = {
+            "task_id": task.task_id,
+            "target_chapter": task.target_chapter,
+            "kb_empty": kb_empty,
+            "kb_hits": len(results),
+            "weak_kb": weak_kb,
+            "low_similarity": low_similarity,
+            "best_hit_distance": best_hit_distance,
+            "best_similarity_est": best_similarity_est,
+            "retrieval_web_similarity_threshold": config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD,
+            "enable_web_requested": enable_web,
+            "native_web_search": bool(extra_body.get("enable_search")),
+            "model": model,
+            "temperature": temperature,
+            "top_k": top_k,
+            "retrieval_max_distance": max_d,
+            "extra_body_keys": list(extra_body.keys()),
+        }
+        _ensure_gen_logger()
+        _LOG.info("content_gen_route %s", route_meta)
+
+        return messages, model, temperature, extra_body, route_meta
 
     def generate_stream(
         self,
@@ -135,24 +173,43 @@ class ContentGenerator:
         top_k: int = 3,
         enable_web: bool = False,
         retrieval_max_distance: Optional[float] = None,
+        route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Iterator[str]:
-        messages, model, temperature = self._build_chat_request(
-            task, top_k, enable_web, retrieval_max_distance
-        )
+        (
+            messages,
+            model,
+            temperature,
+            extra_body,
+            route_meta,
+        ) = self._build_chat_request(task, top_k, enable_web, retrieval_max_distance)
+        if route_hook:
+            route_hook(route_meta)
         stream = chat_completions_create(
             self._client,
             model=model,
             messages=messages,
             temperature=temperature,
             stream=True,
+            extra_body=extra_body,
         )
+        acc_len = 0
         for chunk in stream:
             ch = chunk.choices[0] if chunk.choices else None
             if not ch or not ch.delta:
                 continue
             piece = ch.delta.content or ""
             if piece:
+                acc_len += len(piece)
                 yield piece
+        _ensure_gen_logger()
+        _LOG.info(
+            "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
+            route_meta.get("task_id"),
+            route_meta.get("target_chapter"),
+            model,
+            route_meta.get("native_web_search"),
+            acc_len,
+        )
 
     def generate(
         self,
@@ -160,6 +217,7 @@ class ContentGenerator:
         top_k: int = 3,
         enable_web: bool = False,
         retrieval_max_distance: Optional[float] = None,
+        route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> str:
         return "".join(
             self.generate_stream(
@@ -167,6 +225,7 @@ class ContentGenerator:
                 top_k=top_k,
                 enable_web=enable_web,
                 retrieval_max_distance=retrieval_max_distance,
+                route_hook=route_hook,
             )
         ).strip()
 

@@ -203,7 +203,7 @@ def _routing_tests() -> bool:
 
     # 有 KB 命中 -> 大模型
     g1 = ContentGenerator(_MockVS(5, [{"text": "参考资料", "metadata": {"source": "x"}, "distance": 0.3}]))
-    _, m1, t1 = g1._build_chat_request(task, top_k=3, enable_web=True, retrieval_max_distance=1.0)
+    _, m1, t1, _, _ = g1._build_chat_request(task, top_k=3, enable_web=True, retrieval_max_distance=1.0)
     print(f"  有命中 + 开联网: model={m1!r} temp={t1}")
     if m1 != config.LARGE_LLM_MODEL:
         print("  [FAIL] 预期 LARGE_LLM_MODEL")
@@ -211,25 +211,53 @@ def _routing_tests() -> bool:
     else:
         print("  [OK] 使用大模型")
 
-    # 空库 + 开联网 -> plus（弱 KB 分支；不调用 Tavily 时仍有占位提示）
+    # 空库 + 开联网 -> VISION_WEB_MODEL + extra_body.enable_search（百炼内置联网）
     g2 = ContentGenerator(_MockVS(0, []))
-    _, m2, t2 = g2._build_chat_request(task, top_k=3, enable_web=True, retrieval_max_distance=1.0)
+    _, m2, t2, eb2, _ = g2._build_chat_request(task, top_k=3, enable_web=True, retrieval_max_distance=1.0)
     print(f"  空库 + 开联网: model={m2!r} temp={t2}")
     if m2 != config.VISION_WEB_MODEL:
-        print("  [FAIL] 预期 VISION_WEB_MODEL（与视觉同档）")
+        print("  [FAIL] 预期 VISION_WEB_MODEL（弱库联网档）")
         ok = False
     else:
         print("  [OK] 使用 qwen-plus 档")
+    if not eb2.get("enable_search"):
+        print("  [FAIL] 预期 extra_body.enable_search=True")
+        ok = False
+    else:
+        print("  [OK] enable_search 已开启")
 
     # 空库 + 不开联网 -> 大模型
     g3 = ContentGenerator(_MockVS(0, []))
-    _, m3, t3 = g3._build_chat_request(task, top_k=3, enable_web=False, retrieval_max_distance=1.0)
+    _, m3, t3, eb3, _ = g3._build_chat_request(task, top_k=3, enable_web=False, retrieval_max_distance=1.0)
     print(f"  空库 + 关联网: model={m3!r} temp={t3}")
     if m3 != config.LARGE_LLM_MODEL:
         print("  [FAIL] 预期 LARGE_LLM_MODEL")
         ok = False
     else:
         print("  [OK] 使用大模型")
+    if eb3.get("enable_search"):
+        print("  [FAIL] 关联网不应设置 enable_search")
+        ok = False
+
+    # 有命中但 distance 大 -> 估算相似度低 + 开联网 -> 仍走联网档
+    g4 = ContentGenerator(
+        _MockVS(
+            5,
+            [{"text": "弱相关片段", "metadata": {"source": "x"}, "distance": 0.86}],
+        )
+    )
+    _, m4, t4, eb4, rm4 = g4._build_chat_request(
+        task, top_k=3, enable_web=True, retrieval_max_distance=1.0
+    )
+    print(f"  有命中但低相似 + 开联网: model={m4!r} low_sim={rm4.get('low_similarity')}")
+    if m4 != config.VISION_WEB_MODEL:
+        print("  [FAIL] 预期 VISION_WEB_MODEL（低相似度联网档）")
+        ok = False
+    else:
+        print("  [OK] 低相似触发联网档")
+    if not eb4.get("enable_search"):
+        print("  [FAIL] 预期 extra_body.enable_search=True")
+        ok = False
 
     return ok
 

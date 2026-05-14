@@ -1,6 +1,10 @@
 from typing import List
 import re
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches
 from docx.text.paragraph import Paragraph
 from core.fill_task import FillTask
 
@@ -49,6 +53,9 @@ class WordFiller:
                 self._fill_table_cell(doc, task, content)
             else:
                 self._fill_paragraph(doc, task, content)
+
+        for table in doc.tables:
+            self._ensure_table_readability(table)
 
         doc.save(output_path)
 
@@ -124,8 +131,72 @@ class WordFiller:
 
         # 使用官方 cell.text：清空内容时保留 w:tcPr（列宽等），避免手写清 run 破坏版式
         cell.text = content
-        # 固定表格布局，减轻「长文挤占后左列被压成极窄」的自适应收缩
         try:
             table.autofit = False
         except Exception:
             pass
+
+    def _ensure_table_readability(self, table) -> None:
+        """加宽列、固定布局、允许换行，减轻单元格文字被压成极窄条后截断观感。"""
+        try:
+            rows = table.rows
+            if not rows:
+                return
+            ncols = len(rows[0].cells)
+            if ncols <= 0:
+                return
+        except Exception:
+            return
+
+        try:
+            table.autofit = False
+        except Exception:
+            pass
+
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+
+        tl = tblPr.find(qn("w:tblLayout"))
+        if tl is None:
+            tl = OxmlElement("w:tblLayout")
+            tl.set(qn("w:type"), "fixed")
+            tblPr.append(tl)
+        else:
+            tl.set(qn("w:type"), "fixed")
+
+        tblW = tblPr.find(qn("w:tblW"))
+        if tblW is None:
+            tblW = OxmlElement("w:tblW")
+            tblPr.append(tblW)
+        tblW.set(qn("w:w"), "5000")
+        tblW.set(qn("w:type"), "pct")
+
+        usable = 6.35
+        try:
+            col_w = Inches(usable / ncols)
+        except Exception:
+            return
+
+        for row in rows:
+            for cell in row.cells:
+                try:
+                    cell.width = col_w
+                    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+                except Exception:
+                    pass
+                tc = cell._tc
+                tcPr = tc.tcPr
+                if tcPr is None:
+                    tcPr = OxmlElement("w:tcPr")
+                    tc.insert(0, tcPr)
+                for nw in tcPr.findall(qn("w:noWrap")):
+                    tcPr.remove(nw)
+                for child in list(tcPr):
+                    if child.tag == qn("w:vAlign"):
+                        tcPr.remove(child)
+                valign = OxmlElement("w:vAlign")
+                valign.set(qn("w:val"), "top")
+                tcPr.append(valign)

@@ -19,9 +19,10 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
+# 弱知识库 + 联网分支：须使用百炼支持 extra_body.enable_search 的 qwen-plus 系（见阿里云「大模型如何联网搜索」）
 VISION_WEB_MODEL = _vw or "qwen3.5-plus-2026-04-20"
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-flash-2026-04-16").strip()
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "deepseek-v4-pro"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "glm-5"
 
 TEMP_VISION = float(os.getenv("TEMP_VISION", "0.25"))
 TEMP_WEB_GEN = float(os.getenv("TEMP_WEB_GEN", "0.4"))
@@ -30,9 +31,11 @@ TEMP_LARGE_LLM = float(os.getenv("TEMP_LARGE_LLM", "0.65"))
 
 # 检索：Chroma 返回的 distance，越小通常越相似（与距离度量有关）；超过则视为弱相关
 RETRIEVAL_MAX_DISTANCE = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "1.25"))
-
-# 联网搜索（Tavily，可选）
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+# 侧栏开启「联网补料」时：除空库/无命中外，若最佳命中的估算相似度低于该值也走百炼 enable_search。
+# 估算式 sim ≈ 1 - min(distance)（夹在 0~1），与 Chroma 余弦距离族一致；其它度量下请用环境变量微调阈值。
+RETRIEVAL_WEB_SIMILARITY_THRESHOLD = float(
+    os.getenv("RETRIEVAL_WEB_SIMILARITY_THRESHOLD", "0.3")
+)
 
 # OpenAI 客户端：超时与重试（embedding / 入库易触达默认短超时）
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "180"))

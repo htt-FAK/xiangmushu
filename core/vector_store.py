@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import List, Dict, Optional
 import time
 
@@ -10,13 +11,15 @@ import config
 
 
 def _patch_chromadb_sqlite_seq_id_decode() -> None:
-    """部分持久化库在 SQLite 中 seq_id 已为 int，chromadb 0.5.0 仍按 bytes 解码会 TypeError。
-    在创建 Client 前打补丁，避免 collection.get / list_sources 等崩溃。"""
+    """部分持久化库在 SQLite 中 seq_id 已为 int，旧版 chromadb 仍按 bytes 解码会 TypeError。
+    在创建 Client 前打补丁；新版已移除 _decode_seq_id 则跳过。"""
     try:
         from chromadb.segment.impl.metadata import sqlite as chroma_sqlite_meta
     except Exception:
         return
-    orig = chroma_sqlite_meta._decode_seq_id
+    orig = getattr(chroma_sqlite_meta, "_decode_seq_id", None)
+    if orig is None or not callable(orig):
+        return
 
     def _decode_seq_id_compat(seq_id_val):
         if isinstance(seq_id_val, int):
@@ -118,19 +121,25 @@ class VectorStore:
         return items
 
     def list_sources(self) -> List[str]:
+        return sorted(self.source_chunk_counts().keys())
+
+    def source_chunk_counts(self) -> Dict[str, int]:
+        """每个来源文件名对应的向量片段条数。"""
         try:
             results = self._collection.get()
         except Exception:
-            return []
-        sources = set()
-        if results and results["metadatas"]:
-            for m in results["metadatas"]:
-                if not m:
-                    continue
-                src = m.get("source", "")
-                if src:
-                    sources.add(src)
-        return sorted(sources)
+            return {}
+        if not results or not results.get("metadatas"):
+            return {}
+        c = Counter()
+        for m in results["metadatas"]:
+            if not m:
+                continue
+            src = (m.get("source") or "").strip()
+            if not src:
+                src = "(未知来源)"
+            c[src] += 1
+        return dict(c)
 
     def delete_by_source(self, source: str):
         try:

@@ -1,4 +1,4 @@
-"""百炼 compatible-mode：统一为 chat 请求关闭深度思考。"""
+"""百炼 compatible-mode：chat 请求统一关闭深度思考（enable_thinking=False）。"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,11 +6,11 @@ from typing import Any
 
 def chat_completions_create(client: Any, **kwargs: Any):
     """
-    包装 OpenAI SDK 的 chat.completions.create，合并 extra_body.enable_thinking=False。
-    调用方仍可传入 extra_body 其它字段；enable_thinking 默认 False。
+    包装 OpenAI SDK 的 chat.completions.create。
+    始终写入 extra_body.enable_thinking=False（覆盖调用方传入的 True），
+    避免 glm-5 等模型默认走深度思考导致耗时与用量偏高；其它 extra_body 字段保留。
     """
     extra = dict(kwargs.pop("extra_body", None) or {})
-    if "enable_thinking" not in extra:
-        extra["enable_thinking"] = False
+    extra["enable_thinking"] = False
     kwargs["extra_body"] = extra
     return client.chat.completions.create(**kwargs)
