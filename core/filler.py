@@ -1,11 +1,15 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import re
+from copy import deepcopy
+
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches
 from docx.text.paragraph import Paragraph
+
+import config
 from core.fill_task import FillTask
 
 
@@ -91,8 +95,9 @@ class WordFiller:
             else:
                 self._fill_paragraph(doc, task, content)
 
-        for table in doc.tables:
-            self._ensure_table_readability(table)
+        if getattr(config, "ADJUST_TABLE_READABILITY", True):
+            for table in doc.tables:
+                self._ensure_table_readability(table)
 
         doc.save(output_path)
 
@@ -106,21 +111,113 @@ class WordFiller:
                         self._replace_once_in_paragraph(para, anchor, content)
 
     @staticmethod
-    def _replace_once_in_paragraph(para: Paragraph, anchor: str, content: str):
-        if anchor not in para.text:
-            return
-        merged = para.text.replace(anchor, content, 1)
-        WordFiller._set_paragraph_plain(para, merged)
+    def _sample_rPr_from_paragraph(para: Paragraph):
+        """取段落中第一个带样式的 rPr（优先非空 run），用于回填时克隆。"""
+        for r in para.runs:
+            if (r.text or "").strip() and r._r.rPr is not None:
+                return deepcopy(r._r.rPr)
+        for r in para.runs:
+            if r._r.rPr is not None:
+                return deepcopy(r._r.rPr)
+        return None
 
     @staticmethod
-    def _set_paragraph_plain(para: Paragraph, text: str):
-        """合并为单段文本：多行用换行保留在单段内（Word 软换行）。"""
+    def _sample_rPr_from_cell(cell) -> Optional[object]:
+        for p in cell.paragraphs:
+            rp = WordFiller._sample_rPr_from_paragraph(p)
+            if rp is not None:
+                return rp
+        return None
+
+    @staticmethod
+    def _clear_cell_body_keep_tcPr(cell) -> None:
+        tc = cell._tc
+        for child in list(tc):
+            if child.tag == qn("w:tcPr"):
+                continue
+            tc.remove(child)
+
+    @staticmethod
+    def _apply_rPr_to_run(run, rpr) -> None:
+        if rpr is None:
+            return
+        clone = deepcopy(rpr)
+        el = run._r
+        if el.rPr is not None:
+            el.remove(el.rPr)
+        el.insert(0, clone)
+
+    @staticmethod
+    def _set_paragraph_text_keep_style(para: Paragraph, text: str) -> None:
+        """写入整段文本并尽量保留原字号/字体（基于首段样式样本）。"""
+        rpr = WordFiller._sample_rPr_from_paragraph(para)
         for r in para.runs:
             r.text = ""
         if para.runs:
-            para.runs[0].text = text
+            run = para.runs[0]
+            run.text = text
+            WordFiller._apply_rPr_to_run(run, rpr)
         else:
-            para.add_run(text)
+            nr = para.add_run(text)
+            WordFiller._apply_rPr_to_run(nr, rpr)
+
+    @staticmethod
+    def _set_cell_text_keep_style(cell, text: str) -> None:
+        """清空单元格正文但保留 tcPr，写入单段并克隆原单元格样式。"""
+        rpr = WordFiller._sample_rPr_from_cell(cell)
+        WordFiller._clear_cell_body_keep_tcPr(cell)
+        p = cell.add_paragraph()
+        run = p.add_run(text or "")
+        WordFiller._apply_rPr_to_run(run, rpr)
+
+    @staticmethod
+    def _replace_once_in_paragraph(para: Paragraph, anchor: str, content: str):
+        """仅替换段落中首次出现的锚点字面量（语义同 placeholder_only，走样式保留写回）。"""
+        if anchor not in para.text:
+            return
+        merged = para.text.replace(anchor, content, 1)
+        WordFiller._set_paragraph_text_keep_style(para, merged)
+
+    @staticmethod
+    def _set_paragraph_plain(para: Paragraph, text: str):
+        """兼容旧名：与 keep_style 行为一致。"""
+        WordFiller._set_paragraph_text_keep_style(para, text)
+
+    @staticmethod
+    def _first_placeholder_span(
+        text: str, anchor: Optional[str] = None
+    ) -> Optional[Tuple[int, int]]:
+        """返回第一个待替换占位在 text 中的 (start, end)；无则 None。
+
+        顺序：先按 _PLACEHOLDER_PATTERNS 列表中**首个能匹配**的模式；若 location_hint
+        提供 anchor 且该字面量出现在 text 中，则使用该子串区间（与「仅换锚点」语义一致）。
+        """
+        for pat in WordFiller._PLACEHOLDER_PATTERNS:
+            m = pat.search(text)
+            if m:
+                return (m.start(), m.end())
+        if anchor:
+            a = str(anchor).strip()
+            if a and a in text:
+                i = text.index(a)
+                return (i, i + len(a))
+        return None
+
+    @staticmethod
+    def _fill_paragraph_placeholder_only(
+        para: Paragraph, content: str, hint: Dict[str, Any]
+    ) -> bool:
+        """同段内只替换第一个占位，保留前后说明。成功返回 True，无占位返回 False。"""
+        full = para.text or ""
+        anchor = hint.get("anchor")
+        anchor_s = str(anchor).strip() if anchor else None
+        span = WordFiller._first_placeholder_span(full, anchor=anchor_s or None)
+        if span is None:
+            return False
+        start, end = span
+        new_text = full[:start] + (content or "") + full[end:]
+        WordFiller._set_paragraph_text_keep_style(para, new_text)
+        return True
 
     def _fill_paragraph(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint
@@ -147,7 +244,14 @@ class WordFiller:
                 is_placeholder = True
 
             if is_placeholder or (not text and found_chapter):
-                self._set_paragraph_plain(para, content)
+                mode = (hint.get("replace_mode") or "full").strip().lower()
+                if mode == "placeholder_only":
+                    if not WordFiller._fill_paragraph_placeholder_only(
+                        para, content, hint
+                    ):
+                        self._set_paragraph_text_keep_style(para, content)
+                else:
+                    self._set_paragraph_text_keep_style(para, content)
                 return
 
     def _fill_table_cell(self, doc: Document, task: FillTask, content: str):
@@ -166,8 +270,7 @@ class WordFiller:
             return
         cell = row.cells[col_idx]
 
-        # 使用官方 cell.text：清空内容时保留 w:tcPr（列宽等），避免手写清 run 破坏版式
-        cell.text = content
+        self._set_cell_text_keep_style(cell, content)
         try:
             table.autofit = False
         except Exception:

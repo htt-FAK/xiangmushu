@@ -60,6 +60,13 @@ OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "4"))
 # 单次入库写入 Chroma 的最大 chunk 数（减小单次 embedding 体积，降低超时概率）
 EMBED_ADD_BATCH_SIZE = int(os.getenv("EMBED_ADD_BATCH_SIZE", "12"))
 
+# 模板视觉：docx→PDF→栅格化页数上限与缩放（PyMuPDF Matrix）
+TEMPLATE_VISION_MAX_PAGES = int(os.getenv("TEMPLATE_VISION_MAX_PAGES", "6"))
+TEMPLATE_VISION_ZOOM = float(os.getenv("TEMPLATE_VISION_ZOOM", "1.5"))
+# 回填后是否调整表格列宽/换行（关闭则更尊重原模板版式）
+_ADJ_TR = os.getenv("ADJUST_TABLE_READABILITY", "1").strip().lower()
+ADJUST_TABLE_READABILITY = _ADJ_TR not in ("0", "false", "no", "off")
+
 # 路径配置
 HISTORICAL_DIR = os.path.join(os.path.dirname(__file__), "data", "historical")
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "data", "templates")

@@ -1,10 +1,11 @@
-from typing import List
+from typing import Any, Dict, List, Optional
 from openai import OpenAI
 
 from core.dashscope_chat import chat_completions_create
 from core.parser import DocumentParser
 from core.fill_task import FillTask
 from core.slot_scanner import scan_anchor_tasks, build_decorative_hints_for_llm
+from core.template_vision import apply_chapter_hints_to_tasks, compact_profile_for_analyzer
 import config
 import json
 import uuid
@@ -22,9 +23,15 @@ class TemplateAnalyzer:
         )
         self._parser = DocumentParser()
 
-    def analyze(self, template_path: str) -> List[FillTask]:
+    def analyze(
+        self,
+        template_path: str,
+        vision_profile: Optional[Dict[str, Any]] = None,
+    ) -> List[FillTask]:
         anchor_tasks = scan_anchor_tasks(template_path)
         if anchor_tasks:
+            if vision_profile:
+                apply_chapter_hints_to_tasks(anchor_tasks, vision_profile)
             return anchor_tasks
 
         doc = self._parser.parse(template_path)
@@ -37,9 +44,25 @@ class TemplateAnalyzer:
                 + deco
             )
 
+        vision_append = ""
+        if vision_profile:
+            compact = compact_profile_for_analyzer(vision_profile)
+            if compact:
+                vision_append = (
+                    "\n\n【视觉版式摘要（由模板页渲染图分析，供区分说明区与待填区、表格语义）】\n"
+                    + compact
+                )
+            fb = (vision_profile.get("ooxml_fallback") or "").strip()
+            if fb and len(fb) > 80:
+                vision_append += (
+                    "\n\n【纯文本结构降级摘要（无 PDF/视觉时的 docx 文本抽取）】\n"
+                    + fb[:6000]
+                )
+
         prompt = f"""你是一个文档分析助手。以下是项目计划书模板的结构：
 
 {structure_text}
+{vision_append}
 
 请找出所有需要填写内容的空位（如空白段落、包含"请填写"/"（ ）"/"____"等占位符的段落或表格单元格）。
 对每个空位输出 JSON 数组，每个元素包含：
@@ -48,6 +71,9 @@ class TemplateAnalyzer:
 - description: 应该填写什么内容（根据上下文推断）
 - location_hint: 定位信息（段落用 {{"paragraph_text": "上下文关键词"}}，表格用 {{"table_index": 数字, "row": 行号, "col": 列号}}）
 - word_limit: 建议字数
+- replace_mode: （可选，**仅 type 为 paragraph 时有效**）"full" 或 "placeholder_only"。
+  若同一段内左侧/前后为固定说明文字、仅「请填写」「____」「（ ）」等为待填占位，必须填 **placeholder_only**，以免生成内容覆盖说明；
+  若整段几乎全为待生成正文或无法拆分，用 **full** 或省略（默认 full）。table_cell 省略本字段。
 
 重要（表格）：
 - location_hint.table_index **必须**等于上文中「doc.tables索引=」后面的整数，与整篇文档中表格的全局顺序一致，**绝不是**每个章节内从 0 重新编号。
@@ -91,16 +117,24 @@ class TemplateAnalyzer:
                 wl = 300
             if ttype == "table_cell":
                 wl = min(max(wl, 1), 120)
+            lh = dict(item.get("location_hint", {}) or {})
+            rm = item.get("replace_mode") or lh.get("replace_mode")
+            if isinstance(rm, str) and rm.strip().lower() in ("full", "placeholder_only"):
+                rml = rm.strip().lower()
+                if ttype == "paragraph":
+                    lh["replace_mode"] = rml
             tasks.append(
                 FillTask(
                     task_id=str(uuid.uuid4()),
                     target_chapter=item.get("chapter", ""),
                     task_type=ttype,
                     description=item.get("description", ""),
-                    location_hint=item.get("location_hint", {}),
+                    location_hint=lh,
                     word_limit=wl,
                 )
             )
+        if vision_profile:
+            apply_chapter_hints_to_tasks(tasks, vision_profile)
         return tasks
 
     def _build_structure_text(self, doc) -> str:

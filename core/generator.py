@@ -55,7 +55,7 @@ SYSTEM_PROMPT = """你是项目申报文档撰写专家。严格规则：
 
 USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
 要求：{description}
-字数：约 {word_limit} 字{hint_block}
+字数：约 {word_limit} 字{hint_block}{vision_block}
 
 【参考资料】
 {retrieved_texts}
@@ -64,13 +64,28 @@ USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
 
 USER_PROMPT_TABLE = """【表格填写任务】章节：{target_chapter}
 单元格要求：{description}
-字数上限：{word_limit} 字{hint_block}
+字数上限：{word_limit} 字{hint_block}{vision_block}
 
 【参考资料】
 {retrieved_texts}
 {table_ctx_block}{kb_note}
 只输出应填入该格的**简短答案**（通常一行），直接依据参考资料，不写分析、不复述整行表头。
 **只回答本列表头/本格要求所问**；勿粘贴其它列的问题全文或说明；勿输出「资料N：____」等模板占位骨架；勿在一格内写多列混合内容或长段方案叙述。"""
+
+
+def format_template_vision_block(task: FillTask) -> str:
+    """来自模板视觉/降级的版式与章节提示，拼入用户提示。"""
+    lh = task.location_hint or {}
+    parts: List[str] = []
+    tv = (lh.get("template_vision_compact") or "").strip()
+    if tv:
+        parts.append("【模板版式与填写说明（视觉摘要）】" + tv)
+    ch = (lh.get("chapter_style_hint") or "").strip()
+    if ch:
+        parts.append("【本章写作/格式提示（来自模板视觉）】" + ch)
+    if not parts:
+        return ""
+    return "\n" + "\n".join(parts) + "\n"
 
 
 @dataclass
@@ -156,6 +171,7 @@ class ContentGenerator:
             if correction_hint and correction_hint.strip()
             else ""
         )
+        vision_block = format_template_vision_block(task)
 
         if task.task_type == "table_cell":
             table_ctx_block = (
@@ -168,6 +184,7 @@ class ContentGenerator:
                 description=task.description,
                 word_limit=word_limit,
                 hint_block=hint_block,
+                vision_block=vision_block,
                 retrieved_texts=ref_texts,
                 table_ctx_block=table_ctx_block,
                 kb_note=kb_note,
@@ -178,6 +195,7 @@ class ContentGenerator:
                 description=task.description,
                 word_limit=word_limit,
                 hint_block=hint_block,
+                vision_block=vision_block,
                 retrieved_texts=ref_texts,
                 kb_note=kb_note,
             )
@@ -311,6 +329,7 @@ class ContentGenerator:
             if correction_hint and correction_hint.strip()
             else ""
         )
+        vision_block = format_template_vision_block(task)
 
         if task.task_type == "table_cell":
             table_ctx_block = (
@@ -323,6 +342,7 @@ class ContentGenerator:
                 description=task.description,
                 word_limit=word_limit,
                 hint_block=hint_block,
+                vision_block=vision_block,
                 retrieved_texts=ref_texts,
                 table_ctx_block=table_ctx_block,
                 kb_note=kb_note,
@@ -333,6 +353,7 @@ class ContentGenerator:
                 description=task.description,
                 word_limit=word_limit,
                 hint_block=hint_block,
+                vision_block=vision_block,
                 retrieved_texts=ref_texts,
                 kb_note=kb_note,
             )

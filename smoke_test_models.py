@@ -629,6 +629,163 @@ def _offline_batch_json_fence() -> bool:
     return True
 
 
+def _offline_filler_paragraph_placeholder_only() -> bool:
+    print("=== WordFiller.placeholder_only 段落（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    d.add_paragraph("第一章 测试章节")
+    d.add_paragraph("说明文字请填写此处结尾")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        f = WordFiller()
+        f.fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="p1",
+                    target_chapter="第一章 测试章节",
+                    task_type="paragraph",
+                    description="填空",
+                    location_hint={
+                        "replace_mode": "placeholder_only",
+                        "paragraph_text": "说明文字",
+                    },
+                    word_limit=50,
+                )
+            ],
+            ["答案"],
+            out,
+        )
+        d2 = Doc(out)
+        paras = [p.text for p in d2.paragraphs]
+        body = paras[1] if len(paras) > 1 else ""
+        if "说明文字" not in body or "结尾" not in body:
+            print(f"  [FAIL] 说明或结尾丢失 {body!r}")
+            return False
+        if "答案" not in body or "请填写" in body:
+            print(f"  [FAIL] 占位未替换或仍含「请填写」 {body!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_template_vision_and_filler_cell() -> bool:
+    print("=== template_vision / filler 单元格样式（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+    from core.generator import ContentGenerator, format_template_vision_block
+    from core.template_vision import (
+        apply_chapter_hints_to_tasks,
+        parse_vision_profile_json,
+        pick_chapter_style_hint,
+    )
+
+    raw = (
+        '{"layout_notes":"多表","fill_strategy":"表格短答","style_observations":"小四",'
+        '"chapter_hints":[{"chapter_anchor":"第三章 核心","hint":"须体现联网检索步骤"}]}'
+    )
+    prof = parse_vision_profile_json(raw)
+    if prof.get("error"):
+        print(f"  [FAIL] parse {prof}")
+        return False
+    h = pick_chapter_style_hint("第三章 核心能力实现过程", prof)
+    if "联网" not in h and "检索" not in h:
+        print(f"  [FAIL] chapter hint 未命中: {h!r}")
+        return False
+    tasks = [
+        FillTask(
+            task_id="t1",
+            target_chapter="第三章 核心能力实现过程",
+            task_type="paragraph",
+            description="写一段",
+            location_hint={},
+            word_limit=100,
+        )
+    ]
+    apply_chapter_hints_to_tasks(tasks, prof)
+    if "chapter_style_hint" not in tasks[0].location_hint:
+        print("  [FAIL] 未写入 chapter_style_hint")
+        return False
+    vb = format_template_vision_block(tasks[0])
+    if "视觉摘要" not in vb or "表格短答" not in vb:
+        print(f"  [FAIL] vision block {vb!r}")
+        return False
+
+    class _ZVS:
+        def get_collection_count(self) -> int:
+            return 0
+
+        def search(self, *a, **k):
+            return []
+
+    g = ContentGenerator(_ZVS())
+    _, _, _, _, _, _ = g._build_chat_request(
+        tasks[0], top_k=2, enable_web=False, retrieval_max_distance=1.0
+    )
+    b = g.prepare_generation_bundle(tasks[0], top_k=2, enable_web=False)
+    u = b.messages[1]["content"]
+    if "视觉摘要" not in u:
+        print("  [FAIL] 生成 user 未含视觉摘要")
+        return False
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    d.add_paragraph("章节")
+    tbl = d.add_table(rows=1, cols=1)
+    tbl.cell(0, 0).text = "请填写"
+    d.save(path)
+    try:
+        out = path.replace(".docx", "_out.docx")
+        f = WordFiller()
+        f.fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="c1",
+                    target_chapter="章节",
+                    task_type="table_cell",
+                    description="x",
+                    location_hint={"table_index": 0, "row": 0, "col": 0},
+                    word_limit=50,
+                )
+            ],
+            ["已填"],
+            out,
+        )
+        d2 = Doc(out)
+        if "已填" not in d2.tables[0].cell(0, 0).text:
+            print("  [FAIL] 单元格未写入")
+            return False
+    finally:
+        for p in (path, path.replace(".docx", "_out.docx")):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
 def _run_all_offline() -> bool:
     steps = [
         ("路由", _routing_tests),
@@ -641,6 +798,8 @@ def _run_all_offline() -> bool:
         ("bundle 路由对齐", _offline_bundle_evidence_route_parity),
         ("clean_table_answer", _offline_filler_clean_table),
         ("batch_json_fence", _offline_batch_json_fence),
+        ("filler_placeholder_only_para", _offline_filler_paragraph_placeholder_only),
+        ("template_vision+filler_cell", _offline_template_vision_and_filler_cell),
     ]
     ok_all = True
     for name, fn in steps:

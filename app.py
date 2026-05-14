@@ -30,6 +30,7 @@ from core.filler import WordFiller
 from core.kb_registry import add_kb, load_registry, remove_kb
 from core.kb_extract import path_to_parsed_document
 from core.template_analyzer import TemplateAnalyzer
+from core.template_vision import get_or_build_template_vision_profile
 from core.vector_store import VectorStore
 
 SS_ACTIVE_KB = "active_kb_slug"
@@ -617,8 +618,10 @@ with tab_tpl:
                 save_path = os.path.join(config.TEMPLATE_DIR, tpl_up.name)
                 with open(save_path, "wb") as f:
                     f.write(tpl_up.getbuffer())
-                with st.spinner("正在分析模板结构…"):
-                    tasks = get_analyzer().analyze(save_path)
+                with st.spinner("模板视觉理解 + 结构分析…"):
+                    vis_prof, vis_msg = get_or_build_template_vision_profile(save_path)
+                    tasks = get_analyzer().analyze(save_path, vision_profile=vis_prof)
+                st.caption(vis_msg)
                 if not tasks:
                     st.warning("未识别到待填位置，请检查文档或锚点写法。")
                 else:
@@ -725,8 +728,10 @@ with tab_gen:
                 tasks = _dicts_to_tasks(st.session_state[SS_TASKS])
                 st.info("使用已缓存的模板分析。")
             else:
-                with st.spinner("正在分析模板…"):
-                    tasks = get_analyzer().analyze(template_path)
+                with st.spinner("模板视觉理解 + 结构分析…"):
+                    vis_prof, vis_msg = get_or_build_template_vision_profile(template_path)
+                    tasks = get_analyzer().analyze(template_path, vision_profile=vis_prof)
+                st.caption(vis_msg)
                 if tasks:
                     st.session_state[SS_TASKS] = _tasks_to_dicts(tasks)
                     st.session_state[SS_TASKS_SIG] = sig
