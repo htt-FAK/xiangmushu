@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import re
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -34,6 +34,40 @@ class WordFiller:
         s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
         return s.strip()
 
+    @staticmethod
+    def clean_table_answer(
+        text: str,
+        word_limit: int = 120,
+        max_chars: Optional[int] = None,
+    ) -> str:
+        """对表格单元格答案做深度清洗：去前缀、占位/下划线噪声、换行压平、超长截断。"""
+        if not text:
+            return ""
+        s = text.strip()
+
+        _TABLE_PREFIXES = [
+            r"^(答案|答|填写内容|该单元格应填写|该格填写|应填写|内容)：?\s*",
+            r"^(根据参考资料[，,]?|根据上述资料[，,]?|根据检索片段[，,]?)",
+            r"^(综上所述[，,]?|综合来看[，,]?)",
+            r"^(以下是|如下|答：)\s*",
+        ]
+        for pattern in _TABLE_PREFIXES:
+            s = re.sub(pattern, "", s, flags=re.IGNORECASE).strip()
+
+        # 「资料2：____」类骨架行
+        s = re.sub(r"资料\s*\d+\s*[：:]\s*_+", "", s)
+        s = re.sub(r"_{4,}", "", s)
+        # 换行压成空格，避免单元格内堆叠
+        s = re.sub(r"[\r\n]+", " ", s)
+        s = re.sub(r"\s{2,}", " ", s).strip()
+
+        cap = max_chars if max_chars is not None else max(20, int(word_limit * 1.5))
+        if (word_limit or 120) <= 45:
+            cap = min(cap, 60)
+        if len(s) > cap:
+            s = s[:cap].rstrip("，。,. ")
+        return s
+
     def fill_template(
         self,
         template_path: str,
@@ -50,6 +84,9 @@ class WordFiller:
                 self._replace_anchor_everywhere(doc, anchor, content)
                 continue
             if task.task_type == "table_cell":
+                wl = int(task.word_limit or 120)
+                tight = min(60, max(25, wl * 2)) if wl <= 45 else None
+                content = self.clean_table_answer(content, wl, max_chars=tight)
                 self._fill_table_cell(doc, task, content)
             else:
                 self._fill_paragraph(doc, task, content)

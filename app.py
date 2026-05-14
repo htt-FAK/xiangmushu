@@ -15,7 +15,17 @@ import streamlit as st
 import config
 from core.chunker import Chunker
 from core.fill_task import FillTask
-from core.generator import ContentGenerator
+from core.content_auditor import (
+    ContentAuditor,
+    should_apply_revision,
+    rule_audit,
+    need_model_audit,
+)
+from core.batch_generator import batch_generate_table_row
+from core.evidence_planner import Evidence, retrieve_for_group, format_evidence
+from core.generator import ContentGenerator, GenerationBundle
+from core.task_grouper import group_tasks
+from core.table_context import build_table_cell_context
 from core.filler import WordFiller
 from core.kb_registry import add_kb, load_registry, remove_kb
 from core.kb_extract import path_to_parsed_document
@@ -295,7 +305,9 @@ def _stream_three_line_window(
     enable_web: bool,
     retrieval_max_distance: float,
     route_slot,
-) -> str:
+    table_context: str | None = None,
+    correction_hint: str | None = None,
+) -> tuple[str, GenerationBundle]:
     def _route_hook(meta: dict) -> None:
         if meta.get("native_web_search"):
             reason = (
@@ -320,25 +332,28 @@ def _stream_three_line_window(
             route_slot.info(
                 "路由：未启用联网 · 模型 "
                 + str(meta.get("model", ""))
+                + f" · tier={meta.get('generation_tier')}"
                 + f" · 知识库命中 {meta.get('kb_hits', 0)} 条 · 侧栏联网="
                 + ("开" if meta.get("enable_web_requested") else "关")
                 + f" · weak_kb={meta.get('weak_kb')} · low_sim={meta.get('low_similarity')}"
                 + f" · est_sim≈{meta.get('best_similarity_est')} / 阈值 {meta.get('retrieval_web_similarity_threshold')}"
             )
 
+    bundle = generator.prepare_generation_bundle(
+        task,
+        top_k=top_k,
+        enable_web=enable_web,
+        retrieval_max_distance=retrieval_max_distance,
+        table_context=table_context,
+        correction_hint=correction_hint,
+    )
     hist_exp = st.expander("已生成历史内容（较早段落）", expanded=False)
     with hist_exp:
         hist_ph = st.empty()
     live_ph = st.empty()
     full = ""
     n_update = 0
-    for piece in generator.generate_stream(
-        task,
-        top_k=top_k,
-        enable_web=enable_web,
-        retrieval_max_distance=retrieval_max_distance,
-        route_hook=_route_hook,
-    ):
+    for piece in generator.stream_from_bundle(bundle, route_hook=_route_hook):
         full += piece
         n_update += 1
         lines = full.split("\n")
@@ -351,7 +366,7 @@ def _stream_three_line_window(
             live_ph.markdown("\n".join(lines[-3:]))
         if n_update % 4 == 0:
             time.sleep(0)
-    return full.strip()
+    return full.strip(), bundle
 
 
 def _render_persistent_download() -> None:
@@ -425,7 +440,7 @@ with st.sidebar:
 
         c_new, c_del = st.columns(2)
         with c_new:
-            with st.expander("新建库", expanded=False):
+            with st.popover("新建库"):
                 nb_label = st.text_input("名称", key="sb_nb_label")
                 nb_slug = st.text_input("slug（可空）", key="sb_nb_slug")
                 if st.button("创建", key="sb_kb_create"):
@@ -440,7 +455,7 @@ with st.sidebar:
                         except Exception as e:
                             st.error(str(e))
         with c_del:
-            with st.expander("删除库", expanded=False):
+            with st.popover("删除库"):
                 st.caption("向量不可恢复。输入 DELETE 后删除。")
                 confirm = st.text_input("确认", key="sb_del_confirm")
                 if st.button("删除当前库", type="secondary", key="sb_kb_rm"):
@@ -463,7 +478,15 @@ with st.sidebar:
 
     with st.expander("生成设置", expanded=True):
         _render_intensity_select_slider()
-        st.caption("模型：`" + config.SMALL_LLM_MODEL + "` / `" + config.LARGE_LLM_MODEL + "`")
+        st.caption(
+            "模型：`"
+            + config.SMALL_LLM_MODEL
+            + "` / `"
+            + config.LARGE_LLM_MODEL
+            + "` · 审核：`"
+            + config.AUDIT_LLM_MODEL
+            + "`"
+        )
         st.checkbox(
             "流式显示",
             key="adv_use_stream",
@@ -473,6 +496,24 @@ with st.sidebar:
             "联网补料（百炼内置搜索）",
             key="adv_use_tavily",
             help="在「知识库为空或检索无命中」或「最佳命中估算相似度低于阈值（默认 0.3，sim≈1−distance）」时，对该段改用 VISION_WEB_MODEL 并开启 enable_search。阈值见环境变量 RETRIEVAL_WEB_SIMILARITY_THRESHOLD。",
+        )
+        st.checkbox(
+            "启用审核 Agent",
+            key="adv_use_audit_agent",
+            help="每段生成后使用 "
+            + config.AUDIT_LLM_MODEL
+            + " 对照检索片段与表格上下文质检；minor_fix 时可自动采用修订稿。",
+        )
+        st.checkbox(
+            "审核 major 时自动重试生成 1 次",
+            key="adv_audit_regenerate",
+            help="仅当启用审核且审核 verdict 为 major_issue 时，将审核意见注入后重新生成一段（仍消耗 API）。",
+        )
+        st.checkbox(
+            "表格行批量生成（降低 API 调用次数）",
+            value=True,
+            key="adv_use_batch_table",
+            help="将同一表格行的单元格合并为一次 LLM 调用输出 JSON；解析失败自动降级为逐格生成。",
         )
 
     with st.expander("高级参数", expanded=False):
@@ -697,6 +738,56 @@ with tab_gen:
                 results: list[str] = []
                 total_chars = 0
 
+                # 预检索：按分组做一次向量检索，后续任务复用
+                task_groups = group_tasks(tasks)
+                with st.spinner(f"预检索中（{len(task_groups)} 个任务组）…"):
+                    evidence_map: dict[str, Evidence] = {}
+                    for grp in task_groups:
+                        ev = retrieve_for_group(
+                            vs, grp,
+                            top_k=top_k,
+                            max_distance=retrieval_max_distance,
+                        )
+                        evidence_map[grp.group_id] = ev
+                        for t in grp.tasks:
+                            t._evidence_group_id = grp.group_id  # type: ignore[attr-defined]
+
+                # 批量生成（表格行）：提前尝试，失败则逐格降级
+                use_batch = bool(st.session_state.get("adv_use_batch_table", True))
+                batch_cache: dict[str, str] = {}  # task_id -> content
+                if use_batch:
+                    with st.spinner("批量生成表格行…"):
+                        for grp in task_groups:
+                            if not grp.is_table_group:
+                                continue
+                            ev = evidence_map.get(grp.group_id)
+                            if ev is None:
+                                continue
+                            loc0 = grp.tasks[0].location_hint or {}
+                            tbl_ctx = None
+                            try:
+                                from core.table_context import build_table_cell_context
+                                tbl_ctx = build_table_cell_context(
+                                    template_path,
+                                    int(loc0.get("table_index", 0)),
+                                    int(loc0.get("row", 0)),
+                                    int(loc0.get("col", 0)),
+                                )
+                            except Exception:
+                                pass
+                            batch_result = batch_generate_table_row(
+                                generator._client,
+                                grp.tasks,
+                                ev,
+                                table_context=tbl_ctx,
+                                enable_web=enable_web,
+                                template_path=template_path,
+                            )
+                            if batch_result is not None:
+                                for cell_idx, cell_content in batch_result.items():
+                                    if 0 <= cell_idx < len(grp.tasks):
+                                        batch_cache[grp.tasks[cell_idx].task_id] = cell_content
+
                 with st.status("正在生成…", expanded=True) as status:
                     prog = st.progress(0.0)
                     n_tasks = len(tasks)
@@ -708,16 +799,96 @@ with tab_gen:
                             f"累计约 {total_chars} 字"
                         )
                         route_slot = st.empty()
+                        audit_slot = st.empty()
+                        use_audit = bool(
+                            st.session_state.get("adv_use_audit_agent", False)
+                        )
+                        audit_regen = bool(
+                            st.session_state.get("adv_audit_regenerate", False)
+                        )
+
+                        table_ctx: str | None = None
+                        if task.task_type == "table_cell":
+                            loc = task.location_hint or {}
+                            table_ctx = build_table_cell_context(
+                                template_path,
+                                int(loc.get("table_index", 0)),
+                                int(loc.get("row", 0)),
+                                int(loc.get("col", 0)),
+                            )
+
+                        gen_bundle: GenerationBundle | None = None
+                        content = ""
+
+                        # 尝试从批量缓存取结果
+                        if task.task_id in batch_cache:
+                            content = batch_cache[task.task_id]
+                            _ev_gid = getattr(task, "_evidence_group_id", "") or ""
+                            _ev_obj = evidence_map.get(_ev_gid)
+                            _kb_n = _ev_obj.kb_hits if _ev_obj is not None else 0
+                            route_slot.info(f"批量生成（表格行）· kb={_kb_n}")
+                            wc = len(content)
+                            total_chars += wc
+                            st.text_area(
+                                label=f"完成(批量) · {task.target_chapter}（约 {wc} 字）",
+                                value=content,
+                                height=min(260, max(100, wc // 2 + 40)),
+                                disabled=True,
+                                key=f"gen_done_batch_{i}_{task.task_id}",
+                            )
+                            results.append(content)
+                            prog.progress((i + 1) / n_tasks)
+                            continue
+
+                        _ev_group_id: str = getattr(task, "_evidence_group_id", "")
+                        _shared_ev: Evidence | None = evidence_map.get(_ev_group_id)
+
+                        def _make_bundle(
+                            _correction_hint: str | None = None,
+                        ) -> GenerationBundle:
+                            if _shared_ev is not None:
+                                return generator.prepare_bundle_from_evidence(
+                                    task,
+                                    _shared_ev,
+                                    enable_web=enable_web,
+                                    table_context=table_ctx,
+                                    correction_hint=_correction_hint,
+                                )
+                            return generator.prepare_generation_bundle(
+                                task,
+                                top_k=top_k,
+                                enable_web=enable_web,
+                                retrieval_max_distance=retrieval_max_distance,
+                                table_context=table_ctx,
+                                correction_hint=_correction_hint,
+                            )
+
                         try:
                             if use_stream:
-                                content = _stream_three_line_window(
-                                    generator,
-                                    task,
-                                    top_k=top_k,
-                                    enable_web=enable_web,
-                                    retrieval_max_distance=retrieval_max_distance,
-                                    route_slot=route_slot,
-                                )
+                                gen_bundle = _make_bundle()
+
+                                def _route_hook_stream(meta: dict) -> None:
+                                    if meta.get("native_web_search"):
+                                        rs = (
+                                            "弱库/无命中" if meta.get("weak_kb")
+                                            else ("相似度过低" if meta.get("low_similarity") else "联网")
+                                        )
+                                        route_slot.success(
+                                            f"联网 · {rs} · 模型 {meta.get('model','')} · "
+                                            f"kb={meta.get('kb_hits',0)} · sim≈{meta.get('best_similarity_est')}"
+                                        )
+                                    else:
+                                        tier = meta.get("generation_tier", "large")
+                                        route_slot.info(
+                                            f"路由：{tier} · 模型 {meta.get('model','')} · "
+                                            f"kb={meta.get('kb_hits',0)} · sim≈{meta.get('best_similarity_est')}"
+                                        )
+
+                                content_parts: list[str] = []
+                                _route_hook_stream(gen_bundle.route_meta)
+                                for piece in generator.stream_from_bundle(gen_bundle, route_hook=None):
+                                    content_parts.append(piece)
+                                content = "".join(content_parts).strip()
                             else:
                                 st.caption("非流式，请稍候…")
 
@@ -746,21 +917,113 @@ with tab_gen:
                                             + f" · kb_hits={meta.get('kb_hits', 0)} · low_sim={meta.get('low_similarity')} · est_sim≈{meta.get('best_similarity_est')}"
                                         )
 
-                                content = generator.generate(
-                                    task,
-                                    top_k=top_k,
-                                    enable_web=enable_web,
-                                    retrieval_max_distance=retrieval_max_distance,
-                                    route_hook=_route_hook_ns,
+                                gen_bundle = _make_bundle()
+                                _route_hook_ns(gen_bundle.route_meta)
+                                content = generator.generate_from_bundle(
+                                    gen_bundle, route_hook=None
                                 )
+
+                            if (
+                                use_audit
+                                and gen_bundle is not None
+                                and not str(content).startswith("（生成失败")
+                            ):
+                                r_issues = rule_audit(task, content)
+                                do_model_audit = need_model_audit(
+                                    task, gen_bundle.route_meta, r_issues
+                                )
+
+                                applied_revision = False
+                                last_ar = None
+                                audit_lines: list[str] = []
+
+                                if r_issues and not do_model_audit:
+                                    audit_lines.append("规则审核：问题 · " + "；".join(r_issues))
+                                    audit_slot.warning("\n".join(audit_lines))
+                                elif do_model_audit:
+                                    auditor = ContentAuditor()
+                                    ar = auditor.audit(
+                                        task,
+                                        content,
+                                        gen_bundle.ref_texts,
+                                        table_ctx,
+                                        gen_bundle.route_meta,
+                                    )
+                                    last_ar = ar
+                                    if r_issues:
+                                        audit_lines.append("规则：" + "；".join(r_issues))
+                                    audit_lines += [
+                                        f"模型审核：{ar.verdict}",
+                                        (ar.one_line_summary or "").strip() or "（无摘要）",
+                                    ]
+                                    if ar.issues:
+                                        audit_lines.append(
+                                            "问题：" + "；".join(ar.issues[:5])
+                                        )
+                                    if should_apply_revision(task, ar):
+                                        content = ar.revised_content
+                                        applied_revision = True
+                                    elif (
+                                        ar.verdict == "major_issue"
+                                        and audit_regen
+                                        and ar.issues
+                                    ):
+                                        hint = "\n".join(ar.issues[:10])
+                                        gen_bundle2 = _make_bundle(hint)
+                                        if use_stream:
+                                            content = "".join(
+                                                generator.stream_from_bundle(
+                                                    gen_bundle2, route_hook=None
+                                                )
+                                            ).strip()
+                                        else:
+                                            content = generator.generate_from_bundle(
+                                                gen_bundle2, route_hook=None
+                                            )
+                                        ar2 = auditor.audit(
+                                            task,
+                                            content,
+                                            gen_bundle2.ref_texts,
+                                            table_ctx,
+                                            gen_bundle2.route_meta,
+                                        )
+                                        last_ar = ar2
+                                        audit_lines.append(
+                                            "重试后：" + ar2.verdict + " · "
+                                            + ((ar2.one_line_summary or "").strip() or "（无摘要）")
+                                        )
+                                        if ar2.issues:
+                                            audit_lines.append(
+                                                "问题：" + "；".join(ar2.issues[:4])
+                                            )
+                                        if should_apply_revision(task, ar2):
+                                            content = ar2.revised_content
+                                            applied_revision = True
+
+                                    msg = "\n".join(audit_lines)
+                                    if applied_revision:
+                                        audit_slot.success(msg + "\n（已采用审核修订稿）")
+                                    elif last_ar and last_ar.verdict == "major_issue":
+                                        audit_slot.warning(msg)
+                                    elif last_ar and last_ar.verdict == "minor_fix":
+                                        audit_slot.info(msg)
+                                    else:
+                                        audit_slot.success(msg)
+                                else:
+                                    audit_slot.success("规则审核通过（跳过模型审核）")
                         except Exception as e:
                             st.error(f"本段失败：{e}")
                             content = f"（生成失败：{e}）"
 
                         wc = len(content)
                         total_chars += wc
-                        with st.expander(f"完成 · {task.target_chapter}（约 {wc} 字）", expanded=False):
-                            st.text(content)
+                        st.text_area(
+                            label=f"完成 · {task.target_chapter}（约 {wc} 字）",
+                            value=content,
+                            height=min(260, max(100, wc // 2 + 40)),
+                            disabled=True,
+                            key=f"gen_done_{i}_{task.task_id}",
+                        )
 
                         results.append(content)
                         prog.progress((i + 1) / n_tasks)

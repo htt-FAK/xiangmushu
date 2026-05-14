@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-import numpy as np
 from openai import OpenAI
 
 
@@ -36,7 +35,7 @@ class TimeoutOpenAIEmbedding:
         self._model_name = model_name
         self._dimensions = dimensions
 
-    def __call__(self, input: List[str]) -> List[np.ndarray]:
+    def __call__(self, input: List[str]) -> List[List[float]]:
         if not input:
             return []
         params: dict = {"model": self._model_name, "input": input}
@@ -45,9 +44,11 @@ class TimeoutOpenAIEmbedding:
         ):
             params["dimensions"] = self._dimensions
         response = self._client.embeddings.create(**params)
-        return [np.array(d.embedding, dtype=np.float32) for d in response.data]
+        # Chroma 0.5 _validate_embedding_record 对 embedding 做 `if record["embedding"]`；
+        # numpy 向量会触发 ambiguous truth value，须返回 Python list。
+        return [list(d.embedding) for d in response.data]
 
-    def embed_query(self, input: List[str]) -> List[np.ndarray]:
+    def embed_query(self, input: List[str]) -> List[List[float]]:
         """Chroma 0.5+ 查询路径调用 embed_query；与官方 EmbeddingFunction 默认语义一致。"""
         return self.__call__(input)
 

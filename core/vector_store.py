@@ -1,5 +1,5 @@
 from collections import Counter
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 import time
 
 import chromadb
@@ -30,6 +30,19 @@ def _patch_chromadb_sqlite_seq_id_decode() -> None:
 
 
 _patch_chromadb_sqlite_seq_id_decode()
+
+
+def _first_row(val: Any) -> Optional[Any]:
+    """Chroma query 返回的 distances/metadatas/documents 可能是 list 或 ndarray，避免对其做布尔判断。"""
+    if val is None:
+        return None
+    try:
+        n = len(val)
+    except TypeError:
+        return None
+    if n < 1:
+        return None
+    return val[0]
 
 
 class VectorStore:
@@ -103,21 +116,45 @@ class VectorStore:
         except Exception:
             return []
 
-        items = []
-        if results and results["documents"]:
-            dist_row = results.get("distances") and results["distances"][0]
-            meta_row = results.get("metadatas") and results["metadatas"][0]
-            for i, doc_text in enumerate(results["documents"][0]):
-                dist = dist_row[i] if dist_row is not None and i < len(dist_row) else None
-                if max_distance is not None and dist is not None and dist > max_distance:
-                    continue
-                items.append(
-                    {
-                        "text": doc_text,
-                        "metadata": meta_row[i] if meta_row is not None and i < len(meta_row) else {},
-                        "distance": dist,
-                    }
-                )
+        items: List[Dict] = []
+        docs_outer = results.get("documents") if results else None
+        doc_row = _first_row(docs_outer)
+        if doc_row is None:
+            return items
+        dist_row = _first_row(results.get("distances"))
+        meta_row = _first_row(results.get("metadatas"))
+        try:
+            row_len = len(doc_row)
+        except TypeError:
+            return items
+        for i in range(row_len):
+            try:
+                doc_text = doc_row[i]
+            except (IndexError, TypeError):
+                continue
+            dist = None
+            if dist_row is not None and i < len(dist_row):
+                try:
+                    dist = dist_row[i]
+                except (IndexError, TypeError):
+                    dist = None
+            if max_distance is not None and dist is not None and float(dist) > max_distance:
+                continue
+            meta: Dict = {}
+            if meta_row is not None and i < len(meta_row):
+                try:
+                    m = meta_row[i]
+                    if isinstance(m, dict):
+                        meta = m
+                except (IndexError, TypeError):
+                    pass
+            items.append(
+                {
+                    "text": doc_text,
+                    "metadata": meta,
+                    "distance": float(dist) if dist is not None else None,
+                }
+            )
         return items
 
     def list_sources(self) -> List[str]:
