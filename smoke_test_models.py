@@ -96,7 +96,11 @@ def _print_config():
     print(f"  LARGE_LLM_MODEL:   {config.LARGE_LLM_MODEL}  T={config.TEMP_LARGE_LLM}")
     print(f"  AUDIT_LLM_MODEL:   {config.AUDIT_LLM_MODEL}  T={config.TEMP_AUDIT}")
     print(f"  VISION_WEB_MODEL:  {config.VISION_WEB_MODEL}  T={config.TEMP_VISION}")
-    print(f"  TEMPLATE_VISION:   {config.TEMPLATE_VISION_MODEL}")
+    print(
+        f"  TEMPLATE_VISION:   {config.TEMPLATE_VISION_MODEL} · pages={config.TEMPLATE_VISION_MAX_PAGES} "
+        f"zoom={config.TEMPLATE_VISION_ZOOM} long_edge={config.TEMPLATE_VISION_MAX_LONG_EDGE} "
+        f"api_timeout={config.TEMPLATE_VISION_API_TIMEOUT}s enabled={config.TEMPLATE_VISION_ENABLED}"
+    )
     print(f"  VISION_EXTRACT:    {config.VISION_EXTRACT_MODEL}")
     print(f"  TABLE_CELL_VISION: {config.TABLE_CELL_VISION_MODEL}")
     print(f"  EMBEDDING_MODEL:   {config.EMBEDDING_MODEL}")

@@ -97,8 +97,18 @@ OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "4"))
 EMBED_ADD_BATCH_SIZE = int(os.getenv("EMBED_ADD_BATCH_SIZE", "12"))
 
 # 模板视觉：docx→PDF→栅格化页数上限与缩放（PyMuPDF Matrix）
-TEMPLATE_VISION_MAX_PAGES = int(os.getenv("TEMPLATE_VISION_MAX_PAGES", "6"))
-TEMPLATE_VISION_ZOOM = float(os.getenv("TEMPLATE_VISION_ZOOM", "1.5"))
+TEMPLATE_VISION_MAX_PAGES = int(os.getenv("TEMPLATE_VISION_MAX_PAGES", "4"))
+TEMPLATE_VISION_ZOOM = float(os.getenv("TEMPLATE_VISION_ZOOM", "1.2"))
+# 栅格化后长边像素上限（0=不缩放）；缩小可明显加快多模态上传与推理
+_TEMPLATE_VISION_MLE = os.getenv("TEMPLATE_VISION_MAX_LONG_EDGE", "1280").strip()
+TEMPLATE_VISION_MAX_LONG_EDGE = (
+    0 if _TEMPLATE_VISION_MLE in ("0", "", "off", "no") else int(_TEMPLATE_VISION_MLE)
+)
+# 多模态模板视觉 API 硬超时（秒），避免网关无响应时界面长期卡在第一步
+TEMPLATE_VISION_API_TIMEOUT = float(os.getenv("TEMPLATE_VISION_API_TIMEOUT", "120"))
+# 设为 0/false/off 则不做 PDF/截图/视觉模型，仅用 OOXML 文本摘要（快，版式信息弱）
+_TVE = os.getenv("TEMPLATE_VISION_ENABLED", "1").strip().lower()
+TEMPLATE_VISION_ENABLED = _TVE not in ("0", "false", "no", "off")
 # 表格生成附带模板页截图（多模态）；关则仅 OOXML 文本上下文
 _TCV = os.getenv("TABLE_CELL_VISION", "1").strip().lower()
 TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")

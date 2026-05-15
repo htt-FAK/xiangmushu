@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -11,6 +12,7 @@ import shutil
 import sys
 import subprocess
 import tempfile
+from pathlib import Path
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -261,19 +263,34 @@ def _find_soffice() -> Optional[str]:
     return None
 
 
-def _export_pdf_soffice(docx_path: str, pdf_path: str) -> bool:
+def _export_pdf_soffice(docx_path: str, pdf_path: str, user_profile_dir: str) -> bool:
     soffice = _find_soffice()
     if not soffice:
         return False
     outdir = os.path.dirname(pdf_path) or "."
     os.makedirs(outdir, exist_ok=True)
+    os.makedirs(user_profile_dir, exist_ok=True)
     try:
+        inst_uri = Path(user_profile_dir).resolve().as_uri()
+        cmd = [
+            soffice,
+            f"-env:UserInstallation={inst_uri}",
+            "--headless",
+            "--invisible",
+            "--nologo",
+            "--nolockcheck",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            outdir,
+            docx_path,
+        ]
         subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", outdir, docx_path],
+            cmd,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=120,
+            timeout=int(os.getenv("SOFFICE_CONVERT_TIMEOUT", "180")),
         )
         base = os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
         candidate = os.path.join(outdir, base)
@@ -308,8 +325,12 @@ def export_docx_to_pdf(docx_path: str, pdf_path: str) -> bool:
     """依次尝试 docx2pdf（需本机 Word）、LibreOffice、pandoc。"""
     if _export_pdf_docx2pdf(docx_path, pdf_path):
         return True
-    if _export_pdf_soffice(docx_path, pdf_path):
-        return True
+    user_profile = tempfile.mkdtemp(prefix="lo_profile_")
+    try:
+        if _export_pdf_soffice(docx_path, pdf_path, user_profile):
+            return True
+    finally:
+        shutil.rmtree(user_profile, ignore_errors=True)
     if _export_pdf_pandoc(docx_path, pdf_path):
         return True
     return False
@@ -326,9 +347,18 @@ def pdf_to_png_pages(pdf_path: str, max_pages: int, zoom: float) -> List[bytes]:
         doc = fitz.open(pdf_path)
         try:
             n = min(max_pages, len(doc))
-            mat = fitz.Matrix(zoom, zoom)
             for i in range(n):
                 page = doc[i]
+                rect = page.rect
+                z_use = float(zoom)
+                limit = int(getattr(config, "TEMPLATE_VISION_MAX_LONG_EDGE", 0) or 0)
+                if limit > 0 and rect.width > 0 and rect.height > 0:
+                    px_w = rect.width * z_use
+                    px_h = rect.height * z_use
+                    m = max(px_w, px_h)
+                    if m > float(limit):
+                        z_use *= float(limit) / m
+                mat = fitz.Matrix(z_use, z_use)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 out.append(pix.tobytes("png"))
         finally:
@@ -416,13 +446,25 @@ def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any
             }
         )
 
-    resp = chat_completions_create(
-        client,
-        model=getattr(config, "TEMPLATE_VISION_MODEL", None) or config.VISION_WEB_MODEL,
-        messages=[{"role": "user", "content": content}],
-        temperature=config.TEMP_VISION,
-        max_tokens=4096,
-    )
+    timeout = float(getattr(config, "TEMPLATE_VISION_API_TIMEOUT", 120.0))
+    timeout = max(45.0, timeout)
+
+    def _call():
+        return chat_completions_create(
+            client,
+            model=getattr(config, "TEMPLATE_VISION_MODEL", None) or config.VISION_WEB_MODEL,
+            messages=[{"role": "user", "content": content}],
+            temperature=config.TEMP_VISION,
+            max_tokens=4096,
+        )
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            resp = pool.submit(_call).result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        _LOG.warning("模板视觉 API 超过 %.0fs 未返回，已中止等待", timeout)
+        return {"error": "vision_api_timeout"}
+
     ch0 = resp.choices[0] if resp.choices else None
     raw = (ch0.message.content if ch0 and ch0.message else "") or ""
     return parse_vision_profile_json(raw)
@@ -520,12 +562,15 @@ def get_or_build_template_vision_profile(
     docx_path: str,
     *,
     force_refresh: bool = False,
+    skip_vision: bool = False,
 ) -> Tuple[Dict[str, Any], str]:
     """
     返回 (profile_dict, 人类可读状态说明)。
     profile 含 layout_notes / fill_strategy / style_observations / chapter_hints / table_page_hints；
     失败时含 error 键，仍可能含 ooxml_fallback。
     成功时在 cache_bundle_dir 下写入 profile.json 与 page_XXX.png。
+
+    skip_vision=True 时跳过 PDF/截图/多模态，仅用 OOXML 文本（与 TEMPLATE_VISION_ENABLED=0 等效于多模态段）。
     """
     bundle = cache_bundle_dir(docx_path)
     profile_json = _profile_path_in_bundle(bundle)
@@ -579,33 +624,44 @@ def get_or_build_template_vision_profile(
     status_parts: List[str] = []
     pages_saved: List[bytes] = []
 
-    with tempfile.TemporaryDirectory(prefix="tplvis_") as td:
-        pdf_path = os.path.join(td, "tpl.pdf")
-        if export_docx_to_pdf(docx_path, pdf_path):
-            status_parts.append("已导出 PDF。")
-            pages = pdf_to_png_pages(
-                pdf_path,
-                int(config.TEMPLATE_VISION_MAX_PAGES),
-                float(config.TEMPLATE_VISION_ZOOM),
-            )
-            if pages:
-                pages_saved = pages
-                status_parts.append(f"已栅格化 {len(pages)} 页，调用视觉模型…")
-                vision_prof = describe_template_pages_with_vision(pages)
-                if not vision_prof.get("error"):
-                    profile.update(vision_prof)
-                    status_parts.append("视觉分析完成。")
+    skip_multi = bool(skip_vision) or (
+        not bool(getattr(config, "TEMPLATE_VISION_ENABLED", True))
+    )
+    if skip_multi:
+        status_parts.append(
+            "已跳过 PDF/多模态模板视觉（界面勾选或环境变量 TEMPLATE_VISION_ENABLED=0），"
+            "将仅用 OOXML 文本摘要。"
+        )
+    else:
+        with tempfile.TemporaryDirectory(prefix="tplvis_") as td:
+            pdf_path = os.path.join(td, "tpl.pdf")
+            if export_docx_to_pdf(docx_path, pdf_path):
+                status_parts.append("已导出 PDF。")
+                pages = pdf_to_png_pages(
+                    pdf_path,
+                    int(config.TEMPLATE_VISION_MAX_PAGES),
+                    float(config.TEMPLATE_VISION_ZOOM),
+                )
+                if pages:
+                    pages_saved = pages
+                    status_parts.append(f"已栅格化 {len(pages)} 页，调用视觉模型…")
+                    vision_prof = describe_template_pages_with_vision(pages)
+                    if not vision_prof.get("error"):
+                        profile.update(vision_prof)
+                        status_parts.append("视觉分析完成。")
+                    else:
+                        status_parts.append(
+                            f"视觉分析失败（{vision_prof.get('error')}），已降级为纯文本摘要。"
+                        )
                 else:
                     status_parts.append(
-                        f"视觉分析失败（{vision_prof.get('error')}），已降级为纯文本摘要。"
+                        "PDF 栅格化失败（请安装 PyMuPDF：pip install pymupdf）。"
                     )
             else:
-                status_parts.append("PDF 栅格化失败（请安装 PyMuPDF：pip install pymupdf）。")
-        else:
-            status_parts.append(
-                "未检测到可用的 docx→PDF 工具（可安装：本机 Word + pip install docx2pdf，"
-                "或安装 LibreOffice 并确保 soffice 在 PATH）。"
-            )
+                status_parts.append(
+                    "未检测到可用的 docx→PDF 工具（可安装：本机 Word + pip install docx2pdf，"
+                    "或安装 LibreOffice 并确保 soffice 在 PATH）。"
+                )
 
     if profile.get("error") or not (
         profile.get("layout_notes") or profile.get("chapter_hints")

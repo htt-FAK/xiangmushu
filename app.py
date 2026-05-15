@@ -34,6 +34,33 @@ from core.template_analyzer import TemplateAnalyzer
 from core.template_vision import get_or_build_template_vision_profile
 from core.vector_store import VectorStore
 
+
+def _configure_console_logging_from_env() -> None:
+    """联调时在终端输出 INFO/DEBUG。默认关闭：Streamlit 不会像 smoke 脚本那样主动 print。"""
+    raw = (os.getenv("APP_CONSOLE_LOG") or "").strip().lower()
+    if raw not in ("1", "true", "yes", "on", "info", "debug"):
+        return
+    level = logging.DEBUG if raw == "debug" else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
+    for noisy in (
+        "httpx",
+        "httpcore",
+        "openai",
+        "chromadb",
+        "streamlit",
+        "watchdog",
+        "urllib3",
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+_configure_console_logging_from_env()
+
 SS_ACTIVE_KB = "active_kb_slug"
 SS_TASKS = "tpl_tasks_dicts"
 SS_TASKS_SIG = "tpl_tasks_signature"
@@ -251,10 +278,13 @@ def _run_template_vision_and_analyze(docx_path: str):
         status.write(
             "① **模板视觉**：docx→PDF（LibreOffice）→ 页图 → 多模态模型 "
             f"`{getattr(config, 'TEMPLATE_VISION_MODEL', '') or config.VISION_WEB_MODEL}`。"
-            " 页数多或首启 soffice 时可能较慢，请耐心等待。"
+            " 若勾选「跳过模板视觉」则本步只做文本抽取，通常数秒内完成。"
         )
         try:
-            vis_prof, vis_msg = get_or_build_template_vision_profile(docx_path)
+            skip_v = bool(st.session_state.get("adv_skip_template_vision", False))
+            vis_prof, vis_msg = get_or_build_template_vision_profile(
+                docx_path, skip_vision=skip_v
+            )
         except Exception as e:
             _LOG.exception("get_or_build_template_vision_profile")
             status.update(label="模板视觉阶段失败", state="error")
@@ -688,6 +718,11 @@ with tab_tpl:
     left, right = st.columns([2, 1])
 
     with left:
+        st.checkbox(
+            "跳过模板视觉（不跑 PDF/多模态，仅用 Word 内文本摘要；更快，版式提示弱）",
+            key="adv_skip_template_vision",
+            help="卡在步骤①或网关视觉慢时勾选。全局关闭可设环境变量 TEMPLATE_VISION_ENABLED=0。",
+        )
         tpl_up = st.file_uploader(
             "拖拽或选择 Word 模板",
             type=["docx"],
