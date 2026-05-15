@@ -121,6 +121,23 @@ class WordFiller:
         return False
 
     @classmethod
+    def _looks_like_example_or_hint(cls, text: str) -> bool:
+        """检测表格单元格中的「例如：...」「示例：...」「请填写...」等提示文字。"""
+        t = (text or "").strip()
+        if not t or len(t) > 300:
+            return False
+        # 明显的示例/提示前缀
+        if re.match(r"^\s*(例如|示例|举例|如|请填写|请描述|请说明|填写|描述|说明)[：:]", t):
+            return True
+        # 包含"例如"或"示例"且长度较短（说明是提示不是正文）
+        if ("例如" in t or "示例" in t) and len(t) < 100:
+            return True
+        # 下划线占位符（如"用户1：_______"）
+        if re.search(r"[_]{3,}", t) and len(t) < 50:
+            return True
+        return False
+
+    @classmethod
     def _looks_like_template_guidance(cls, text: str) -> bool:
         """模板「说明……建议……」或「撰写要求」类填写指引（无占位符），与占位同级、优先于空段。"""
         t = (text or "").strip()
@@ -428,6 +445,16 @@ class WordFiller:
         text = para.text or ""
         mode = (hint.get("replace_mode") or "").strip().lower()
 
+        # 检查是否是"撰写要求"类模板说明文字（需要完全替换）
+        if self._looks_like_writing_rubric(text):
+            self._set_paragraph_text_keep_style(para, content)
+            return
+
+        # 检查是否是"说明...建议..."类模板指引文字
+        if self._looks_like_template_guidance(text):
+            self._set_paragraph_text_keep_style(para, content)
+            return
+
         if self._is_pure_hint_line(text):
             self._set_paragraph_text_keep_style(para, content)
             return
@@ -501,8 +528,18 @@ class WordFiller:
             return
         cell = row.cells[col_idx]
 
-        mode = (hint.get("replace_mode") or "").strip().lower()
         cell_text = cell.text or ""
+
+        # 检查是否是"例如：..."等示例/提示文字，如果是则直接替换
+        if self._looks_like_example_or_hint(cell_text):
+            self._set_cell_text_keep_style(cell, content)
+            try:
+                table.autofit = False
+            except Exception:
+                pass
+            return
+
+        mode = (hint.get("replace_mode") or "").strip().lower()
         if mode == "placeholder_only" and self._text_has_placeholder(cell_text):
             span = self._first_placeholder_span(cell_text)
             if span:
