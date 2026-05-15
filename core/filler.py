@@ -76,8 +76,8 @@ class WordFiller:
     def _looks_like_writing_rubric(cls, text: str) -> bool:
         """「撰写要求」+ 分条 bullet 类写作说明（无占位符），与说明段同级用于候选打分。"""
         t = (text or "").strip()
-        head = t[:100]
-        if len(t) < 18:
+        head = t[:200]
+        if len(t) < 10:
             return False
         # 已成稿的长摘要：勿当 rubric
         if len(t) > 400:
@@ -95,12 +95,17 @@ class WordFiller:
             )
             if looks_done and not has_rubric_header:
                 return False
+        # 明确的撰写要求标题
         if re.match(r"^\s*(撰写要求|写作说明|摘要要求)", t):
             return True
+        # 更宽松的检测：包含"撰写要求"或"写作说明"关键字
+        if "撰写要求" in t[:50] or "写作说明" in t[:50]:
+            return True
+        # 检测 bullet 点 + 关键词
         bullet_marks = "•·●◦‣⁃"
         n_bullets = sum(t.count(c) for c in bullet_marks)
         n_bullets += len(re.findall(r"(?m)^\s*[-*+－—]\s+\S", t))
-        if n_bullets >= 2 and len(t) < 900:
+        if n_bullets >= 2 and len(t) < 1200:
             rubric_kw = (
                 "300",
                 "500",
@@ -115,6 +120,8 @@ class WordFiller:
                 "演示",
                 "插件",
                 "数据库",
+                "角色设定",
+                "避免只写",
             )
             if sum(1 for k in rubric_kw if k in t) >= 2:
                 return True
@@ -124,7 +131,7 @@ class WordFiller:
     def _looks_like_example_or_hint(cls, text: str) -> bool:
         """检测表格单元格中的「例如：...」「示例：...」「请填写...」等提示文字。"""
         t = (text or "").strip()
-        if not t or len(t) > 300:
+        if not t or len(t) > 400:
             return False
         # 明显的示例/提示前缀
         if re.match(r"^\s*(例如|示例|举例|如|请填写|请描述|请说明|填写|描述|说明)[：:]", t):
@@ -134,6 +141,22 @@ class WordFiller:
             return True
         # 下划线占位符（如"用户1：_______"）
         if re.search(r"[_]{3,}", t) and len(t) < 50:
+            return True
+        # 表格中的功能说明类提示（如"基于角色设定..."、"通过工作流..."）
+        hint_patterns = [
+            r"基于.*，回答",
+            r"通过.*完成",
+            r"把.*写入或读取",
+            r"调用.*完成",
+            r"组合.*实现",
+            r"截图[:：]",
+            r"验证.*质量",
+        ]
+        for pattern in hint_patterns:
+            if re.search(pattern, t):
+                return True
+        # 表格中的简短功能描述（通常是提示）
+        if len(t) < 80 and ("回答" in t or "完成" in t or "写入" in t or "读取" in t):
             return True
         return False
 

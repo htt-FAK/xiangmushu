@@ -168,22 +168,38 @@ def batch_generate_table_row(
         else:
             model = config.TABLE_CELL_VISION_MODEL
 
-    try:
-        resp = chat_completions_create(
-            client,
-            model=model,
-            messages=[
-                {"role": "system", "content": batch_system},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.1,
-            stream=False,
-            extra_body=extra_body or None,
-            max_tokens=min(800, len(tasks) * 150),
-        )
-        raw = (resp.choices[0].message.content if resp.choices else "") or ""
-    except Exception as e:
-        _LOG.warning("batch_table_row api_error: %s", e)
+    # 尝试主模型，失败则使用备选模型
+    models_to_try = [model]
+    if hasattr(config, 'TABLE_CELL_FALLBACK_MODEL'):
+        models_to_try.append(config.TABLE_CELL_FALLBACK_MODEL)
+    
+    raw = ""
+    last_error = None
+    for try_model in models_to_try:
+        try:
+            resp = chat_completions_create(
+                client,
+                model=try_model,
+                messages=[
+                    {"role": "system", "content": batch_system},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+                stream=False,
+                extra_body=extra_body or None,
+                max_tokens=min(800, len(tasks) * 150),
+            )
+            raw = (resp.choices[0].message.content if resp.choices else "") or ""
+            if raw:
+                _LOG.info("batch_table_row success with model: %s", try_model)
+                break
+        except Exception as e:
+            _LOG.warning("batch_table_row api_error with %s: %s", try_model, e)
+            last_error = e
+            continue
+    
+    if not raw:
+        _LOG.warning("batch_table_row all models failed, last error: %s", last_error)
         return None
 
     try:

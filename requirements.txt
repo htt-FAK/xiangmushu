@@ -8,6 +8,9 @@ python-dotenv==1.0.1
 pypdf>=4.0.0
 python-pptx>=0.6.23
 pymupdf>=1.24.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6
 # 模板视觉 docx→PDF：服务器装 LibreOffice（soffice），见 scripts/install-libreoffice-template-vision.sh
 # 国内：USE_CN_MIRROR=1 ./scripts/install-libreoffice-template-vision.sh  （可选 CN_MIRROR_VENDOR=tuna）
 # 模板结构分析：config.TEMPLATE_ANALYZE_MODEL（默认 deepseek-v4-pro，纯文本 JSON）

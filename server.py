@@ -1,0 +1,241 @@
+"""
+FastAPI 后端 — 为 HTML 前端提供 REST + SSE 接口
+运行: python server.py  →  http://localhost:8502
+"""
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import asdict
+
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+
+import config
+from core.chunker import Chunker
+from core.filler import WordFiller
+from core.generator import ContentGenerator
+from core.kb_extract import path_to_parsed_document
+from core.kb_registry import add_kb, load_registry, remove_kb
+from core.template_analyzer import TemplateAnalyzer
+from core.vector_store import VectorStore
+
+app = FastAPI(title="智能计划书生成器")
+
+# ---------------------------------------------------------------------------
+# 缓存实例（模拟 st.cache_resource）
+# ---------------------------------------------------------------------------
+_vs_cache: dict[str, VectorStore] = {}
+_chunker = Chunker()
+_analyzer = TemplateAnalyzer()
+_filler = WordFiller()
+
+
+def _get_vs(slug: str) -> VectorStore:
+    if slug not in _vs_cache:
+        _vs_cache[slug] = VectorStore(kb_slug=slug)
+    return _vs_cache[slug]
+
+
+# ---------------------------------------------------------------------------
+# 静态文件 & 首页
+# ---------------------------------------------------------------------------
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    html_path = os.path.join(STATIC_DIR, "index.html")
+    with open(html_path, encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
+# ---------------------------------------------------------------------------
+# 知识库 API
+# ---------------------------------------------------------------------------
+@app.get("/api/kb/list")
+async def kb_list():
+    return load_registry()
+
+
+@app.post("/api/kb/create")
+async def kb_create(label: str = Form(...), slug: str = Form("")):
+    try:
+        created = add_kb(label.strip(), slug.strip() or None)
+        return {"ok": True, "slug": created}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/kb/delete")
+async def kb_delete(slug: str = Form(...)):
+    try:
+        remove_kb(slug)
+        vs = VectorStore(kb_slug=slug)
+        vs.delete_entire_collection()
+        _vs_cache.pop(slug, None)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/kb/sources")
+async def kb_sources(slug: str = "kb1"):
+    vs = _get_vs(slug)
+    sources = vs.list_sources()
+    count = vs.get_collection_count()
+    return {"sources": sources, "chunk_count": count, "source_count": len(sources)}
+
+
+@app.post("/api/kb/upload")
+async def kb_upload(slug: str = Form(...), files: list[UploadFile] = File(...)):
+    vs = _get_vs(slug)
+    results = []
+    for f in files:
+        save_path = os.path.join(config.HISTORICAL_DIR, f.name)
+        content = await f.read()
+        with open(save_path, "wb") as out:
+            out.write(content)
+        try:
+            parsed = path_to_parsed_document(save_path, original_name=f.name)
+            chunks = _chunker.chunk(parsed)
+            vs.add_documents(chunks)
+            results.append({"file": f.name, "ok": True, "chunks": len(chunks)})
+        except Exception as e:
+            results.append({"file": f.name, "ok": False, "error": str(e)})
+    return {"results": results}
+
+
+@app.post("/api/kb/remove-source")
+async def kb_remove_source(slug: str = Form(...), source: str = Form(...)):
+    vs = _get_vs(slug)
+    vs.delete_by_source(source)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# 模板 API
+# ---------------------------------------------------------------------------
+@app.get("/api/template/list")
+async def template_list():
+    if not os.path.exists(config.TEMPLATE_DIR):
+        return {"templates": []}
+    files = [f for f in os.listdir(config.TEMPLATE_DIR) if f.endswith(".docx")]
+    items = []
+    for f in files:
+        p = os.path.join(config.TEMPLATE_DIR, f)
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            mtime = 0
+        items.append({"name": f, "mtime": mtime})
+    items.sort(key=lambda x: -x["mtime"])
+    return {"templates": items}
+
+
+@app.post("/api/template/analyze")
+async def template_analyze(file: UploadFile = File(...)):
+    save_path = os.path.join(config.TEMPLATE_DIR, file.name)
+    content = await file.read()
+    with open(save_path, "wb") as out:
+        out.write(content)
+    try:
+        tasks = _analyzer.analyze(save_path)
+        task_dicts = [asdict(t) for t in tasks]
+        mode = "anchor" if tasks and tasks[0].location_hint.get("anchor") else "infer"
+        return {"ok": True, "tasks": task_dicts, "count": len(tasks), "mode": mode}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 生成 API（SSE 流式）
+# ---------------------------------------------------------------------------
+@app.post("/api/generate")
+async def generate(
+    slug: str = Form(...),
+    template: str = Form(...),
+    word_limit: int = Form(300),
+    top_k: int = Form(4),
+    max_distance: float = Form(1.25),
+    enable_web: bool = Form(False),
+    use_stream: bool = Form(True),
+):
+    vs = _get_vs(slug)
+    template_path = os.path.join(config.TEMPLATE_DIR, template)
+    if not os.path.isfile(template_path):
+        return JSONResponse({"ok": False, "error": "模板不存在"}, status_code=400)
+
+    # 分析模板
+    try:
+        tasks = _analyzer.analyze(template_path)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"模板分析失败: {e}"}, status_code=500)
+    if not tasks:
+        return JSONResponse({"ok": False, "error": "未找到待填位置"}, status_code=400)
+
+    generator = ContentGenerator(vs)
+
+    def event_stream():
+        results: list[str] = []
+        for i, task in enumerate(tasks):
+            if task.word_limit <= 0:
+                task.word_limit = word_limit
+            # 通知前端当前任务
+            yield _sse({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
+
+            try:
+                if use_stream:
+                    acc: list[str] = []
+                    for piece in generator.generate_stream(
+                        task, top_k=top_k, enable_web=enable_web, retrieval_max_distance=max_distance
+                    ):
+                        acc.append(piece)
+                        yield _sse({"type": "chunk", "index": i, "text": piece})
+                    content = "".join(acc).strip()
+                else:
+                    content = generator.generate(
+                        task, top_k=top_k, enable_web=enable_web, retrieval_max_distance=max_distance
+                    )
+                    yield _sse({"type": "chunk", "index": i, "text": content})
+            except Exception as e:
+                content = f"（生成失败：{e}）"
+                yield _sse({"type": "error", "index": i, "error": str(e)})
+
+            results.append(content)
+            yield _sse({"type": "progress", "index": i, "total": len(tasks)})
+
+        # 回填 Word
+        output_name = template.replace(".docx", "_已填写.docx")
+        output_path = os.path.join(config.OUTPUT_DIR, output_name)
+        try:
+            _filler.fill_template(template_path, tasks, results, output_path)
+            yield _sse({"type": "done", "filename": output_name, "download": f"/api/download/{output_name}"})
+        except Exception as e:
+            yield _sse({"type": "error", "error": f"回填失败: {e}"})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# ---------------------------------------------------------------------------
+# 下载
+# ---------------------------------------------------------------------------
+@app.get("/api/download/{filename}")
+async def download(filename: str):
+    path = os.path.join(config.OUTPUT_DIR, filename)
+    if not os.path.isfile(path):
+        return JSONResponse({"error": "文件不存在"}, status_code=404)
+    return FileResponse(path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+# ---------------------------------------------------------------------------
+# 主入口
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    print("启动服务器: http://localhost:8502")
+    uvicorn.run(app, host="0.0.0.0", port=8502)
