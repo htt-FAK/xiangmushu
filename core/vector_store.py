@@ -3,6 +3,7 @@ from typing import Any, List, Dict, Optional
 import time
 
 import chromadb
+from chromadb.config import Settings
 
 from core.chunker import Chunk
 from core.kb_registry import collection_name_for_slug
@@ -31,6 +32,16 @@ def _patch_chromadb_sqlite_seq_id_decode() -> None:
 
 _patch_chromadb_sqlite_seq_id_decode()
 
+# 关闭产品遥测：chromadb 0.5 内置 PostHog 与新版 posthog 库不兼容，会刷
+# 「capture() takes 1 positional argument but 3 were given」；改用空实现。
+_CHROMA_SETTINGS = Settings(
+    anonymized_telemetry=False,
+    chroma_product_telemetry_impl=(
+        "core.chroma_noop_product_telemetry.NoOpProductTelemetry"
+    ),
+    chroma_telemetry_impl="core.chroma_noop_product_telemetry.NoOpProductTelemetry",
+)
+
 
 def _first_row(val: Any) -> Optional[Any]:
     """Chroma query 返回的 distances/metadatas/documents 可能是 list 或 ndarray，避免对其做布尔判断。"""
@@ -52,7 +63,9 @@ class VectorStore:
         persist_dir = persist_dir or config.CHROMA_DIR
         self.kb_slug = kb_slug
         self._collection_name = collection_name_for_slug(kb_slug)
-        self._client = chromadb.PersistentClient(path=persist_dir)
+        self._client = chromadb.PersistentClient(
+            path=persist_dir, settings=_CHROMA_SETTINGS
+        )
         self._embedding_fn = TimeoutOpenAIEmbedding(
             api_key=config.OPENAI_COMPAT_API_KEY,
             base_url=config.EMBEDDING_OPENAI_BASE_URL or None,
@@ -201,7 +214,9 @@ class VectorStore:
     def list_kb_collection_names(persist_dir: str = None) -> List[str]:
         """列出持久化目录下名称以 plan_kb__ 开头的 collection。"""
         persist_dir = persist_dir or config.CHROMA_DIR
-        client = chromadb.PersistentClient(path=persist_dir)
+        client = chromadb.PersistentClient(
+            path=persist_dir, settings=_CHROMA_SETTINGS
+        )
         try:
             cols = client.list_collections()
         except Exception:

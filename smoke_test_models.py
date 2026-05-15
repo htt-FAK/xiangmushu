@@ -90,6 +90,9 @@ def _print_config():
     print(f"  OPENAI_API_KEY:    {_mask(config.OPENAI_API_KEY)}")
     print(f"  嵌入/回落 Key:     {_mask(config.OPENAI_COMPAT_API_KEY)}")
     print(f"  SMALL_LLM_MODEL:   {config.SMALL_LLM_MODEL}  T={config.TEMP_SMALL_LLM}")
+    print(
+        f"  TEMPLATE_ANALYZE:  {config.TEMPLATE_ANALYZE_MODEL}  T={config.TEMP_TEMPLATE_ANALYZE}"
+    )
     print(f"  LARGE_LLM_MODEL:   {config.LARGE_LLM_MODEL}  T={config.TEMP_LARGE_LLM}")
     print(f"  AUDIT_LLM_MODEL:   {config.AUDIT_LLM_MODEL}  T={config.TEMP_AUDIT}")
     print(f"  VISION_WEB_MODEL:  {config.VISION_WEB_MODEL}  T={config.TEMP_VISION}")

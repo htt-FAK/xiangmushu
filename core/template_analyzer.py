@@ -83,9 +83,11 @@ class TemplateAnalyzer:
 
 只输出 JSON 数组，不要其他内容。"""
 
+        analyze_model = config.TEMPLATE_ANALYZE_MODEL
+        analyze_temp = config.TEMP_TEMPLATE_ANALYZE
         response = chat_completions_create(
             self._client,
-            model=config.SMALL_LLM_MODEL,
+            model=analyze_model,
             messages=[
                 {
                     "role": "system",
@@ -93,7 +95,7 @@ class TemplateAnalyzer:
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=config.TEMP_SMALL_LLM,
+            temperature=analyze_temp,
         )
 
         content = (response.choices[0].message.content or "").strip()

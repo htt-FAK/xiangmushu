@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -237,6 +238,46 @@ def get_chunker():
 @st.cache_resource
 def get_analyzer():
     return TemplateAnalyzer()
+
+
+_LOG = logging.getLogger(__name__)
+
+
+def _run_template_vision_and_analyze(docx_path: str):
+    """
+    分步展示进度；成功返回 (vision_profile, vis_msg, tasks)，失败返回 None（已展示错误）。
+    """
+    with st.status("模板视觉理解 + 结构分析…", expanded=True) as status:
+        status.write(
+            "① **模板视觉**：docx→PDF（LibreOffice）→ 页图 → 多模态模型 "
+            f"`{getattr(config, 'TEMPLATE_VISION_MODEL', '') or config.VISION_WEB_MODEL}`。"
+            " 页数多或首启 soffice 时可能较慢，请耐心等待。"
+        )
+        try:
+            vis_prof, vis_msg = get_or_build_template_vision_profile(docx_path)
+        except Exception as e:
+            _LOG.exception("get_or_build_template_vision_profile")
+            status.update(label="模板视觉阶段失败", state="error")
+            st.error(f"模板视觉阶段异常：`{type(e).__name__}: {e}`")
+            return None
+        status.write(vis_msg or "（视觉阶段无额外说明）")
+        analyze_model = config.TEMPLATE_ANALYZE_MODEL
+        status.write(
+            "② **结构分析**：识别填空位（纯文本，模型 "
+            f"`{analyze_model}`）。若模板无 `{{锚点}}`，此步必调用 LLM；"
+            f"超时见 `OPENAI_TIMEOUT`（当前 {config.OPENAI_TIMEOUT}s）。"
+        )
+        try:
+            tasks: list[FillTask] = get_analyzer().analyze(
+                docx_path, vision_profile=vis_prof
+            )
+        except Exception as e:
+            _LOG.exception("TemplateAnalyzer.analyze")
+            status.update(label="结构分析失败", state="error")
+            st.error(f"结构分析异常：`{type(e).__name__}: {e}`")
+            return None
+        status.update(label="模板分析完成", state="complete")
+    return vis_prof, vis_msg, tasks
 
 
 @st.cache_resource
@@ -660,9 +701,10 @@ with tab_tpl:
                 save_path = os.path.join(config.TEMPLATE_DIR, tpl_up.name)
                 with open(save_path, "wb") as f:
                     f.write(tpl_up.getbuffer())
-                with st.spinner("模板视觉理解 + 结构分析…"):
-                    vis_prof, vis_msg = get_or_build_template_vision_profile(save_path)
-                    tasks = get_analyzer().analyze(save_path, vision_profile=vis_prof)
+                out = _run_template_vision_and_analyze(save_path)
+                if out is None:
+                    st.stop()
+                vis_prof, vis_msg, tasks = out
                 st.caption(vis_msg)
                 if not tasks:
                     st.warning("未识别到待填位置，请检查文档或锚点写法。")
@@ -773,9 +815,10 @@ with tab_gen:
                 tasks = _dicts_to_tasks(st.session_state[SS_TASKS])
                 st.info("使用已缓存的模板分析。")
             else:
-                with st.spinner("模板视觉理解 + 结构分析…"):
-                    vis_prof, vis_msg = get_or_build_template_vision_profile(template_path)
-                    tasks = get_analyzer().analyze(template_path, vision_profile=vis_prof)
+                out = _run_template_vision_and_analyze(template_path)
+                if out is None:
+                    st.stop()
+                vis_prof, vis_msg, tasks = out
                 st.caption(vis_msg)
                 if tasks:
                     st.session_state[SS_TASKS] = _tasks_to_dicts(tasks)

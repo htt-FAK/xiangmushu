@@ -49,6 +49,10 @@ VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "gemini-
 TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "gemini-3-pro"
 # 强检索短文省 token；主正文用大模型
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-plus").strip()
+# 模板结构分析（纯文本：从 OOXML/视觉摘要推断填空位；与 SMALL_LLM 拆分，默认可用更快模型）
+TEMPLATE_ANALYZE_MODEL = (
+    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "deepseek-v4-pro"
+)
 # 主正文生成（段落/长段/非联网档表格等）
 LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.5"
 # 生成后审核（不传 enable_search）
@@ -61,6 +65,7 @@ TEMP_WEB_GEN = float(os.getenv("TEMP_WEB_GEN", "0.4"))
 _WSM = os.getenv("WEB_SEARCH_WRITING_MODE", "calm").strip().lower()
 WEB_SEARCH_WRITING_MODE = "creative" if _WSM == "creative" else "calm"
 TEMP_SMALL_LLM = float(os.getenv("TEMP_SMALL_LLM", "0.1"))
+TEMP_TEMPLATE_ANALYZE = float(os.getenv("TEMP_TEMPLATE_ANALYZE", "0.1"))
 TEMP_LARGE_LLM = float(os.getenv("TEMP_LARGE_LLM", "0.65"))
 
 # 检索：Chroma 返回的 distance，越小通常越相似（与距离度量有关）；超过则视为弱相关
