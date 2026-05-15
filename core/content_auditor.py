@@ -7,8 +7,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
-
 import config
 from core.dashscope_chat import chat_completions_create
 from core.fill_task import FillTask
@@ -51,12 +49,7 @@ def _strip_json_fence(raw: str) -> str:
 
 class ContentAuditor:
     def __init__(self) -> None:
-        self._client = OpenAI(
-            api_key=config.OPENAI_COMPAT_API_KEY or "sk-placeholder",
-            base_url=config.OPENAI_BASE_URL,
-            timeout=config.OPENAI_TIMEOUT,
-            max_retries=config.OPENAI_MAX_RETRIES,
-        )
+        self._client = config.openai_client_for_chat()
 
     def audit(
         self,
@@ -70,6 +63,7 @@ class ContentAuditor:
             "native_web_search": route_meta.get("native_web_search"),
             "kb_hits": route_meta.get("kb_hits"),
             "task_type": task.task_type,
+            "web_creative_prompt": route_meta.get("web_creative_prompt"),
         }
         user_parts = [
             f"【撰写任务】章节={task.target_chapter}\n类型={task.task_type}\n要求={task.description}\n字数上限约={task.word_limit}",
@@ -152,7 +146,11 @@ _HIGH_RISK_KEYWORDS = [
 ]
 
 
-def rule_audit(task: FillTask, answer: str) -> list[str]:
+def rule_audit(
+    task: FillTask,
+    answer: str,
+    route_meta: Optional[Dict[str, Any]] = None,
+) -> list[str]:
     """免费的规则审核，返回 issue 列表（空列表表示通过）。"""
     issues: list[str] = []
     text = (answer or "").strip()
@@ -165,7 +163,12 @@ def rule_audit(task: FillTask, answer: str) -> list[str]:
     if len(text) > int(cap * 1.8):
         issues.append(f"内容过长（{len(text)} 字，上限约 {int(cap * 1.8)} 字）")
 
-    for prefix in _FORBIDDEN_PREFIXES:
+    relax_unavailable = bool(route_meta and route_meta.get("web_creative_prompt"))
+    prefixes = list(_FORBIDDEN_PREFIXES)
+    if relax_unavailable:
+        prefixes = [p for p in prefixes if p not in ("暂无相关信息", "未提供", "无法确定")]
+
+    for prefix in prefixes:
         if text.startswith(prefix) or prefix in text[:40]:
             issues.append(f"含禁用前缀或模型说明性语句：「{prefix}」")
             break

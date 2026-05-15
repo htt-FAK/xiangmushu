@@ -16,8 +16,9 @@ import config
 from core.dashscope_chat import chat_completions_create
 from core.evidence_planner import Evidence, compress_evidence
 from core.fill_task import FillTask
-from core.generator import SYSTEM_PROMPT
+from core.generator import _normalize_web_writing_mode, _web_gen_prompt_parts
 from core.table_context import get_column_header_text_from_table
+from core.template_vision import build_table_cell_user_content
 
 _LOG = logging.getLogger(__name__)
 
@@ -25,9 +26,9 @@ BATCH_MAX_CELLS = int(config.__dict__.get("BATCH_MAX_CELLS", 8))
 # 列数过多时一行 JSON 易混淆，降级逐格生成
 BATCH_TABLE_MAX_COLS = int(os.getenv("BATCH_TABLE_MAX_COLS", "5"))
 
-_BATCH_SYSTEM = SYSTEM_PROMPT + "\n输出纯 JSON 对象，键为单元格序号（从 0 开始），值为简短填写内容，不输出 JSON 以外内容。"
-
-
+_JSON_SUFFIX = (
+    "输出纯 JSON 对象，键为单元格序号（从 0 开始），值为简短填写内容，不输出 JSON 以外内容。"
+)
 def _strip_json_fence(raw: str) -> str:
     s = (raw or "").strip()
     if s.startswith("```"):
@@ -46,6 +47,8 @@ def batch_generate_table_row(
     table_context: Optional[str] = None,
     enable_web: bool = False,
     template_path: Optional[str] = None,
+    web_writing_mode: Optional[str] = None,
+    table_cell_vision_pngs: Optional[List[bytes]] = None,
 ) -> Optional[Dict[int, str]]:
     """
     批量生成同一表格行的所有单元格。
@@ -107,12 +110,30 @@ def batch_generate_table_row(
         else ""
     )
 
-    _tail = (
-        "\n\n请输出 JSON 对象，键为上方序号（数字字符串），值为对应格的**单行**简短填写；"
-        "直接依据参考资料，无依据写「资料未载明」。"
-        "\n禁止：把左侧「问题」全文抄入答案列；输出「资料N：____」类模板骨架；"
-        "一格内写多列内容或长段方案叙述。"
+    low_similarity = (
+        evidence.best_similarity is not None
+        and evidence.best_similarity < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
     )
+    use_plus = enable_web and (evidence.weak_kb or low_similarity)
+    _, system_prompt, _, _, _ = _web_gen_prompt_parts(
+        use_plus, web_writing_mode, evidence.kb_hits > 0
+    )
+    batch_system = system_prompt + "\n" + _JSON_SUFFIX
+
+    if use_plus and _normalize_web_writing_mode(web_writing_mode) == "creative":
+        _tail = (
+            "\n\n请输出 JSON 对象，键为上方序号（数字字符串），值为对应格的**单行**简短填写；"
+            "结合参考资料与联网检索补全各格，不要使用「资料未载明」「未提供」敷衍。"
+            "\n禁止：把左侧「问题」全文抄入答案列；输出「资料N：____」类模板骨架；"
+            "一格内写多列内容或长段方案叙述。"
+        )
+    else:
+        _tail = (
+            "\n\n请输出 JSON 对象，键为上方序号（数字字符串），值为对应格的**单行**简短填写；"
+            "直接依据参考资料，无依据写「资料未载明」。"
+            "\n禁止：把左侧「问题」全文抄入答案列；输出「资料N：____」类模板骨架；"
+            "一格内写多列内容或长段方案叙述。"
+        )
     user_msg = (
         f"【批量表格填写】以下 {len(tasks)} 个单元格属于同一表格行，请一次性输出 JSON。\n"
         + "\n".join(cell_descs)
@@ -123,7 +144,7 @@ def batch_generate_table_row(
     )
 
     extra_body: Dict[str, Any] = {}
-    if enable_web and evidence.weak_kb:
+    if use_plus:
         extra_body["enable_search"] = True
         model = config.VISION_WEB_MODEL
     else:
@@ -132,13 +153,28 @@ def batch_generate_table_row(
             and evidence.best_similarity >= config.STRONG_RAG_SIMILARITY_FLOOR
         ) else config.LARGE_LLM_MODEL
 
+    use_mm = (
+        getattr(config, "TABLE_CELL_VISION", True)
+        and table_cell_vision_pngs
+    )
+    user_content: Any = (
+        build_table_cell_user_content(user_msg, table_cell_vision_pngs)
+        if use_mm
+        else user_msg
+    )
+    if use_mm and isinstance(user_content, list):
+        if use_plus:
+            model = config.VISION_WEB_MODEL
+        else:
+            model = config.TABLE_CELL_VISION_MODEL
+
     try:
         resp = chat_completions_create(
             client,
             model=model,
             messages=[
-                {"role": "system", "content": _BATCH_SYSTEM},
-                {"role": "user", "content": user_msg},
+                {"role": "system", "content": batch_system},
+                {"role": "user", "content": user_content},
             ],
             temperature=0.1,
             stream=False,

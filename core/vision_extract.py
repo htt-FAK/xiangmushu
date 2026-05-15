@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import base64
 
-from openai import OpenAI
-
 import config
 from core.dashscope_chat import chat_completions_create
 
@@ -14,22 +12,17 @@ VISION_PROMPT = """请详细识别图片中的可见文字（按阅读顺序摘�
 
 def describe_image_bytes(image_bytes: bytes, mime_type: str) -> str:
     """对单张图片做视觉理解，返回纯文本（用于向量库）。"""
-    if not (config.OPENAI_COMPAT_API_KEY or "").strip():
-        raise ValueError("未配置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY，无法调用视觉模型")
+    if not config.chat_llm_configured():
+        raise ValueError("未配置复星网关或 DASHSCOPE_API_KEY / OPENAI_API_KEY，无法调用视觉模型")
 
     b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     url = f"data:{mime_type};base64,{b64}"
 
-    client = OpenAI(
-        api_key=config.OPENAI_COMPAT_API_KEY,
-        base_url=config.OPENAI_BASE_URL,
-        timeout=config.OPENAI_TIMEOUT,
-        max_retries=config.OPENAI_MAX_RETRIES,
-    )
+    client = config.openai_client_for_chat()
 
     resp = chat_completions_create(
         client,
-        model=config.VISION_WEB_MODEL,
+        model=getattr(config, "VISION_EXTRACT_MODEL", None) or config.VISION_WEB_MODEL,
         messages=[
             {
                 "role": "user",

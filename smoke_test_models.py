@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -72,26 +73,29 @@ def _mask(s: str, keep: int = 6) -> str:
 
 
 def _client() -> OpenAI:
-    key = (config.OPENAI_COMPAT_API_KEY or "").strip()
-    if not key:
-        raise SystemExit("未配置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY，退出。")
-    return OpenAI(
-        api_key=key,
-        base_url=config.OPENAI_BASE_URL,
-        timeout=config.OPENAI_TIMEOUT,
-        max_retries=config.OPENAI_MAX_RETRIES,
-    )
+    if not config.chat_llm_configured():
+        raise SystemExit("未配置聊天通道：请设置 FOSUN_AIGW_API_KEY 或 DASHSCOPE_API_KEY / OPENAI_API_KEY。")
+    return config.openai_client_for_chat()
 
 
 def _print_config():
     print("=== 配置摘要 ===")
-    print(f"  OPENAI_BASE_URL: {config.OPENAI_BASE_URL}")
+    print(f"  聊天主通道: {'复星网关' if config.FOSUN_AIGW_API_KEY else 'OPENAI_BASE_URL'}")
+    print(f"  FOSUN_AIGW_BASE_URL: {config.FOSUN_AIGW_BASE_URL}")
+    print(f"  FOSUN_AIGW_API_KEY:  {_mask(config.FOSUN_AIGW_API_KEY)}")
+    print(f"  OPENAI_BASE_URL（无网关时）: {config.OPENAI_BASE_URL}")
+    print(f"  EMBEDDING_OPENAI_BASE_URL: {config.EMBEDDING_OPENAI_BASE_URL}")
+    print(f"  DASHSCOPE_COMPAT_BASE:     {config.DASHSCOPE_COMPAT_BASE}")
     print(f"  DASHSCOPE_API_KEY: {_mask(config.DASHSCOPE_API_KEY)}")
     print(f"  OPENAI_API_KEY:    {_mask(config.OPENAI_API_KEY)}")
-    print(f"  实际调用 Key:      {_mask(config.OPENAI_COMPAT_API_KEY)}")
+    print(f"  嵌入/回落 Key:     {_mask(config.OPENAI_COMPAT_API_KEY)}")
     print(f"  SMALL_LLM_MODEL:   {config.SMALL_LLM_MODEL}  T={config.TEMP_SMALL_LLM}")
     print(f"  LARGE_LLM_MODEL:   {config.LARGE_LLM_MODEL}  T={config.TEMP_LARGE_LLM}")
+    print(f"  AUDIT_LLM_MODEL:   {config.AUDIT_LLM_MODEL}  T={config.TEMP_AUDIT}")
     print(f"  VISION_WEB_MODEL:  {config.VISION_WEB_MODEL}  T={config.TEMP_VISION}")
+    print(f"  TEMPLATE_VISION:   {config.TEMPLATE_VISION_MODEL}")
+    print(f"  VISION_EXTRACT:    {config.VISION_EXTRACT_MODEL}")
+    print(f"  TABLE_CELL_VISION: {config.TABLE_CELL_VISION_MODEL}")
     print(f"  EMBEDDING_MODEL:   {config.EMBEDDING_MODEL}")
     print()
 
@@ -162,7 +166,7 @@ def _embedding_ping() -> bool:
     try:
         fn = TimeoutOpenAIEmbedding(
             api_key=config.OPENAI_COMPAT_API_KEY or "sk-placeholder",
-            base_url=config.OPENAI_BASE_URL or None,
+            base_url=config.EMBEDDING_OPENAI_BASE_URL or None,
             model_name=config.EMBEDDING_MODEL,
             timeout=config.OPENAI_TIMEOUT,
             max_retries=config.OPENAI_MAX_RETRIES,
@@ -230,7 +234,7 @@ def _routing_tests() -> bool:
         print("  [FAIL] 预期 VISION_WEB_MODEL（弱库联网档）")
         ok = False
     else:
-        print("  [OK] 使用 qwen-plus 档")
+        print("  [OK] 使用联网档（VISION_WEB_MODEL）")
     if not eb2.get("enable_search"):
         print("  [FAIL] 预期 extra_body.enable_search=True")
         ok = False
@@ -269,6 +273,42 @@ def _routing_tests() -> bool:
     if not eb4.get("enable_search"):
         print("  [FAIL] 预期 extra_body.enable_search=True")
         ok = False
+
+    # 联网档 + 创意模式：系统提示切换，用户提示不出现「请注明资料未载明」硬性句
+    msgs_cr, _, _, _, rm_cr, _ = g2._build_chat_request(
+        task,
+        top_k=3,
+        enable_web=True,
+        retrieval_max_distance=1.0,
+        web_writing_mode="creative",
+    )
+    if not rm_cr.get("web_creative_prompt"):
+        print("  [FAIL] 弱库联网+创意应 web_creative_prompt=True")
+        ok = False
+    elif "联网创意" not in (msgs_cr[0].get("content") or ""):
+        print("  [FAIL] 创意联网应使用联网创意系统提示")
+        ok = False
+    elif "无依据的要点请注明「资料未载明」" in (msgs_cr[1].get("content") or ""):
+        print("  [FAIL] 创意用户提示不应含硬性资料未载明句")
+        ok = False
+    else:
+        print("  [OK] 联网创意提示词")
+
+    msgs_ca, _, _, _, rm_ca, _ = g2._build_chat_request(
+        task,
+        top_k=3,
+        enable_web=True,
+        retrieval_max_distance=1.0,
+        web_writing_mode="calm",
+    )
+    if rm_ca.get("web_creative_prompt"):
+        print("  [FAIL] 冷静模式 web_creative_prompt 应为 False")
+        ok = False
+    elif "无依据的要点请注明「资料未载明」" not in (msgs_ca[1].get("content") or ""):
+        print("  [FAIL] 冷静用户提示应保留资料未载明要求")
+        ok = False
+    else:
+        print("  [OK] 联网冷静提示词")
 
     return ok
 
@@ -349,6 +389,15 @@ def _offline_rule_and_need_model_audit() -> bool:
     issues = rule_audit(t_para, "以下是正文内容很长" + "x" * 10)
     if not any("禁用" in x or "前缀" in x for x in issues):
         print(f"  [FAIL] 禁用前缀未检出 issues={issues}")
+        return False
+
+    relaxed = rule_audit(
+        t_para,
+        "未提供详细数据说明" + "x" * 20,
+        {"web_creative_prompt": True},
+    )
+    if any("未提供" in x for x in relaxed):
+        print(f"  [FAIL] 创意联网下不应因「未提供」前缀拦截 relaxed={relaxed}")
         return False
 
     t_cell = FillTask(
@@ -589,6 +638,12 @@ def _offline_bundle_evidence_route_parity() -> bool:
     )
     b4 = g4.prepare_bundle_from_evidence(t_cell, ev4, enable_web=False, table_context="表头:名称")
     user = b4.messages[1]["content"]
+    if isinstance(user, list):
+        user = "\n".join(
+            str(x.get("text", ""))
+            for x in user
+            if isinstance(x, dict) and x.get("type") == "text"
+        )
     if "表格填写任务" not in user:
         print("  [FAIL] 表格任务 user 应含表格填写任务")
         return False
@@ -684,6 +739,307 @@ def _offline_filler_paragraph_placeholder_only() -> bool:
     return True
 
 
+def _offline_filler_abstract_hint_line() -> bool:
+    print("=== WordFiller 摘要空段+提示行（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    try:
+        d.styles["Heading 1"]
+    except KeyError:
+        d.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+    d.add_paragraph("摘  要", style="Heading 1")
+    d.add_paragraph("")
+    d.add_paragraph("（请在此填写摘要正文）")
+    d.add_paragraph("关键词：测试")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="abs",
+                    target_chapter="摘  要",
+                    task_type="paragraph",
+                    description="摘要正文",
+                    location_hint={"paragraph_text": "请在此填写"},
+                    word_limit=500,
+                )
+            ],
+            ["摘要：\n\n这是生成的摘要正文。"],
+            out,
+        )
+        d2 = Doc(out)
+        texts = [p.text for p in d2.paragraphs]
+        joined = "\n".join(texts)
+        if "请在此填写" in joined:
+            print(f"  [FAIL] 仍含提示行 {texts!r}")
+            return False
+        if "这是生成的摘要正文" not in joined:
+            print(f"  [FAIL] 未写入摘要 {texts!r}")
+            return False
+        body_para = ""
+        for t in texts:
+            if "这是生成的摘要正文" in t:
+                body_para = t.strip()
+                break
+        if re.match(r"^摘\s*要", body_para):
+            print(f"  [FAIL] 正文段不应再以「摘要」起头 {body_para!r}")
+            return False
+        if texts[2] if len(texts) > 2 else "" == "这是生成的摘要正文。":
+            pass
+        elif "这是生成的摘要正文" not in (texts[1] if len(texts) > 1 else ""):
+            print(f"  [FAIL] 摘要应在提示行位置而非空段 {texts!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_filler_abstract_heading_alias() -> bool:
+    """任务章节写「摘要」、模板标题为「摘  要」且占位为【】时仍能命中并写入。"""
+    print("=== WordFiller 摘要章节别名匹配（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    try:
+        d.styles["Heading 1"]
+    except KeyError:
+        d.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+    d.add_paragraph("摘  要", style="Heading 1")
+    d.add_paragraph("")
+    d.add_paragraph("【请在此填写摘要正文】")
+    d.add_paragraph("关键词：x")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="abs2",
+                    target_chapter="摘要",
+                    task_type="paragraph",
+                    description="摘要",
+                    location_hint={},
+                    word_limit=500,
+                )
+            ],
+            ["别名匹配后的摘要正文。"],
+            out,
+        )
+        d2 = Doc(out)
+        joined = "\n".join(p.text for p in d2.paragraphs)
+        if "【请在此填写" in joined or "请在此填写" in joined:
+            print(f"  [FAIL] 占位未替换 {joined!r}")
+            return False
+        if "别名匹配后的摘要正文" not in joined:
+            print(f"  [FAIL] 未写入 {joined!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_filler_abstract_writing_rubric() -> bool:
+    print("=== WordFiller 摘要撰写要求条识别（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    rubric = (
+        "撰写要求\n"
+        "• 用300—500字概述智能体应用项目：面向什么真实场景、解决什么问题、目标用户是谁。\n"
+        "• 说明综合使用的核心能力：角色设定、工作流、数据库、知识库、插件调用、测试与演示方式。\n"
+        "• 概括最终成果：可运行入口、主要功能、典型演示效果、创新点与不足。\n"
+        "• 摘要中避免只写“我学会了什么”，应突出“项目做成了什么、如何做成、效果如何”。"
+    )
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    try:
+        d.styles["Heading 1"]
+    except KeyError:
+        d.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+    d.add_paragraph("摘  要", style="Heading 1")
+    d.add_paragraph("")
+    d.add_paragraph(rubric)
+    d.add_paragraph("")
+    d.add_paragraph("关键词：测试")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="rub",
+                    target_chapter="摘要",
+                    task_type="paragraph",
+                    description="摘要正文",
+                    location_hint={},
+                    word_limit=500,
+                )
+            ],
+            ["摘要成稿已正确替换模板中的写作说明条目。"],
+            out,
+        )
+        d2 = Doc(out)
+        joined = "\n".join(p.text for p in d2.paragraphs)
+        if "用300—500字" in joined or "我学会了什么" in joined:
+            print(f"  [FAIL] rubric 应被替换 {joined[:400]!r}…")
+            return False
+        if "摘要成稿已正确替换模板中的写作说明条目" not in joined:
+            print(f"  [FAIL] 未写入正文 {joined!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_filler_guidance_beats_empty() -> bool:
+    print("=== WordFiller 说明段优先于空段（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    try:
+        d.styles["Heading 1"]
+    except KeyError:
+        d.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+    try:
+        d.styles["Heading 2"]
+    except KeyError:
+        d.styles.add_style("Heading 2", WD_STYLE_TYPE.PARAGRAPH)
+    d.add_paragraph("第1章 单元测试章", style="Heading 1")
+    d.add_paragraph("1.1 小节", style="Heading 2")
+    d.add_paragraph(
+        "说明项目背景、现实痛点和应用价值。建议从「真实场景—现有问题—价值」三个层次展开，避免只写概念介绍。"
+    )
+    d.add_paragraph("")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="g1",
+                    target_chapter="第1章 单元测试章",
+                    task_type="paragraph",
+                    description="写背景",
+                    location_hint={},
+                    word_limit=200,
+                )
+            ],
+            ["已替换的正文段落。"],
+            out,
+        )
+        d2 = Doc(out)
+        texts = [p.text for p in d2.paragraphs]
+        if any("说明项目背景" in t for t in texts):
+            print(f"  [FAIL] 模板说明段应被替换 {texts!r}")
+            return False
+        if not any("已替换的正文段落" in t for t in texts):
+            print(f"  [FAIL] 未写入生成内容 {texts!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_docx_typography() -> bool:
+    print("=== docx_typography 宋体小四（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.oxml.ns import qn
+
+    from core.docx_typography import SZ_BODY, apply_document_typography
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    d.add_paragraph("正文段落")
+    d.save(path)
+    try:
+        apply_document_typography(d)
+        d.save(path)
+        d2 = Doc(path)
+        run = d2.paragraphs[0].runs[0]
+        rpr = run._r.rPr
+        if rpr is None:
+            print("  [FAIL] 无 rPr")
+            return False
+        sz = rpr.find(qn("w:sz"))
+        if sz is None or sz.get(qn("w:val")) != str(SZ_BODY):
+            print(f"  [FAIL] sz 非小四 {sz.get(qn('w:val')) if sz is not None else None}")
+            return False
+        fonts = rpr.find(qn("w:rFonts"))
+        if fonts is None:
+            print("  [FAIL] 无 rFonts")
+            return False
+        ea = fonts.get(qn("w:eastAsia")) or ""
+        if "宋" not in ea and fonts.get(qn("w:ascii")) != "SimSun":
+            print(f"  [FAIL] 字体非宋体 {ea}")
+            return False
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    print("  [OK]")
+    return True
+
+
 def _offline_template_vision_and_filler_cell() -> bool:
     print("=== template_vision / filler 单元格样式（offline）===")
     import os
@@ -744,6 +1100,12 @@ def _offline_template_vision_and_filler_cell() -> bool:
     )
     b = g.prepare_generation_bundle(tasks[0], top_k=2, enable_web=False)
     u = b.messages[1]["content"]
+    if isinstance(u, list):
+        u = "\n".join(
+            str(x.get("text", ""))
+            for x in u
+            if isinstance(x, dict) and x.get("type") == "text"
+        )
     if "视觉摘要" not in u:
         print("  [FAIL] 生成 user 未含视觉摘要")
         return False
@@ -786,6 +1148,26 @@ def _offline_template_vision_and_filler_cell() -> bool:
     return True
 
 
+def _offline_table_cell_multimodal_content() -> bool:
+    print("=== build_table_cell_user_content 多模态（offline）===")
+    from core.template_vision import build_table_cell_user_content
+
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\xf8\x0f\x00"
+        b"\x01\x05\x01\x02\xca\x89_\xeb\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    mm = build_table_cell_user_content("【表格填写任务】测试", [tiny_png])
+    if not isinstance(mm, list) or len(mm) < 2:
+        print(f"  [FAIL] 预期 list 多段 content，得 {type(mm)}")
+        return False
+    if mm[0].get("type") != "text" or mm[-1].get("type") != "image_url":
+        print(f"  [FAIL] 段类型异常 {mm[0]} … {mm[-1]}")
+        return False
+    print("  [OK]")
+    return True
+
+
 def _run_all_offline() -> bool:
     steps = [
         ("路由", _routing_tests),
@@ -799,6 +1181,12 @@ def _run_all_offline() -> bool:
         ("clean_table_answer", _offline_filler_clean_table),
         ("batch_json_fence", _offline_batch_json_fence),
         ("filler_placeholder_only_para", _offline_filler_paragraph_placeholder_only),
+        ("filler_abstract_hint", _offline_filler_abstract_hint_line),
+        ("filler_abstract_heading_alias", _offline_filler_abstract_heading_alias),
+        ("filler_abstract_writing_rubric", _offline_filler_abstract_writing_rubric),
+        ("filler_guidance_beats_empty", _offline_filler_guidance_beats_empty),
+        ("docx_typography", _offline_docx_typography),
+        ("table_cell_multimodal", _offline_table_cell_multimodal_content),
         ("template_vision+filler_cell", _offline_template_vision_and_filler_cell),
     ]
     ok_all = True
@@ -907,8 +1295,8 @@ def main() -> int:
         print("  [OK] offline 检查通过" if ok else "  [FAIL] offline 检查失败")
         return 0 if ok else 1
 
-    if not (config.OPENAI_COMPAT_API_KEY or "").strip():
-        print("[FAIL] 无可用 API Key")
+    if not config.chat_llm_configured():
+        print("[FAIL] 无可用聊天 API Key（网关或百炼）")
         return 1
 
     results: list[bool] = []

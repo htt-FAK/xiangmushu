@@ -1,5 +1,4 @@
 from typing import Any, Dict, List, Optional
-from openai import OpenAI
 
 from core.dashscope_chat import chat_completions_create
 from core.parser import DocumentParser
@@ -10,17 +9,16 @@ import config
 import json
 import uuid
 
+from docx import Document
+
+from core.filler import WordFiller
+
 
 class TemplateAnalyzer:
     """分析模板：优先锚点 {{NAME}} 扫描；否则 LLM + 装饰性空位提示。"""
 
     def __init__(self):
-        self._client = OpenAI(
-            api_key=config.OPENAI_COMPAT_API_KEY or "sk-placeholder",
-            base_url=config.OPENAI_BASE_URL,
-            timeout=config.OPENAI_TIMEOUT,
-            max_retries=config.OPENAI_MAX_RETRIES,
-        )
+        self._client = config.openai_client_for_chat()
         self._parser = DocumentParser()
 
     def analyze(
@@ -72,8 +70,9 @@ class TemplateAnalyzer:
 - location_hint: 定位信息（段落用 {{"paragraph_text": "上下文关键词"}}，表格用 {{"table_index": 数字, "row": 行号, "col": 列号}}）
 - word_limit: 建议字数
 - replace_mode: （可选，**仅 type 为 paragraph 时有效**）"full" 或 "placeholder_only"。
-  若同一段内左侧/前后为固定说明文字、仅「请填写」「____」「（ ）」等为待填占位，必须填 **placeholder_only**，以免生成内容覆盖说明；
-  若整段几乎全为待生成正文或无法拆分，用 **full** 或省略（默认 full）。table_cell 省略本字段。
+  若同一段内左侧/前后为固定说明文字、仅「请填写」「请在此填写」「____」「（ ）」等为待填占位，必须填 **placeholder_only**；
+  若整行仅为「（请在此填写…）」类短提示（独立一行），用 **full** 或省略（整行替换为正文）；
+  若整段几乎全为待生成正文，用 **full** 或省略。table_cell 省略本字段。
 
 重要（表格）：
 - location_hint.table_index **必须**等于上文中「doc.tables索引=」后面的整数，与整篇文档中表格的全局顺序一致，**绝不是**每个章节内从 0 重新编号。
@@ -135,7 +134,51 @@ class TemplateAnalyzer:
             )
         if vision_profile:
             apply_chapter_hints_to_tasks(tasks, vision_profile)
+        self._apply_replace_mode_heuristics(template_path, tasks)
         return tasks
+
+    def _apply_replace_mode_heuristics(
+        self, template_path: str, tasks: List[FillTask]
+    ) -> None:
+        """根据模板段落文本自动设置 placeholder_only（说明+占位混排）。"""
+        try:
+            doc = Document(template_path)
+        except Exception:
+            return
+        paras = doc.paragraphs
+        for task in tasks:
+            if task.task_type != "paragraph":
+                continue
+            lh = task.location_hint or {}
+            if lh.get("replace_mode"):
+                continue
+            hint = (lh.get("paragraph_text") or "").strip()
+            para_text = ""
+            for p in paras:
+                t = p.text or ""
+                if hint and hint in t:
+                    para_text = t
+                    break
+                if task.target_chapter and WordFiller._heading_matches_chapter(
+                    task.target_chapter, t
+                ):
+                    continue
+            if not para_text and task.description:
+                if "说明" in task.description and (
+                    "请填写" in task.description or "占位" in task.description
+                ):
+                    lh["replace_mode"] = "placeholder_only"
+                    task.location_hint = lh
+                    continue
+            if not para_text:
+                continue
+            if WordFiller._is_pure_hint_line(para_text):
+                continue
+            if WordFiller._text_has_placeholder(para_text) and (
+                "说明" in para_text or len(para_text) > 50
+            ):
+                lh["replace_mode"] = "placeholder_only"
+                task.location_hint = lh
 
     def _build_structure_text(self, doc) -> str:
         lines = []

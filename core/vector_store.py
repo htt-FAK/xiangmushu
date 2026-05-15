@@ -55,7 +55,7 @@ class VectorStore:
         self._client = chromadb.PersistentClient(path=persist_dir)
         self._embedding_fn = TimeoutOpenAIEmbedding(
             api_key=config.OPENAI_COMPAT_API_KEY,
-            base_url=config.OPENAI_BASE_URL or None,
+            base_url=config.EMBEDDING_OPENAI_BASE_URL or None,
             model_name=config.EMBEDDING_MODEL,
             timeout=config.OPENAI_TIMEOUT,
             max_retries=config.OPENAI_MAX_RETRIES,

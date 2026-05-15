@@ -8,3 +8,5 @@ python-dotenv==1.0.1
 pypdf>=4.0.0
 python-pptx>=0.6.23
 pymupdf>=1.24.0
+# 模板视觉 docx→PDF：服务器装 LibreOffice（soffice），见 scripts/install-libreoffice-template-vision.sh
+# 国内：USE_CN_MIRROR=1 ./scripts/install-libreoffice-template-vision.sh  （可选 CN_MIRROR_VENDOR=tuna）

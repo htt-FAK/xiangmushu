@@ -51,6 +51,7 @@ MODE_DEFAULTS = {
         "use_tavily": False,
         "default_word_limit": 300,
         "stream": False,
+        "web_writing_mode": "calm",
     },
     "普通": {
         "top_k": 5,
@@ -58,6 +59,7 @@ MODE_DEFAULTS = {
         "use_tavily": False,
         "default_word_limit": 500,
         "stream": True,
+        "web_writing_mode": "calm",
     },
     "增强": {
         "top_k": 10,
@@ -65,6 +67,7 @@ MODE_DEFAULTS = {
         "use_tavily": True,
         "default_word_limit": 800,
         "stream": True,
+        "web_writing_mode": "calm",
     },
 }
 
@@ -91,11 +94,18 @@ def _apply_mode_defaults_to_session(mode: str) -> None:
     st.session_state["adv_use_tavily"] = bool(d["use_tavily"])
     st.session_state["adv_default_word_limit"] = int(d["default_word_limit"])
     st.session_state["adv_use_stream"] = bool(d["stream"])
+    wm = str(d.get("web_writing_mode") or getattr(config, "WEB_SEARCH_WRITING_MODE", "calm")).lower()
+    st.session_state["adv_web_writing_mode"] = "creative" if wm == "creative" else "calm"
 
 
 def _ensure_adv_params() -> None:
     if "adv_top_k" not in st.session_state:
         _apply_mode_defaults_to_session(st.session_state.get(SS_GENERATION_MODE, "普通"))
+    if "adv_web_writing_mode" not in st.session_state:
+        wm = getattr(config, "WEB_SEARCH_WRITING_MODE", "calm")
+        st.session_state["adv_web_writing_mode"] = (
+            "creative" if str(wm).lower() == "creative" else "calm"
+        )
 
 
 def _flush_pending_mode_defaults() -> None:
@@ -308,6 +318,7 @@ def _stream_three_line_window(
     route_slot,
     table_context: str | None = None,
     correction_hint: str | None = None,
+    web_writing_mode: str | None = None,
 ) -> tuple[str, GenerationBundle]:
     def _route_hook(meta: dict) -> None:
         if meta.get("native_web_search"):
@@ -347,6 +358,7 @@ def _stream_three_line_window(
         retrieval_max_distance=retrieval_max_distance,
         table_context=table_context,
         correction_hint=correction_hint,
+        web_writing_mode=web_writing_mode,
     )
     hist_exp = st.expander("已生成历史内容（较早段落）", expanded=False)
     with hist_exp:
@@ -417,14 +429,22 @@ with st.sidebar:
     st.markdown("##### 配置区")
 
     with st.expander("知识库管理", expanded=True):
-        compat_ok = bool((config.OPENAI_COMPAT_API_KEY or "").strip())
+        embed_ok = config.embedding_llm_configured()
+        chat_ok = config.chat_llm_configured()
+        st.caption(f"嵌入（入库）：{'Key 可用' if embed_ok else '未配置百炼 Key'}")
+        st.caption(f"聊天/生成：{'可用' if chat_ok else '未配置'}")
+        if not embed_ok:
+            st.warning(
+                "入库与检索依赖百炼兼容接口：请在 `.env` 中配置 `DASHSCOPE_API_KEY` 或 `OPENAI_API_KEY`。"
+            )
+        if not chat_ok:
+            st.warning(
+                "生成依赖聊天通道：请配置 `FOSUN_AIGW_API_KEY`（网关）或上述百炼 Key。"
+            )
         st.caption(
-            f"Key：{'可用' if compat_ok else '未配置'}"
-        )
-        if not compat_ok:
-            st.warning("请在项目根目录 `.env` 中配置 `DASHSCOPE_API_KEY` 或 `OPENAI_API_KEY`。")
-        st.caption(
-            "弱知识库联网时使用模型：`" + config.VISION_WEB_MODEL + "`（须为百炼支持 `enable_search` 的 qwen-plus 系）。"
+            "弱知识库联网档：`"
+            + config.VISION_WEB_MODEL
+            + "`（须网关支持 `enable_search`；默认与模板视觉审查同档 qwen3.6-plus）。"
         )
         if st.button("打开项目目录", key="open_root", type="secondary"):
             try:
@@ -488,6 +508,15 @@ with st.sidebar:
             + config.AUDIT_LLM_MODEL
             + "`"
         )
+        st.caption(
+            "视觉：`"
+            + config.VISION_EXTRACT_MODEL
+            + "`（图入库）· `"
+            + config.TEMPLATE_VISION_MODEL
+            + "`（模板页）· `"
+            + config.TABLE_CELL_VISION_MODEL
+            + "`（表格切图）"
+        )
         st.checkbox(
             "流式显示",
             key="adv_use_stream",
@@ -496,7 +525,20 @@ with st.sidebar:
         st.checkbox(
             "联网补料（百炼内置搜索）",
             key="adv_use_tavily",
-            help="在「知识库为空或检索无命中」或「最佳命中估算相似度低于阈值（默认 0.3，sim≈1−distance）」时，对该段改用 VISION_WEB_MODEL 并开启 enable_search。阈值见环境变量 RETRIEVAL_WEB_SIMILARITY_THRESHOLD。",
+            help="在「知识库为空或检索无命中」或「最佳命中估算相似度低于阈值（默认 0.3，sim≈1−distance）」时，对该段改用 VISION_WEB_MODEL 并开启 enable_search（网关须支持该字段）。阈值见环境变量 RETRIEVAL_WEB_SIMILARITY_THRESHOLD。",
+        )
+        st.radio(
+            "联网写作模式（仅本段实际走联网档 enable_search 时切换提示词）",
+            ("calm", "creative"),
+            format_func=lambda m: (
+                "冷静：缺口标「资料未载明」，与当前默认一致"
+                if m == "calm"
+                else "创意：写满正文，少用「资料未载明」；合规数字仍勿编造"
+            ),
+            horizontal=True,
+            key="adv_web_writing_mode",
+            disabled=not bool(st.session_state.get("adv_use_tavily", False)),
+            help="未勾选联网补料时本项无效。创意模式依赖模型与联网概括，申报类文稿请人工复核。",
         )
         st.checkbox(
             "启用审核 Agent",
@@ -691,6 +733,9 @@ with tab_gen:
     top_k = int(st.session_state.get("adv_top_k", 5))
     retrieval_max_distance = float(st.session_state.get("adv_retrieval_max_distance", 0.8))
     enable_web = bool(st.session_state.get("adv_use_tavily", False))
+    web_writing_mode = str(st.session_state.get("adv_web_writing_mode", "calm")).strip().lower()
+    if web_writing_mode != "creative":
+        web_writing_mode = "calm"
     default_word = int(st.session_state.get("adv_default_word_limit", 500))
     use_stream = bool(st.session_state.get("adv_use_stream", True))
 
@@ -698,7 +743,7 @@ with tab_gen:
     gen_disabled = (
         not templates
         or not selected
-        or not (config.OPENAI_COMPAT_API_KEY or "").strip()
+        or not config.chat_llm_configured()
     )
     if not n_frag:
         st.warning("知识库为空，生成可能缺少依据。")
@@ -740,6 +785,9 @@ with tab_gen:
                 st.warning("没有可用的填空任务，请先在「模板配置」中分析模板。")
             else:
                 generator = ContentGenerator(vs)
+                from core.template_vision import ensure_template_page_pngs
+
+                ensure_template_page_pngs(template_path)
                 results: list[str] = []
                 total_chars = 0
 
@@ -772,6 +820,8 @@ with tab_gen:
                             tbl_ctx = None
                             try:
                                 from core.table_context import build_table_cell_context
+                                from core.template_vision import load_table_cell_vision_pngs
+
                                 tbl_ctx = build_table_cell_context(
                                     template_path,
                                     int(loc0.get("table_index", 0)),
@@ -779,7 +829,11 @@ with tab_gen:
                                     int(loc0.get("col", 0)),
                                 )
                             except Exception:
-                                pass
+                                tbl_ctx = None
+                            row_pngs = load_table_cell_vision_pngs(
+                                template_path, int(loc0.get("table_index", 0))
+                            )
+                            row_pngs = row_pngs or None
                             batch_result = batch_generate_table_row(
                                 generator._client,
                                 grp.tasks,
@@ -787,6 +841,8 @@ with tab_gen:
                                 table_context=tbl_ctx,
                                 enable_web=enable_web,
                                 template_path=template_path,
+                                web_writing_mode=web_writing_mode,
+                                table_cell_vision_pngs=row_pngs,
                             )
                             if batch_result is not None:
                                 for cell_idx, cell_content in batch_result.items():
@@ -813,6 +869,7 @@ with tab_gen:
                         )
 
                         table_ctx: str | None = None
+                        tbl_pngs_for_cell: list[bytes] | None = None
                         if task.task_type == "table_cell":
                             loc = task.location_hint or {}
                             table_ctx = build_table_cell_context(
@@ -821,6 +878,12 @@ with tab_gen:
                                 int(loc.get("row", 0)),
                                 int(loc.get("col", 0)),
                             )
+                            from core.template_vision import load_table_cell_vision_pngs
+
+                            _p = load_table_cell_vision_pngs(
+                                template_path, int(loc.get("table_index", 0))
+                            )
+                            tbl_pngs_for_cell = _p if _p else None
 
                         gen_bundle: GenerationBundle | None = None
                         content = ""
@@ -858,6 +921,8 @@ with tab_gen:
                                     enable_web=enable_web,
                                     table_context=table_ctx,
                                     correction_hint=_correction_hint,
+                                    web_writing_mode=web_writing_mode,
+                                    table_cell_vision_pngs=tbl_pngs_for_cell,
                                 )
                             return generator.prepare_generation_bundle(
                                 task,
@@ -866,6 +931,8 @@ with tab_gen:
                                 retrieval_max_distance=retrieval_max_distance,
                                 table_context=table_ctx,
                                 correction_hint=_correction_hint,
+                                web_writing_mode=web_writing_mode,
+                                table_cell_vision_pngs=tbl_pngs_for_cell,
                             )
 
                         try:
@@ -933,7 +1000,7 @@ with tab_gen:
                                 and gen_bundle is not None
                                 and not str(content).startswith("（生成失败")
                             ):
-                                r_issues = rule_audit(task, content)
+                                r_issues = rule_audit(task, content, gen_bundle.route_meta)
                                 do_model_audit = need_model_audit(
                                     task, gen_bundle.route_meta, r_issues
                                 )

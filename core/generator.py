@@ -2,11 +2,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from openai import OpenAI
-
 import config
 from core.dashscope_chat import chat_completions_create
 from core.fill_task import FillTask
+from core.template_vision import build_table_cell_user_content
 from core.query_expander import expand_query
 from core.vector_store import VectorStore
 
@@ -53,6 +52,25 @@ SYSTEM_PROMPT = """你是项目申报文档撰写专家。严格规则：
 3. 直接输出正文，不加「以下是…」前缀。
 4. 知识库与网络冲突时，以知识库为准。"""
 
+SYSTEM_PROMPT_WEB_CREATIVE = """你是项目申报文档撰写专家（联网创意模式，本请求已开启内置联网检索）：
+1. 综合【参考资料】与联网检索到的公开信息完成正文，写满约订字数；不要用「资料未载明」「资料未提供」「未提供」等占位句敷衍。
+2. 禁止 Markdown（#、**、列表符），用普通段落和中文标点。
+3. 直接输出正文，不加「以下是…」前缀。
+4. 知识库与联网结果冲突时以知识库为准；无确切依据时不得编造机构全称、ISIN、费率、合同编号、精确日期等。"""
+
+PARA_CLOSING_CALM = (
+    "请完成本节正文。所有具体事实须来源于上述参考资料，无依据的要点请注明「资料未载明」，不得臆造。"
+)
+PARA_CLOSING_CREATIVE = (
+    "请完成本节正文：在参考资料与联网检索基础上写满约订字数；勿用「资料未载明」「资料未提供」等占位句；"
+    "说不清处用稳妥概括表述，仍勿编造编码、费率、精确日期等。"
+)
+
+TABLE_CLOSING_CALM = "无可靠片段依据该格所问时，可填「资料未载明」。"
+TABLE_CLOSING_CREATIVE = (
+    "优先依据片段与联网检索作答，写满该格；勿单写「资料未载明」敷衍；仍勿编造编码、费率、精确日期等。"
+)
+
 USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
 要求：{description}
 字数：约 {word_limit} 字{hint_block}{vision_block}
@@ -60,7 +78,7 @@ USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
 【参考资料】
 {retrieved_texts}
 {kb_note}
-请完成本节正文。所有具体事实须来源于上述参考资料，无依据的要点请注明「资料未载明」，不得臆造。"""
+{para_closing}"""
 
 USER_PROMPT_TABLE = """【表格填写任务】章节：{target_chapter}
 单元格要求：{description}
@@ -70,7 +88,44 @@ USER_PROMPT_TABLE = """【表格填写任务】章节：{target_chapter}
 {retrieved_texts}
 {table_ctx_block}{kb_note}
 只输出应填入该格的**简短答案**（通常一行），直接依据参考资料，不写分析、不复述整行表头。
-**只回答本列表头/本格要求所问**；勿粘贴其它列的问题全文或说明；勿输出「资料N：____」等模板占位骨架；勿在一格内写多列混合内容或长段方案叙述。"""
+**只回答本列表头/本格要求所问**；勿粘贴其它列的问题全文或说明；勿输出「资料N：____」等模板占位骨架；勿在一格内写多列混合内容或长段方案叙述。
+{table_closing}"""
+
+
+def _normalize_web_writing_mode(mode: Optional[str]) -> str:
+    raw = (
+        mode
+        if mode is not None
+        else getattr(config, "WEB_SEARCH_WRITING_MODE", "calm")
+    )
+    return "creative" if str(raw or "").strip().lower() == "creative" else "calm"
+
+
+def _web_gen_prompt_parts(
+    use_plus: bool, web_writing_mode: Optional[str], has_kb_hit: bool
+) -> Tuple[bool, str, str, str, str]:
+    """返回 (web_creative_prompt, system_text, kb_note, para_closing, table_closing)。"""
+    wm = _normalize_web_writing_mode(web_writing_mode)
+    creative = bool(use_plus and wm == "creative")
+    if creative:
+        sys_t = SYSTEM_PROMPT_WEB_CREATIVE
+        if has_kb_hit:
+            kb = (
+                "\n【已提供知识库检索片段；可同时使用内置联网检索补充。"
+                "二者未覆盖处请用概括性表述写全，勿反复堆砌「资料未载明」。】"
+            )
+        else:
+            kb = (
+                "\n【知识库无命中；请充分使用内置联网检索与合理概括完成正文，"
+                "勿用「资料未载明」「未提供」等占篇幅；具体编码、费率、精确日期无据时仍勿编造。】"
+            )
+        return True, sys_t, kb, PARA_CLOSING_CREATIVE, TABLE_CLOSING_CREATIVE
+    kb = (
+        "\n【已提供检索片段，具体事实须与之相符；片段未涉及的请注明资料未载明。】"
+        if has_kb_hit
+        else "\n【无有效知识库命中，禁止编造机构名/ISIN/费率/日期/评级等具体数字。】"
+    )
+    return False, SYSTEM_PROMPT, kb, PARA_CLOSING_CALM, TABLE_CLOSING_CALM
 
 
 def format_template_vision_block(task: FillTask) -> str:
@@ -92,7 +147,7 @@ def format_template_vision_block(task: FillTask) -> str:
 class GenerationBundle:
     """单次检索 + 组装后的请求包；生成与审核共用 ref_texts，避免重复 search。"""
 
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, Any]]
     model: str
     temperature: float
     extra_body: Dict[str, Any]
@@ -105,12 +160,7 @@ class ContentGenerator:
 
     def __init__(self, vector_store: VectorStore):
         self._vs = vector_store
-        self._client = OpenAI(
-            api_key=config.OPENAI_COMPAT_API_KEY or "sk-placeholder",
-            base_url=config.OPENAI_BASE_URL,
-            timeout=config.OPENAI_TIMEOUT,
-            max_retries=config.OPENAI_MAX_RETRIES,
-        )
+        self._client = config.openai_client_for_chat()
 
     def _build_chat_request(
         self,
@@ -120,7 +170,9 @@ class ContentGenerator:
         retrieval_max_distance: Optional[float],
         table_context: Optional[str] = None,
         correction_hint: Optional[str] = None,
-    ) -> Tuple[List[Dict[str, str]], str, float, Dict[str, Any], Dict[str, Any], str]:
+        web_writing_mode: Optional[str] = None,
+        table_cell_vision_pngs: Optional[List[bytes]] = None,
+    ) -> Tuple[List[Dict[str, Any]], str, float, Dict[str, Any], Dict[str, Any], str]:
         query = expand_query(task.target_chapter, task.description, task.task_type)
         max_d = (
             retrieval_max_distance
@@ -161,11 +213,11 @@ class ContentGenerator:
             word_limit = min(word_limit, 120)
 
         has_kb_hit = len(results) > 0
-        kb_note = (
-            "\n【已提供检索片段，具体事实须与之相符；片段未涉及的请注明资料未载明。】"
-            if has_kb_hit
-            else "\n【无有效知识库命中，禁止编造机构名/ISIN/费率/日期/评级等具体数字。】"
+        use_plus = enable_web and (weak_kb or low_similarity)
+        web_creative, system_prompt, kb_note, para_closing, table_closing = (
+            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit)
         )
+
         hint_block = (
             ("\n上轮审核意见：" + correction_hint.strip())
             if correction_hint and correction_hint.strip()
@@ -188,6 +240,16 @@ class ContentGenerator:
                 retrieved_texts=ref_texts,
                 table_ctx_block=table_ctx_block,
                 kb_note=kb_note,
+                table_closing=table_closing,
+            )
+            use_tbl_vis = (
+                getattr(config, "TABLE_CELL_VISION", True)
+                and table_cell_vision_pngs
+            )
+            user_content: Any = (
+                build_table_cell_user_content(user_msg, table_cell_vision_pngs)
+                if use_tbl_vis
+                else user_msg
             )
         else:
             user_msg = USER_PROMPT_PARA.format(
@@ -198,14 +260,15 @@ class ContentGenerator:
                 vision_block=vision_block,
                 retrieved_texts=ref_texts,
                 kb_note=kb_note,
+                para_closing=para_closing,
             )
+            user_content = user_msg
 
-        messages: List[Dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
         ]
 
-        use_plus = enable_web and (weak_kb or low_similarity)
         extra_body: Dict[str, Any] = {}
         long_paragraph = (
             task.task_type == "paragraph"
@@ -237,6 +300,18 @@ class ContentGenerator:
             temperature = config.TEMP_LARGE_LLM
             generation_tier = "large"
 
+        table_cell_mm = (
+            task.task_type == "table_cell"
+            and getattr(config, "TABLE_CELL_VISION", True)
+            and table_cell_vision_pngs
+            and isinstance(user_content, list)
+        )
+        if table_cell_mm:
+            generation_tier = "table_cell_vision"
+            if not use_plus:
+                model = config.TABLE_CELL_VISION_MODEL
+                temperature = float(getattr(config, "TEMP_VISION", 0.25))
+
         gen_max_out = _max_output_tokens(word_limit, task.task_type)
         route_meta: Dict[str, Any] = {
             "task_id": task.task_id,
@@ -258,6 +333,10 @@ class ContentGenerator:
             "generation_tier": generation_tier,
             "use_small_llm_for_rag": bool(use_small_rag),
             "gen_max_output_tokens": gen_max_out,
+            "web_writing_mode": _normalize_web_writing_mode(web_writing_mode),
+            "web_creative_prompt": web_creative,
+            "table_cell_multimodal": bool(table_cell_mm),
+            "table_vision_n_images": len(table_cell_vision_pngs or []),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route %s", route_meta)
@@ -271,6 +350,8 @@ class ContentGenerator:
         enable_web: bool = False,
         table_context: Optional[str] = None,
         correction_hint: Optional[str] = None,
+        web_writing_mode: Optional[str] = None,
+        table_cell_vision_pngs: Optional[List[bytes]] = None,
     ) -> GenerationBundle:
         """使用预检索的 Evidence 构建 GenerationBundle，避免重复向量检索。"""
         from core.evidence_planner import compress_evidence, Evidence
@@ -304,25 +385,8 @@ class ContentGenerator:
             and not long_paragraph
         )
 
-        extra_body: Dict[str, Any] = {}
-        if use_plus:
-            extra_body["enable_search"] = True
-            model = config.VISION_WEB_MODEL
-            temperature = config.TEMP_WEB_GEN
-            generation_tier = "vision_web"
-        elif use_small_rag:
-            model = config.SMALL_LLM_MODEL
-            temperature = config.TEMP_SMALL_LLM
-            generation_tier = "small_rag"
-        else:
-            model = config.LARGE_LLM_MODEL
-            temperature = config.TEMP_LARGE_LLM
-            generation_tier = "large"
-
-        kb_note = (
-            "\n【已提供检索片段，具体事实须与之相符；片段未涉及的请注明资料未载明。】"
-            if has_kb_hit
-            else "\n【无有效知识库命中，禁止编造机构名/ISIN/费率/日期/评级等具体数字。】"
+        web_creative, system_prompt, kb_note, para_closing, table_closing = (
+            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit)
         )
         hint_block = (
             ("\n上轮审核意见：" + correction_hint.strip())
@@ -346,6 +410,15 @@ class ContentGenerator:
                 retrieved_texts=ref_texts,
                 table_ctx_block=table_ctx_block,
                 kb_note=kb_note,
+                table_closing=table_closing,
+            )
+            use_tbl_vis = (
+                getattr(config, "TABLE_CELL_VISION", True) and table_cell_vision_pngs
+            )
+            user_content: Any = (
+                build_table_cell_user_content(user_msg, table_cell_vision_pngs)
+                if use_tbl_vis
+                else user_msg
             )
         else:
             user_msg = USER_PROMPT_PARA.format(
@@ -356,11 +429,40 @@ class ContentGenerator:
                 vision_block=vision_block,
                 retrieved_texts=ref_texts,
                 kb_note=kb_note,
+                para_closing=para_closing,
             )
+            user_content = user_msg
 
-        messages: List[Dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
+        extra_body: Dict[str, Any] = {}
+        if use_plus:
+            extra_body["enable_search"] = True
+            model = config.VISION_WEB_MODEL
+            temperature = config.TEMP_WEB_GEN
+            generation_tier = "vision_web"
+        elif use_small_rag:
+            model = config.SMALL_LLM_MODEL
+            temperature = config.TEMP_SMALL_LLM
+            generation_tier = "small_rag"
+        else:
+            model = config.LARGE_LLM_MODEL
+            temperature = config.TEMP_LARGE_LLM
+            generation_tier = "large"
+
+        table_cell_mm = (
+            task.task_type == "table_cell"
+            and getattr(config, "TABLE_CELL_VISION", True)
+            and table_cell_vision_pngs
+            and isinstance(user_content, list)
+        )
+        if table_cell_mm:
+            generation_tier = "table_cell_vision"
+            if not use_plus:
+                model = config.TABLE_CELL_VISION_MODEL
+                temperature = float(getattr(config, "TEMP_VISION", 0.25))
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
         ]
         gen_max_out = _max_output_tokens(word_limit, task.task_type)
         route_meta: Dict[str, Any] = {
@@ -379,6 +481,10 @@ class ContentGenerator:
             "use_small_llm_for_rag": bool(use_small_rag),
             "gen_max_output_tokens": gen_max_out,
             "from_shared_evidence": True,
+            "web_writing_mode": _normalize_web_writing_mode(web_writing_mode),
+            "web_creative_prompt": web_creative,
+            "table_cell_multimodal": bool(table_cell_mm),
+            "table_vision_n_images": len(table_cell_vision_pngs or []),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route_evidence %s", route_meta)
@@ -399,6 +505,8 @@ class ContentGenerator:
         retrieval_max_distance: Optional[float] = None,
         table_context: Optional[str] = None,
         correction_hint: Optional[str] = None,
+        web_writing_mode: Optional[str] = None,
+        table_cell_vision_pngs: Optional[List[bytes]] = None,
     ) -> GenerationBundle:
         messages, model, temperature, extra_body, route_meta, ref_texts = (
             self._build_chat_request(
@@ -408,6 +516,8 @@ class ContentGenerator:
                 retrieval_max_distance,
                 table_context=table_context,
                 correction_hint=correction_hint,
+                web_writing_mode=web_writing_mode,
+                table_cell_vision_pngs=table_cell_vision_pngs,
             )
         )
         return GenerationBundle(
@@ -463,6 +573,8 @@ class ContentGenerator:
         route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
         table_context: Optional[str] = None,
         correction_hint: Optional[str] = None,
+        web_writing_mode: Optional[str] = None,
+        table_cell_vision_pngs: Optional[List[bytes]] = None,
     ) -> Iterator[str]:
         bundle = self.prepare_generation_bundle(
             task,
@@ -471,6 +583,8 @@ class ContentGenerator:
             retrieval_max_distance=retrieval_max_distance,
             table_context=table_context,
             correction_hint=correction_hint,
+            web_writing_mode=web_writing_mode,
+            table_cell_vision_pngs=table_cell_vision_pngs,
         )
         yield from self.stream_from_bundle(bundle, route_hook=route_hook)
 
@@ -512,6 +626,8 @@ class ContentGenerator:
         route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
         table_context: Optional[str] = None,
         correction_hint: Optional[str] = None,
+        web_writing_mode: Optional[str] = None,
+        table_cell_vision_pngs: Optional[List[bytes]] = None,
     ) -> str:
         if route_hook is not None:
             return "".join(
@@ -523,6 +639,8 @@ class ContentGenerator:
                     route_hook=route_hook,
                     table_context=table_context,
                     correction_hint=correction_hint,
+                    web_writing_mode=web_writing_mode,
+                    table_cell_vision_pngs=table_cell_vision_pngs,
                 )
             ).strip()
         bundle = self.prepare_generation_bundle(
@@ -532,6 +650,8 @@ class ContentGenerator:
             retrieval_max_distance=retrieval_max_distance,
             table_context=table_context,
             correction_hint=correction_hint,
+            web_writing_mode=web_writing_mode,
+            table_cell_vision_pngs=table_cell_vision_pngs,
         )
         return self.generate_from_bundle(bundle, route_hook=None)
 
