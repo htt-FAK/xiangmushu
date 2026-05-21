@@ -1514,9 +1514,35 @@ def main() -> int:
         action="store_true",
         help="探测 GATEWAY_PROBE_MODELS 的 chat/vision/enable_search 并输出矩阵",
     )
+    ap.add_argument(
+        "--leaderboard",
+        action="store_true",
+        help="运行项目 V/A/C/G 评分榜（见 scripts/run_leaderboard.py）",
+    )
+    ap.add_argument(
+        "--leaderboard-quick",
+        action="store_true",
+        help="与 --leaderboard 联用：仅评测 quick_models 子集",
+    )
+    ap.add_argument(
+        "--leaderboard-dry-run",
+        action="store_true",
+        help="与 --leaderboard 联用：不调 API",
+    )
     args = ap.parse_args()
 
     _print_config()
+
+    if args.leaderboard:
+        from core.leaderboard.runner import run_leaderboard
+
+        out = run_leaderboard(
+            quick=args.leaderboard_quick,
+            dry_run=args.leaderboard_dry_run,
+            channels=["fosun", "dashscope"],
+        )
+        print(f"[OK] leaderboard 完成: {out}")
+        return 0
 
     if args.probe_models:
         if not config.chat_llm_configured():

@@ -1,0 +1,86 @@
+leaderboard_version: "v2026.05.21"
+date: "2026-05-21"
+
+channels:
+  - fosun
+  - dashscope
+
+tracks:
+  vision:
+    name: "V-Ladder"
+    total: 1000
+    weights:
+      doc_ocr_table: 0.18
+      chart_data: 0.14
+      vqa: 0.14
+      spatial_reasoning: 0.14
+      gui_screenshot: 0.12
+      multi_image_video: 0.10
+      multimodal_math_science: 0.10
+      safety_anti_hallucination: 0.08
+
+  agent:
+    name: "A-Ladder"
+    total: 1000
+    weights:
+      intent: 0.15
+      routing: 0.15
+      schema: 0.15
+      execution: 0.20
+      verification: 0.10
+      recovery: 0.10
+      safety: 0.10
+      ops: 0.05
+
+  coding:
+    name: "C-Ladder"
+    total: 1000
+    weights:
+      repo_level: 0.25
+      algorithm: 0.18
+      debug: 0.15
+      test_generation: 0.12
+      short_code: 0.10
+      refactor: 0.08
+      security: 0.07
+      multilingual_framework: 0.05
+
+  embed:
+    name: "E-Ladder"
+    total: 1000
+    weights:
+      embed_ping: 1.0
+
+overall:
+  formula:
+    vision: 0.30
+    agent: 0.35
+    coding: 0.35
+
+project_profiles:
+  doc_fill:
+    name: "多模态办公-申报填表"
+    formula:
+      vision: 0.50
+      agent: 0.30
+      coding: 0.20
+
+speed:
+  weight_in_ops: 0.05
+  baseline_model: "qwen3.5-plus"
+  baseline_channel: "fosun"
+
+parallel_band: 15
+runs_per_task: 3
+temperature: 0
+
+cost_per_1k_tokens_usd:
+  default: 0.002
+
+quick_models:
+  - qwen3.5-plus
+  - qwen3.6-plus
+  - gpt-5.4
+  - claude-sonnet-4.6
+  - glm-5.1
+  - deepseek-v4-pro

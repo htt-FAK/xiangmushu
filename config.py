@@ -35,27 +35,25 @@ else:
 # Embedding 模型（百炼 compatible-mode 用 text-embedding-v3 等）
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 
-# 场景 LLM / 视觉（复星网关 ID，均可 env 覆盖；名称以网关文档为准）
+# 场景 LLM / 视觉（复星网关 ID；对齐 leaderboard v2026.05.21 fosun 主榜，均可 env 覆盖）
+# 视觉/联网/大段：qwen3.6-plus (G_doc≈947)；强 RAG/表格快批：glm-5.1 (G_doc≈923, p50 更低)
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
-# 弱知识库 + 联网档：enable_search（dashscope_chat 已关深度思考）
-VISION_WEB_MODEL = _vw or "qwen3.5-plus-2026-04-20"
-TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.5-plus-2026-04-20"
-VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "gemini-3-pro"
-TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.5-plus-2026-04-20"
+VISION_WEB_MODEL = _vw or "qwen3.6-plus"
+TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.6-plus"
+VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.6-plus"
+TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.6-plus"
 TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.5-plus"
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-plus").strip()
-TEMPLATE_ANALYZE_MODEL = (
-    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-27b"
-)
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.6-max-preview"
-FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "glm-5"
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "glm-5.1").strip()
+TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "glm-5.1"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.6-plus"
+FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.5-plus"
 FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "glm-5.1"
-AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.5-flash-2026-02-23"
-AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.5-flash"
-AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.6-flash-2026-04-16"
-AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "qwen3.6-flash"
+AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.6-plus"
+AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "glm-5.1"
+AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.5-plus"
+AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "gpt-5.4"
 TEMP_AUDIT = float(os.getenv("TEMP_AUDIT", "0.2"))
 
 TEMP_VISION = float(os.getenv("TEMP_VISION", "0.25"))
@@ -115,7 +113,7 @@ TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")
 _BTF = os.getenv("BATCH_TABLE_FAST", "1").strip().lower()
 BATCH_TABLE_FAST = _BTF not in ("0", "false", "no", "off")
 BATCH_TABLE_FAST_MODEL = (
-    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.5-plus"
+    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "glm-5.1"
 )
 # 每格请求最多附带几页 PNG（减延迟；默认同模板视觉页数上限）
 TABLE_VISION_MAX_PAGES = int(os.getenv("TABLE_VISION_MAX_PAGES", str(TEMPLATE_VISION_MAX_PAGES)))

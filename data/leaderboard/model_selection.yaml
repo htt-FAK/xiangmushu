@@ -1,0 +1,47 @@
+generated_at: '2026-05-21T15:48:39'
+profile: doc_fill
+recommendations:
+  LARGE_LLM_MODEL:
+    model_id: qwen3.6-plus
+    channel: fosun
+    G_doc: 947.2439987059602
+    p50_ms: 338948.8123001065
+  SMALL_LLM_MODEL:
+    model_id: gpt-5.4
+    channel: fosun
+    G_doc: 879.2
+    p50_ms: 1938.79280006513
+  TEMPLATE_VISION_MODEL:
+    model_id: qwen3.6-plus
+    channel: fosun
+    G_doc: 947.2439987059602
+    p50_ms: 338948.8123001065
+  TABLE_CELL_VISION_MODEL:
+    model_id: qwen3.6-plus
+    channel: fosun
+    G_doc: 947.2439987059602
+    p50_ms: 338948.8123001065
+  VISION_WEB_MODEL:
+    model_id: qwen3.6-plus
+    channel: fosun
+    G_doc: 947.2439987059602
+    p50_ms: 338948.8123001065
+  AUDIT_LLM_MODEL:
+    model_id: qwen3.6-plus
+    channel: fosun
+    G_doc: 947.2439987059602
+    p50_ms: 338948.8123001065
+  BATCH_TABLE_FAST_MODEL:
+    model_id: glm-5.1
+    channel: fosun
+    G_doc: 922.9152303178355
+    p50_ms: 25166.71839985065
+current_config:
+  LARGE_LLM_MODEL: gpt-5.4
+  SMALL_LLM_MODEL: glm-5.1
+  TEMPLATE_VISION_MODEL: qwen3.5-plus
+  TABLE_CELL_VISION_MODEL: qwen3.5-plus
+  VISION_WEB_MODEL: qwen3.5-plus
+  AUDIT_LLM_MODEL: glm-5.1
+  BATCH_TABLE_FAST_MODEL: qwen3.5-plus
+  EMBEDDING_MODEL: text-embedding-v3
