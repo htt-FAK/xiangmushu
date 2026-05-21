@@ -51,7 +51,7 @@ TEMPLATE_ANALYZE_MODEL = (
 )
 # 主正文生成（段落/长段/非联网档表格等）
 # 优先使用 qwen3.6-max-preview，额度耗尽时自动切换到 glm-5，再耗尽用 glm-5.1
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.5"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.4"
 # 第一备选模型
 FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.6-max-preview"
 # 第二备选模型（当主模型和第一备选都额度耗尽时使用）
