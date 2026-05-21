@@ -39,24 +39,24 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
-# 弱知识库 + 联网档：enable_search 路径；视觉审查用 qwen3.6-plus（dashscope_chat 已关深度思考）
-VISION_WEB_MODEL = _vw or "qwen3.6-plus"
-# 模板整页视觉分析（PDF 页图 → JSON layout / table_page_hints）
-TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.6-plus"
-# 入库前图片描述（单图 → 文本，向量库用）
-VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "gemini-3-pro"
-# 带截图的 table_cell 多模态（默认同网关 gemini-3-pro；联网批量时仍可能切 VISION_WEB_MODEL）
-TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "gemini-3-pro"
-# 强检索短文省 token；主正文用大模型
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-plus").strip()
-# 模板结构分析（纯文本：从 OOXML/视觉摘要推断填空位；与 SMALL_LLM 拆分，默认可用更快模型）
+# 弱知识库 + 联网档：enable_search（网关实测 qwen3.5-plus / 3.6-plus / max 可用）
+VISION_WEB_MODEL = _vw or "qwen3.5-plus"
+# 模板整页视觉（网关 gemini-3-* 空回复，用 qwen3.5-plus 多模态）
+TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.5-plus"
+# 入库前图片描述
+VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.5-plus"
+# 带截图的 table_cell 多模态
+TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.5-plus"
+# 强检索短文（网关 deepseek chat 易空回复，用 glm-5.1）
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "glm-5.1").strip()
+# 模板结构分析（纯文本 JSON）
 TEMPLATE_ANALYZE_MODEL = (
-    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "deepseek-v4-pro"
+    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "glm-5.1"
 )
-# 主正文生成（段落/长段/非联网档表格等）
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.5"
+# 主正文（kimi-k2.6 网关额度不足时用 gpt-5.4）
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.4"
 # 生成后审核（不传 enable_search）
-AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "deepseek-v4-pro"
+AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "glm-5.1"
 TEMP_AUDIT = float(os.getenv("TEMP_AUDIT", "0.2"))
 
 TEMP_VISION = float(os.getenv("TEMP_VISION", "0.25"))
@@ -112,6 +112,12 @@ TEMPLATE_VISION_ENABLED = _TVE not in ("0", "false", "no", "off")
 # 表格生成附带模板页截图（多模态）；关则仅 OOXML 文本上下文
 _TCV = os.getenv("TABLE_CELL_VISION", "1").strip().lower()
 TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")
+# 表格行批量：默认快速（不 enable_search、不传页图），显著缩短 batch_table_row 耗时
+_BTF = os.getenv("BATCH_TABLE_FAST", "1").strip().lower()
+BATCH_TABLE_FAST = _BTF not in ("0", "false", "no", "off")
+BATCH_TABLE_FAST_MODEL = (
+    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.5-plus"
+)
 # 每格请求最多附带几页 PNG（减延迟；默认同模板视觉页数上限）
 TABLE_VISION_MAX_PAGES = int(os.getenv("TABLE_VISION_MAX_PAGES", str(TEMPLATE_VISION_MAX_PAGES)))
 # 正文首行缩进（pt），约 2 个中文字宽；0 表示不自动加

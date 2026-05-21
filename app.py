@@ -515,7 +515,7 @@ with st.sidebar:
         st.caption(
             "弱知识库联网档：`"
             + config.VISION_WEB_MODEL
-            + "`（须网关支持 `enable_search`；默认与模板视觉审查同档 qwen3.6-plus）。"
+            + "`（须支持 `enable_search`；默认 qwen3.5-plus，失败回落百炼）。"
         )
         if st.button("打开项目目录", key="open_root", type="secondary"):
             try:
@@ -622,6 +622,14 @@ with st.sidebar:
             "审核 major 时自动重试生成 1 次",
             key="adv_audit_regenerate",
             help="仅当启用审核且审核 verdict 为 major_issue 时，将审核意见注入后重新生成一段（仍消耗 API）。",
+        )
+        st.checkbox(
+            "快速生成（表格不联网、不传截图；已关深度思考）",
+            value=True,
+            key="adv_fast_gen",
+            help="表格批量与逐格填写均不走 enable_search/页图多模态，改用 "
+            + getattr(config, "BATCH_TABLE_FAST_MODEL", "qwen3.5-plus")
+            + " 纯文本；正文段在开启本项时也不走联网档。显著加快，弱库时可能更多「资料未载明」。",
         )
         st.checkbox(
             "表格行批量生成（降低 API 调用次数）",
@@ -810,6 +818,7 @@ with tab_gen:
     top_k = int(st.session_state.get("adv_top_k", 5))
     retrieval_max_distance = float(st.session_state.get("adv_retrieval_max_distance", 0.8))
     enable_web = bool(st.session_state.get("adv_use_tavily", False))
+    fast_gen = bool(st.session_state.get("adv_fast_gen", True))
     web_writing_mode = str(st.session_state.get("adv_web_writing_mode", "calm")).strip().lower()
     if web_writing_mode != "creative":
         web_writing_mode = "calm"
@@ -887,18 +896,28 @@ with tab_gen:
                 use_batch = bool(st.session_state.get("adv_use_batch_table", True))
                 batch_cache: dict[str, str] = {}  # task_id -> content
                 if use_batch:
-                    with st.spinner("批量生成表格行…"):
-                        for grp in task_groups:
-                            if not grp.is_table_group:
-                                continue
+                    table_groups = [g for g in task_groups if g.is_table_group]
+                    batch_n = len(table_groups)
+                    with st.spinner(
+                        f"批量生成表格行（{'快速' if fast_gen else '标准'}，共 {batch_n} 组）…"
+                    ):
+                        batch_prog = st.progress(0.0) if batch_n else None
+                        batch_status = st.empty()
+                        for bi, grp in enumerate(table_groups):
+                            if batch_status is not None:
+                                batch_status.caption(
+                                    f"表格批量 {bi + 1}/{batch_n} · {grp.tasks[0].target_chapter}"
+                                )
+                            if batch_prog is not None and batch_n:
+                                batch_prog.progress((bi + 1) / batch_n)
                             ev = evidence_map.get(grp.group_id)
                             if ev is None:
                                 continue
                             loc0 = grp.tasks[0].location_hint or {}
                             tbl_ctx = None
+                            row_pngs = None
                             try:
                                 from core.table_context import build_table_cell_context
-                                from core.template_vision import load_table_cell_vision_pngs
 
                                 tbl_ctx = build_table_cell_context(
                                     template_path,
@@ -908,10 +927,18 @@ with tab_gen:
                                 )
                             except Exception:
                                 tbl_ctx = None
-                            row_pngs = load_table_cell_vision_pngs(
-                                template_path, int(loc0.get("table_index", 0))
-                            )
-                            row_pngs = row_pngs or None
+                            if not fast_gen:
+                                try:
+                                    from core.template_vision import (
+                                        load_table_cell_vision_pngs,
+                                    )
+
+                                    row_pngs = load_table_cell_vision_pngs(
+                                        template_path, int(loc0.get("table_index", 0))
+                                    )
+                                    row_pngs = row_pngs or None
+                                except Exception:
+                                    row_pngs = None
                             batch_result = batch_generate_table_row(
                                 generator._client,
                                 grp.tasks,
@@ -921,6 +948,7 @@ with tab_gen:
                                 template_path=template_path,
                                 web_writing_mode=web_writing_mode,
                                 table_cell_vision_pngs=row_pngs,
+                                fast_mode=fast_gen,
                             )
                             if batch_result is not None:
                                 for cell_idx, cell_content in batch_result.items():
@@ -956,12 +984,13 @@ with tab_gen:
                                 int(loc.get("row", 0)),
                                 int(loc.get("col", 0)),
                             )
-                            from core.template_vision import load_table_cell_vision_pngs
+                            if not fast_gen:
+                                from core.template_vision import load_table_cell_vision_pngs
 
-                            _p = load_table_cell_vision_pngs(
-                                template_path, int(loc.get("table_index", 0))
-                            )
-                            tbl_pngs_for_cell = _p if _p else None
+                                _p = load_table_cell_vision_pngs(
+                                    template_path, int(loc.get("table_index", 0))
+                                )
+                                tbl_pngs_for_cell = _p if _p else None
 
                         gen_bundle: GenerationBundle | None = None
                         content = ""
@@ -1001,6 +1030,7 @@ with tab_gen:
                                     correction_hint=_correction_hint,
                                     web_writing_mode=web_writing_mode,
                                     table_cell_vision_pngs=tbl_pngs_for_cell,
+                                    fast_mode=fast_gen,
                                 )
                             return generator.prepare_generation_bundle(
                                 task,
@@ -1011,6 +1041,7 @@ with tab_gen:
                                 correction_hint=_correction_hint,
                                 web_writing_mode=web_writing_mode,
                                 table_cell_vision_pngs=tbl_pngs_for_cell,
+                                fast_mode=fast_gen,
                             )
 
                         try:

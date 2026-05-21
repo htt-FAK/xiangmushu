@@ -49,6 +49,7 @@ def batch_generate_table_row(
     template_path: Optional[str] = None,
     web_writing_mode: Optional[str] = None,
     table_cell_vision_pngs: Optional[List[bytes]] = None,
+    fast_mode: Optional[bool] = None,
 ) -> Optional[Dict[int, str]]:
     """
     批量生成同一表格行的所有单元格。
@@ -114,7 +115,14 @@ def batch_generate_table_row(
         evidence.best_similarity is not None
         and evidence.best_similarity < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
     )
+    batch_fast = (
+        bool(fast_mode)
+        if fast_mode is not None
+        else bool(getattr(config, "BATCH_TABLE_FAST", True))
+    )
     use_plus = enable_web and (evidence.weak_kb or low_similarity)
+    if batch_fast:
+        use_plus = False
     _, system_prompt, _, _, _ = _web_gen_prompt_parts(
         use_plus, web_writing_mode, evidence.kb_hits > 0
     )
@@ -154,7 +162,8 @@ def batch_generate_table_row(
         ) else config.LARGE_LLM_MODEL
 
     use_mm = (
-        getattr(config, "TABLE_CELL_VISION", True)
+        not batch_fast
+        and getattr(config, "TABLE_CELL_VISION", True)
         and table_cell_vision_pngs
     )
     user_content: Any = (
@@ -162,7 +171,9 @@ def batch_generate_table_row(
         if use_mm
         else user_msg
     )
-    if use_mm and isinstance(user_content, list):
+    if batch_fast:
+        model = getattr(config, "BATCH_TABLE_FAST_MODEL", config.SMALL_LLM_MODEL)
+    elif use_mm and isinstance(user_content, list):
         if use_plus:
             model = config.VISION_WEB_MODEL
         else:
@@ -209,9 +220,11 @@ def batch_generate_table_row(
         return None
 
     _LOG.info(
-        "batch_table_row done: model=%s cells=%d sim=%.2f",
+        "batch_table_row done: model=%s cells=%d sim=%.2f fast=%s web=%s",
         model,
         len(tasks),
         evidence.best_similarity or 0,
+        batch_fast,
+        bool(extra_body.get("enable_search")),
     )
     return result

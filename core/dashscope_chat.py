@@ -36,6 +36,39 @@ def _is_dashscope_compatible_client(client: Any) -> bool:
     return "dashscope.aliyuncs.com" in u or "compatible-mode" in u
 
 
+def _apply_extra_body(client: Any, extra_in: dict | None) -> dict | None:
+    """仅百炼 compatible-mode 附带 enable_thinking=False；复星网关不支持该字段，绝不发送。"""
+    extra = dict(extra_in or {})
+    extra.pop("enable_thinking", None)
+    if _is_dashscope_compatible_client(client):
+        extra["enable_thinking"] = False
+    return extra if extra else None
+
+
+def _is_enable_thinking_rejected(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "enable_thinking" in msg and (
+        "unknown parameter" in msg
+        or "unknown_parameter" in msg
+        or "invalid_request" in msg
+    )
+
+
+def _kwargs_for_dashscope_backup(kwargs: dict[str, Any], *, for_enable_search: bool) -> dict[str, Any]:
+    """回落百炼：去掉 enable_thinking；联网档强制 VISION_WEB_MODEL（Qwen + enable_search）。"""
+    bk = dict(kwargs)
+    extra = dict(bk.pop("extra_body", None) or {})
+    extra.pop("enable_thinking", None)
+    if for_enable_search:
+        extra["enable_search"] = True
+        bk["model"] = config.VISION_WEB_MODEL
+    if extra:
+        bk["extra_body"] = extra
+    else:
+        bk.pop("extra_body", None)
+    return bk
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
@@ -55,24 +88,51 @@ def _is_retryable(exc: BaseException) -> bool:
 def chat_completions_create(client: Any, **kwargs: Any):
     """
     包装 OpenAI SDK 的 chat.completions.create。
-    始终写入 extra_body.enable_thinking=False（覆盖调用方传入的 True），
-    避免部分大模型默认走深度思考导致耗时与用量偏高；其它 extra_body 字段保留。
+    百炼 compatible-mode 写入 extra_body.enable_thinking=False；
+    复星网关不传该字段（网关会 400 unknown_parameter）。
 
     当 client 指向非百炼 compatible-mode（如复星网关）且发生可恢复错误时，
     使用百炼 Key 重试同一请求（stream=True 时仅捕获 create 阶段异常；迭代期错误不包装）。
     """
     extra = dict(kwargs.pop("extra_body", None) or {})
-    extra["enable_thinking"] = False
-    kwargs["extra_body"] = extra
+    merged = _apply_extra_body(client, extra)
+    if merged is not None:
+        kwargs["extra_body"] = merged
+    enable_search = bool((merged or {}).get("enable_search"))
 
     try:
         return client.chat.completions.create(**kwargs)
     except Exception as e:
+        if merged and "enable_thinking" in merged and _is_enable_thinking_rejected(e):
+            kwargs_retry = dict(kwargs)
+            ex_retry = dict(merged)
+            ex_retry.pop("enable_thinking", None)
+            if ex_retry:
+                kwargs_retry["extra_body"] = ex_retry
+            else:
+                kwargs_retry.pop("extra_body", None)
+            _LOG.warning("网关不支持 enable_thinking，已去掉该参数后重试")
+            return client.chat.completions.create(**kwargs_retry)
+        backup = config.dashscope_backup_chat_client()
+        if (
+            enable_search
+            and backup is not None
+            and backup is not client
+            and not _is_dashscope_compatible_client(client)
+        ):
+            _LOG.warning(
+                "enable_search 主通道失败 (%s: %s)，切换百炼 compatible-mode（%s）重试",
+                type(e).__name__,
+                e,
+                config.VISION_WEB_MODEL,
+            )
+            return backup.chat.completions.create(
+                **_kwargs_for_dashscope_backup(kwargs, for_enable_search=True)
+            )
         if not _is_retryable(e):
             raise
         if _is_dashscope_compatible_client(client):
             raise
-        backup = config.dashscope_backup_chat_client()
         if backup is None or backup is client:
             raise
         _LOG.warning(
@@ -80,4 +140,6 @@ def chat_completions_create(client: Any, **kwargs: Any):
             type(e).__name__,
             e,
         )
-        return backup.chat.completions.create(**kwargs)
+        return backup.chat.completions.create(
+            **_kwargs_for_dashscope_backup(kwargs, for_enable_search=False)
+        )

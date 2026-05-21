@@ -35,6 +35,10 @@ def _max_output_tokens(word_limit: int, task_type: str) -> int:
     return max(512, min(cap, raw))
 
 
+def _fast_table_cell_route(task: FillTask, fast_mode: bool) -> bool:
+    return bool(fast_mode and task.task_type == "table_cell")
+
+
 def _ensure_gen_logger() -> None:
     if _LOG.handlers:
         return
@@ -172,6 +176,7 @@ class ContentGenerator:
         correction_hint: Optional[str] = None,
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
+        fast_mode: bool = False,
     ) -> Tuple[List[Dict[str, Any]], str, float, Dict[str, Any], Dict[str, Any], str]:
         query = expand_query(task.target_chapter, task.description, task.task_type)
         max_d = (
@@ -214,6 +219,8 @@ class ContentGenerator:
 
         has_kb_hit = len(results) > 0
         use_plus = enable_web and (weak_kb or low_similarity)
+        if fast_mode:
+            use_plus = False
         web_creative, system_prompt, kb_note, para_closing, table_closing = (
             _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit)
         )
@@ -243,7 +250,8 @@ class ContentGenerator:
                 table_closing=table_closing,
             )
             use_tbl_vis = (
-                getattr(config, "TABLE_CELL_VISION", True)
+                not _fast_table_cell_route(task, fast_mode)
+                and getattr(config, "TABLE_CELL_VISION", True)
                 and table_cell_vision_pngs
             )
             user_content: Any = (
@@ -284,6 +292,7 @@ class ContentGenerator:
             and not low_similarity
             and strong_sim
             and not long_paragraph
+            and not fast_mode
         )
 
         if use_plus:
@@ -311,6 +320,12 @@ class ContentGenerator:
             if not use_plus:
                 model = config.TABLE_CELL_VISION_MODEL
                 temperature = float(getattr(config, "TEMP_VISION", 0.25))
+        if _fast_table_cell_route(task, fast_mode):
+            extra_body.pop("enable_search", None)
+            table_cell_mm = False
+            model = getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL)
+            temperature = 0.1
+            generation_tier = "table_cell_fast"
 
         gen_max_out = _max_output_tokens(word_limit, task.task_type)
         route_meta: Dict[str, Any] = {
@@ -337,6 +352,7 @@ class ContentGenerator:
             "web_creative_prompt": web_creative,
             "table_cell_multimodal": bool(table_cell_mm),
             "table_vision_n_images": len(table_cell_vision_pngs or []),
+            "fast_mode": bool(fast_mode),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route %s", route_meta)
@@ -352,6 +368,7 @@ class ContentGenerator:
         correction_hint: Optional[str] = None,
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
+        fast_mode: bool = False,
     ) -> GenerationBundle:
         """使用预检索的 Evidence 构建 GenerationBundle，避免重复向量检索。"""
         from core.evidence_planner import compress_evidence, Evidence
@@ -370,6 +387,8 @@ class ContentGenerator:
         weak_kb = evidence.weak_kb
 
         use_plus = enable_web and (weak_kb or low_similarity)
+        if fast_mode:
+            use_plus = False
         strong_sim = (
             evidence.best_similarity is not None
             and evidence.best_similarity >= config.STRONG_RAG_SIMILARITY_FLOOR
@@ -383,6 +402,7 @@ class ContentGenerator:
             and not low_similarity
             and strong_sim
             and not long_paragraph
+            and not fast_mode
         )
 
         web_creative, system_prompt, kb_note, para_closing, table_closing = (
@@ -413,7 +433,9 @@ class ContentGenerator:
                 table_closing=table_closing,
             )
             use_tbl_vis = (
-                getattr(config, "TABLE_CELL_VISION", True) and table_cell_vision_pngs
+                not _fast_table_cell_route(task, fast_mode)
+                and getattr(config, "TABLE_CELL_VISION", True)
+                and table_cell_vision_pngs
             )
             user_content: Any = (
                 build_table_cell_user_content(user_msg, table_cell_vision_pngs)
@@ -459,6 +481,12 @@ class ContentGenerator:
             if not use_plus:
                 model = config.TABLE_CELL_VISION_MODEL
                 temperature = float(getattr(config, "TEMP_VISION", 0.25))
+        if _fast_table_cell_route(task, fast_mode):
+            extra_body.pop("enable_search", None)
+            table_cell_mm = False
+            model = getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL)
+            temperature = 0.1
+            generation_tier = "table_cell_fast"
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -485,6 +513,7 @@ class ContentGenerator:
             "web_creative_prompt": web_creative,
             "table_cell_multimodal": bool(table_cell_mm),
             "table_vision_n_images": len(table_cell_vision_pngs or []),
+            "fast_mode": bool(fast_mode),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route_evidence %s", route_meta)
@@ -507,6 +536,7 @@ class ContentGenerator:
         correction_hint: Optional[str] = None,
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
+        fast_mode: bool = False,
     ) -> GenerationBundle:
         messages, model, temperature, extra_body, route_meta, ref_texts = (
             self._build_chat_request(
@@ -518,6 +548,7 @@ class ContentGenerator:
                 correction_hint=correction_hint,
                 web_writing_mode=web_writing_mode,
                 table_cell_vision_pngs=table_cell_vision_pngs,
+                fast_mode=fast_mode,
             )
         )
         return GenerationBundle(

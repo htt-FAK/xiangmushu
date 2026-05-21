@@ -6,6 +6,7 @@
   python smoke_test_models.py --offline        # 不调外部 API：配置摘要 + 全链路离线断言（见下）
   python smoke_test_models.py --skip-vision   # 跳过多模态（省配额）
   python smoke_test_models.py --skip-chroma   # 跳过 Chroma+embedding
+  python smoke_test_models.py --probe-models  # 网关 13 模型：chat/vision/enable_search 能力矩阵
 
 --offline 覆盖（与 docs/测试与验收.md 矩阵一致）:
   ContentGenerator 路由、审核修订辅助、rule_audit/need_model_audit、
@@ -26,7 +27,24 @@ import sys
 import tempfile
 import traceback
 import zlib
-from typing import Any, List
+from typing import Any, Dict, List, Optional, Tuple
+
+# 复星网关可上架的对话模型（不含 embedding）
+GATEWAY_PROBE_MODELS: List[str] = [
+    "claude-sonnet-4.6",
+    "gemini-3-flash",
+    "gemini-3-pro",
+    "gpt-5.4",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "glm-5",
+    "glm-5.1",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "qwen3-max",
+    "qwen3.5-plus",
+    "qwen3.6-plus",
+]
 
 # 保证以仓库内模块方式加载
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -131,14 +149,214 @@ def _chat_ping(client: OpenAI, model: str, temperature: float, label: str) -> bo
         return False
 
 
-def _vision_ping(client: OpenAI) -> bool:
-    print(f"=== 视觉模型 ({config.VISION_WEB_MODEL}) ===")
+def _vision_data_url() -> str:
+    png = _rgba_png_bytes(16, 16)
+    return "data:image/png;base64," + base64.standard_b64encode(png).decode("ascii")
+
+
+def _probe_one_gateway(
+    client: OpenAI, model: str, kind: str
+) -> Tuple[bool, str]:
+    """仅走当前 client（不触发 dashscope_chat 回落），测网关原生能力。"""
     try:
-        png = _rgba_png_bytes(16, 16)
-        url = "data:image/png;base64," + base64.standard_b64encode(png).decode("ascii")
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "temperature": 0.1 if kind == "chat" else 0.25,
+            "max_tokens": 16 if kind == "chat" else (64 if kind == "vision" else 32),
+        }
+        if kind == "chat":
+            kwargs["messages"] = [{"role": "user", "content": "只回复一个字：好"}]
+        elif kind == "vision":
+            kwargs["messages"] = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请用一句话描述这张图（若空白则说明）。"},
+                        {"type": "image_url", "image_url": {"url": _vision_data_url()}},
+                    ],
+                }
+            ]
+        else:
+            kwargs["messages"] = [
+                {
+                    "role": "user",
+                    "content": "今天是星期几？只回答星期几，不要解释。",
+                }
+            ]
+            kwargs["extra_body"] = {"enable_search": True}
+        r = client.chat.completions.create(**kwargs)
+        text = (r.choices[0].message.content or "").strip()
+        if not text:
+            return False, "空回复"
+        return True, text[:50]
+    except Exception as e:
+        return False, str(e)[:120]
+
+
+def _probe_one(
+    client: OpenAI, model: str, kind: str
+) -> Tuple[bool, str]:
+    """kind: chat | vision | search。经 dashscope_chat（含回落），返回 (ok, detail)。"""
+    try:
+        if kind == "chat":
+            r = chat_completions_create(
+                client,
+                model=model,
+                messages=[{"role": "user", "content": "只回复一个字：好"}],
+                temperature=0.1,
+                max_tokens=16,
+            )
+            text = (r.choices[0].message.content or "").strip()
+            if not text:
+                return False, "空回复"
+            return True, text[:40]
+        if kind == "vision":
+            r = chat_completions_create(
+                client,
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "请用一句话描述这张图（若空白则说明）。",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": _vision_data_url()},
+                            },
+                        ],
+                    }
+                ],
+                temperature=0.25,
+                max_tokens=64,
+            )
+            text = (r.choices[0].message.content or "").strip()
+            if not text:
+                return False, "空回复"
+            return True, text[:50]
+        # search
         r = chat_completions_create(
             client,
-            model=config.VISION_WEB_MODEL,
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "今天是星期几？只回答星期几，不要解释。",
+                }
+            ],
+            temperature=0.2,
+            max_tokens=32,
+            extra_body={"enable_search": True},
+        )
+        text = (r.choices[0].message.content or "").strip()
+        if not text:
+            return False, "空回复"
+        return True, text[:50]
+    except Exception as e:
+        return False, str(e)[:120]
+
+
+def _run_probe_models(client: OpenAI, models: Optional[List[str]] = None) -> bool:
+    """对网关模型跑 chat/vision/search 探测，打印 Markdown 矩阵。"""
+    models = models or GATEWAY_PROBE_MODELS
+    rows: List[Dict[str, Any]] = []
+    print("=== 网关模型能力探测 ===")
+    print(f"  模型数: {len(models)} · 通道: {_client_base_label()}")
+    print()
+    gw_only = bool(config.FOSUN_AIGW_API_KEY)
+    for model in models:
+        row: Dict[str, Any] = {"model": model}
+        for kind in ("chat", "vision", "search"):
+            if gw_only:
+                ok_gw, detail_gw = _probe_one_gateway(client, model, kind)
+                ok_wrap, detail_wrap = _probe_one(client, model, kind)
+                ok = ok_gw
+                detail = detail_gw
+                row[kind] = "OK" if ok_gw else "FAIL"
+                row[f"{kind}_gw"] = row[kind]
+                row[f"{kind}_wrap"] = "OK" if ok_wrap else "FAIL"
+                if kind == "search" and (not ok_gw) and ok_wrap:
+                    row[kind] = "FALLBACK"
+                suffix = ""
+                if kind == "search" and row.get("search_gw") == "FAIL" and row.get("search_wrap") == "OK":
+                    suffix = " [仅回落百炼可用]"
+                row[f"{kind}_detail"] = detail_gw
+                mark = row[kind]
+                print(f"  [{mark}] {model} | {kind}(网关): {detail_gw[:70]}{suffix}")
+            else:
+                ok, detail = _probe_one(client, model, kind)
+                row[kind] = "OK" if ok else "FAIL"
+                row[f"{kind}_detail"] = detail
+                print(f"  [{'OK' if ok else 'FAIL'}] {model} | {kind}: {detail[:80]}")
+        rows.append(row)
+    print()
+    if gw_only:
+        print("| 模型 | chat(网关) | vision(网关) | search(网关) | search(含回落) |")
+        print("|------|:----------:|:------------:|:------------:|:--------------:|")
+        for row in rows:
+            print(
+                f"| {row['model']} | {row.get('chat_gw', row['chat'])} | "
+                f"{row.get('vision_gw', row['vision'])} | {row.get('search_gw', row['search'])} | "
+                f"{row.get('search_wrap', '-')} |"
+            )
+    else:
+        print("| 模型 | chat | vision | enable_search |")
+        print("|------|:----:|:------:|:-------------:|")
+        for row in rows:
+            print(
+                f"| {row['model']} | {row['chat']} | {row['vision']} | {row['search']} |"
+            )
+    out_path = os.path.join(_ROOT, "data", "probe_gateway_models.md")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("# 复星网关模型能力探测\n\n")
+        f.write(f"通道: {_client_base_label()}\n\n")
+        if gw_only:
+            f.write(
+                "说明：search(网关) 为直连网关且不带 enable_thinking；"
+                "search(含回落) 经 dashscope_chat（失败时用百炼 + VISION_WEB_MODEL）。\n\n"
+            )
+            f.write(
+                "| 模型 | chat(网关) | vision(网关) | search(网关) | search(含回落) | 备注 |\n"
+            )
+            f.write("|------|:----------:|:------------:|:------------:|:--------------:|------|\n")
+            for row in rows:
+                note = ""
+                if row.get("search_gw") == "FAIL" and row.get("search_wrap") == "OK":
+                    note = "联网仅百炼回落"
+                f.write(
+                    f"| {row['model']} | {row.get('chat_gw')} | {row.get('vision_gw')} | "
+                    f"{row.get('search_gw')} | {row.get('search_wrap')} | {note} |\n"
+                )
+        else:
+            f.write("| 模型 | chat | vision | enable_search | chat 备注 | search 备注 |\n")
+            f.write("|------|:----:|:------:|:-------------:|-----------|-------------|\n")
+            for row in rows:
+                f.write(
+                    f"| {row['model']} | {row['chat']} | {row['vision']} | {row['search']} | "
+                    f"{row.get('chat_detail', '')[:40]} | {row.get('search_detail', '')[:40]} |\n"
+                )
+    print(f"\n  矩阵已写入: {out_path}")
+    chat_ok = sum(1 for r in rows if r["chat"] == "OK")
+    return chat_ok >= 1
+
+
+def _client_base_label() -> str:
+    if config.FOSUN_AIGW_API_KEY:
+        return f"复星网关 {config.FOSUN_AIGW_BASE_URL}"
+    return f"OPENAI_BASE_URL {config.OPENAI_BASE_URL}"
+
+
+def _vision_ping(client: OpenAI, model: Optional[str] = None) -> bool:
+    model = model or config.VISION_WEB_MODEL
+    print(f"=== 视觉模型 ({model}) ===")
+    try:
+        url = _vision_data_url()
+        r = chat_completions_create(
+            client,
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -1291,9 +1509,21 @@ def main() -> int:
     ap.add_argument("--skip-vision", action="store_true", help="跳过多模态视觉请求")
     ap.add_argument("--skip-chroma", action="store_true", help="跳过 Chroma 入库")
     ap.add_argument("--skip-embed-api", action="store_true", help="跳过仅 embedding API（仍可做 chroma）")
+    ap.add_argument(
+        "--probe-models",
+        action="store_true",
+        help="探测 GATEWAY_PROBE_MODELS 的 chat/vision/enable_search 并输出矩阵",
+    )
     args = ap.parse_args()
 
     _print_config()
+
+    if args.probe_models:
+        if not config.chat_llm_configured():
+            print("[FAIL] 无可用聊天 API Key（网关或百炼）")
+            return 1
+        ok = _run_probe_models(_client())
+        return 0 if ok else 1
 
     if args.offline:
         ok = _run_all_offline()
