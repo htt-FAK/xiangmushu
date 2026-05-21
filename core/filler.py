@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 import re
+import logging
 from copy import deepcopy
 
 from docx import Document
@@ -18,6 +19,8 @@ from core.docx_typography import (
     heading_level_from_style,
 )
 from core.fill_task import FillTask
+
+_LOG = logging.getLogger(__name__)
 
 
 class WordFiller:
@@ -44,17 +47,62 @@ class WordFiller:
     def _chapter_text_compact(chapter: str) -> str:
         return re.sub(r"\s+", "", chapter or "")
 
+    @staticmethod
+    def _normalize_chapter_text(text: str) -> str:
+        """标准化章节文本：去除序号、标点、统一空格"""
+        if not text:
+            return ""
+        text = re.sub(r"^\s*第[一二三四五六七八九十百千万\d]+[章节条节]\s*", "", text.strip())
+        text = re.sub(r"^\s*\d+[.．、]\s*", "", text)
+        text = re.sub(r"[^\w\u4e00-\u9fff]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip().lower()
+        return text
+
+    @classmethod
+    def _extract_chapter_keywords(cls, text: str) -> set:
+        """提取章节关键词"""
+        compact = cls._chapter_text_compact(text)
+        normalized = cls._normalize_chapter_text(text)
+        keywords = set()
+        for t in [compact, normalized]:
+            for word in re.split(r"[\s,，、。；;]", t):
+                if len(word) >= 2:
+                    keywords.add(word)
+        return keywords
+
     @classmethod
     def _heading_matches_chapter(cls, target_chapter: str, para_text: str) -> bool:
-        """章节标题与任务名比对（去空白），解决「摘要」任务无法命中「摘  要」标题的问题。"""
+        """章节标题与任务名比对（多策略匹配）
+
+        策略1: 精确包含匹配（去空白）
+        策略2: 关键词重叠度匹配
+        策略3: 标准化文本相似匹配
+        """
+        if not target_chapter or not para_text:
+            return False
+
         ta = cls._chapter_text_compact(target_chapter)
         tb = cls._chapter_text_compact(para_text)
-        if not ta or not tb:
-            return False
-        if ta in tb:
+
+        if ta in tb or tb in ta:
+            _LOG.debug(f"章节精确匹配成功: {ta} <-> {tb}")
             return True
-        if len(tb) >= 2 and tb in ta:
-            return True
+
+        keywords_a = cls._extract_chapter_keywords(target_chapter)
+        keywords_b = cls._extract_chapter_keywords(para_text)
+
+        if keywords_a and keywords_b:
+            overlap = keywords_a & keywords_b
+            if len(overlap) >= 2:
+                _LOG.debug(f"章节关键词匹配成功: {overlap} in '{ta}' <-> '{tb}'")
+                return True
+            if len(overlap) == 1 and len(keywords_a) <= 3:
+                main_word = list(keywords_a)[0]
+                if len(main_word) >= 4 and main_word in tb:
+                    _LOG.debug(f"章节单关键词匹配: {main_word} in '{tb}'")
+                    return True
+
+        _LOG.debug(f"章节匹配失败: '{ta}' <-> '{tb}'")
         return False
 
     @classmethod
@@ -500,34 +548,60 @@ class WordFiller:
         para_text_hint = (hint.get("paragraph_text") or "").strip()
         paras = doc.paragraphs
 
+        _LOG.info(
+            f"[段落填充] 任务={task.task_id} 章节='{task.target_chapter}' "
+            f"类型={task.task_type} 描述='{task.description[:30]}...' "
+            f"内容长度={len(content)}"
+        )
+
         if not task.target_chapter:
-            # 无章节：按原逻辑找第一个占位/空段
+            _LOG.info("[段落填充] 无章节信息，使用占位符搜索策略")
             for para in paras:
                 text = para.text.strip()
                 if self._text_has_placeholder(text) or (
                     para_text_hint and para_text_hint in (para.text or "")
                 ):
+                    _LOG.info(f"[段落填充] 找到占位段: '{text[:50]}...'")
                     self._write_paragraph_content(para, content, hint)
                     return
                 if not text:
+                    _LOG.info("[段落填充] 找到空段落")
                     self._write_paragraph_content(para, content, hint)
                     return
+            _LOG.warning("[段落填充] 未找到合适的段落")
             return
 
         _start, scope = self._collect_chapter_scope(doc, task.target_chapter)
         if not scope:
+            _LOG.warning(
+                f"[段落填充] 章节'{task.target_chapter}'未找到匹配段落，尝试全文搜索..."
+            )
+            self._fill_paragraph_fallback(doc, task, content)
             return
+
+        _LOG.debug(f"[段落填充] 章节范围 scope={scope}")
 
         best_idx = -1
         best_score = 0
         for idx in scope:
             sc = self._score_paragraph_candidate(paras[idx], para_text_hint)
+            if sc > 0:
+                _LOG.debug(
+                    f"[段落填充] 段落{idx} score={sc} text='{paras[idx].text[:40]}...'"
+                )
             if sc > best_score:
                 best_score = sc
                 best_idx = idx
 
         if best_idx < 0 or best_score == 0:
+            _LOG.warning(f"[段落填充] 章节内未找到有效段落，尝试回退...")
+            self._fill_paragraph_fallback(doc, task, content)
             return
+
+        _LOG.info(
+            f"[段落填充] 选择段落{best_idx}(score={best_score}): "
+            f"'{paras[best_idx].text[:50]}...'"
+        )
 
         target_para = paras[best_idx]
         self._write_paragraph_content(target_para, content, hint)
@@ -535,26 +609,91 @@ class WordFiller:
         if best_score <= 2:
             self._clear_adjacent_pure_hints(doc, best_idx)
 
+    def _fill_paragraph_fallback(
+        self, doc: Document, task: FillTask, content: str
+    ):
+        """段落填充回退策略：全局搜索最匹配的段落"""
+        hint = task.location_hint or {}
+        description = task.description or ""
+        paras = doc.paragraphs
+
+        _LOG.warning(
+            f"[段落回退] 全局搜索段落, description='{description[:50]}...'"
+        )
+
+        best_idx = -1
+        best_score = 0
+
+        for idx, para in enumerate(paras):
+            text = para.text.strip()
+            score = self._score_paragraph_candidate(para, description)
+
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        if best_idx >= 0 and best_score > 0:
+            _LOG.info(
+                f"[段落回退] 找到最佳段落{best_idx}(score={best_score}): "
+                f"'{paras[best_idx].text[:50]}...'"
+            )
+            self._write_paragraph_content(paras[best_idx], content, hint)
+        else:
+            _LOG.warning("[段落回退] 未找到匹配段落，尝试找第一个空段落")
+            for idx, para in enumerate(paras):
+                if not para.text.strip():
+                    _LOG.info(f"[段落回退] 找到空段落{idx}")
+                    self._write_paragraph_content(para, content, hint)
+                    return
+            _LOG.error("[段落回退] 完全没有可用段落，填充失败")
+
     def _fill_table_cell(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint or {}
         table_idx = hint.get("table_index", 0)
         row_idx = hint.get("row", 0)
         col_idx = hint.get("col", 0)
 
+        _LOG.info(
+            f"[表格填充] 任务={task.task_id} 章节={task.target_chapter} "
+            f"目标位置=table[{table_idx}]row[{row_idx}]col[{col_idx}] "
+            f"内容长度={len(content)}"
+        )
+
         if table_idx >= len(doc.tables):
+            _LOG.warning(
+                f"[表格填充] table_index={table_idx} 超出范围(共{len(doc.tables)}个表), "
+                f"尝试回退到搜索..."
+            )
+            self._fill_table_cell_fallback(doc, task, content)
             return
+
         table = doc.tables[table_idx]
         if row_idx >= len(table.rows):
+            _LOG.warning(
+                f"[表格填充] row={row_idx} 超出范围(共{len(table.rows)}行), "
+                f"尝试回退..."
+            )
+            self._fill_table_cell_fallback_by_description(doc, task, content, table_idx)
             return
+
         row = table.rows[row_idx]
         if col_idx >= len(row.cells):
-            return
-        cell = row.cells[col_idx]
+            _LOG.warning(
+                f"[表格填充] col={col_idx} 超出范围(共{len(row.cells)}列), "
+                f"尝试回退..."
+            )
+            col_idx = len(row.cells) - 1
 
+        cell = row.cells[col_idx]
         cell_text = cell.text or ""
 
-        # 检查是否是"例如：..."等示例/提示文字，如果是则直接替换
+        _LOG.debug(
+            f"[表格填充] 目标单元格 text='{cell_text[:50]}...' "
+            f"description='{task.description[:30]}...'"
+        )
+
         if self._looks_like_example_or_hint(cell_text):
+            _LOG.info(f"[表格填充] 单元格包含提示文字，直接替换")
             self._set_cell_text_keep_style(cell, content)
             try:
                 table.autofit = False
@@ -568,6 +707,7 @@ class WordFiller:
             if span:
                 start, end = span
                 new_text = cell_text[:start] + content + cell_text[end:]
+                _LOG.info(f"[表格填充] 占位符替换成功")
                 self._set_cell_text_keep_style(cell, new_text)
                 try:
                     table.autofit = False
@@ -575,11 +715,87 @@ class WordFiller:
                     pass
                 return
 
+        _LOG.info(f"[表格填充] 直接写入内容到单元格")
         self._set_cell_text_keep_style(cell, content)
         try:
             table.autofit = False
         except Exception:
             pass
+
+    def _fill_table_cell_fallback(
+        self, doc: Document, task: FillTask, content: str
+    ):
+        """表格定位失败时的回退策略：按描述关键词搜索单元格"""
+        description = task.description or ""
+
+        _LOG.warning(f"[表格回退] 开始搜索匹配的表格单元格, description='{description}'")
+
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    cell_text = cell.text or ""
+
+                    if self._looks_like_example_or_hint(cell_text):
+                        _LOG.info(
+                            f"[表格回退] 找到匹配: table={t_idx} row={r_idx} col={c_idx}"
+                        )
+                        self._set_cell_text_keep_style(cell, content)
+                        try:
+                            table.autofit = False
+                        except Exception:
+                            pass
+                        return
+
+        _LOG.warning(f"[表格回退] 未找到合适的单元格")
+
+    def _fill_table_cell_fallback_by_description(
+        self, doc: Document, task: FillTask, content: str, table_idx: int
+    ):
+        """行号超范围时的回退策略：在指定表格中按描述搜索"""
+        description = task.description or ""
+
+        _LOG.warning(
+            f"[行回退] 在table[{table_idx}]中搜索, description='{description}'"
+        )
+
+        table = doc.tables[table_idx]
+        description_keywords = set()
+        for word in re.findall(r"[\w\u4e00-\u9fff]{2,}", description):
+            description_keywords.add(word)
+
+        best_row = -1
+        best_score = 0
+
+        for r_idx, row in enumerate(table.rows):
+            row_text = " ".join(cell.text for cell in row.cells)
+            score = sum(1 for kw in description_keywords if kw in row_text)
+            if score > best_score:
+                best_score = score
+                best_row = r_idx
+
+        if best_row >= 0 and best_score > 0:
+            _LOG.info(
+                f"[行回退] 找到最佳行={best_row} (score={best_score})"
+            )
+            row = table.rows[best_row]
+            col_idx = min(task.location_hint.get("col", 0), len(row.cells) - 1)
+            cell = row.cells[col_idx]
+            self._set_cell_text_keep_style(cell, content)
+            try:
+                table.autofit = False
+            except Exception:
+                pass
+        else:
+            _LOG.warning(f"[行回退] 未找到匹配行，尝试第一个空单元格")
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    if not cell.text.strip():
+                        self._set_cell_text_keep_style(cell, content)
+                        try:
+                            table.autofit = False
+                        except Exception:
+                            pass
+                        return
 
     def _ensure_table_readability(self, table) -> None:
         try:
