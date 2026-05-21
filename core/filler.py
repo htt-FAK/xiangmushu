@@ -23,6 +23,60 @@ from core.fill_task import FillTask
 _LOG = logging.getLogger(__name__)
 
 
+def _calculate_similarity_score(text1: str, text2: str) -> float:
+    """计算两个文本的相似度（0.0 ~ 1.0）
+
+    使用多种相似度算法的加权平均：
+    1. 字符级 Jaccard 相似度
+    2. 词级 Jaccard 相似度
+    3. 编辑距离相似度
+    """
+    if not text1 or not text2:
+        return 0.0
+
+    text1_lower = text1.lower()
+    text2_lower = text2.lower()
+
+    char_set1 = set(text1_lower)
+    char_set2 = set(text2_lower)
+    char_jaccard = len(char_set1 & char_set2) / len(char_set1 | char_set2) if char_set1 | char_set2 else 0.0
+
+    words1 = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", text1_lower))
+    words2 = set(re.findall(r"[\w\u4e00-\u9fff]{2,}", text2_lower))
+    word_jaccard = len(words1 & words2) / len(words1 | words2) if words1 | words2 else 0.0
+
+    edit_sim = _normalized_edit_similarity(text1_lower, text2_lower)
+
+    score = (char_jaccard * 0.2 + word_jaccard * 0.5 + edit_sim * 0.3)
+
+    return min(1.0, max(0.0, score))
+
+
+def _normalized_edit_similarity(s1: str, s2: str) -> float:
+    """计算编辑距离相似度（归一化到 0.0 ~ 1.0）"""
+    if not s1 and not s2:
+        return 1.0
+    if not s1 or not s2:
+        return 0.0
+
+    if len(s1) > len(s2):
+        s1, s2 = s2, s1
+
+    distances = range(len(s1) + 1)
+    for i2, c2 in enumerate(s2):
+        distances_ = [i2 + 1]
+        for i1, c1 in enumerate(s1):
+            if c1 == c2:
+                distances_.append(distances[i1])
+            else:
+                distances_.append(1 + min((distances[i1], distances[i1 + 1], distances_[-1])))
+        distances = distances_
+
+    edit_distance = distances[-1]
+    max_len = max(len(s1), len(s2))
+    return 1.0 - (edit_distance / max_len)
+
+
 class WordFiller:
     """将生成内容回填到 Word：支持 {{锚点}} 精确替换 + 传统占位符。"""
 
@@ -340,17 +394,30 @@ class WordFiller:
                 task.target_chapter or ""
             ):
                 content = self._strip_leading_abstract_label(content)
+
+            original_content = content
             anchor = task.location_hint.get("anchor")
+
             if anchor:
-                self._replace_anchor_everywhere(doc, anchor, content)
+                replace_count = self._replace_anchor_everywhere(doc, anchor, content)
+                _LOG.info(
+                    f"[锚点填充] 任务={task.task_id} 锚点='{anchor}' "
+                    f"替换次数={replace_count}"
+                )
+                self._validate_fill_result(
+                    doc, task, original_content, replace_count > 0
+                )
                 continue
+
             if task.task_type == "table_cell":
                 wl = int(task.word_limit or 120)
                 tight = min(60, max(25, wl * 2)) if wl <= 45 else None
                 content = self.clean_table_answer(content, wl, max_chars=tight)
                 self._fill_table_cell(doc, task, content)
+                self._validate_fill_result(doc, task, content, True)
             else:
                 self._fill_paragraph(doc, task, content)
+                self._validate_fill_result(doc, task, content, True)
 
         self._sweep_residual_hint_paragraphs(doc)
 
@@ -363,14 +430,73 @@ class WordFiller:
 
         doc.save(output_path)
 
-    def _replace_anchor_everywhere(self, doc: Document, anchor: str, content: str):
+        _LOG.info(
+            f"[填充完成] 共处理{len(tasks)}个任务, "
+            f"输出文件={output_path}"
+        )
+
+    def _validate_fill_result(
+        self,
+        doc: Document,
+        task: FillTask,
+        expected_content: str,
+        success: bool,
+    ):
+        """验证填充结果是否合理"""
+        if not success:
+            _LOG.error(
+                f"[验证失败] 任务={task.task_id} 章节='{task.target_chapter}' "
+                f"类型={task.task_type} 填充未成功"
+            )
+            return
+
+        expected_len = len(expected_content)
+
+        if expected_len == 0:
+            _LOG.warning(
+                f"[验证警告] 任务={task.task_id} 预期内容为空，"
+                f"可能是生成失败"
+            )
+            return
+
+        if expected_len < 5:
+            _LOG.warning(
+                f"[验证警告] 任务={task.task_id} 内容过短({expected_len}字符), "
+                f"可能不完整"
+            )
+
+        if expected_len > 1000:
+            _LOG.warning(
+                f"[验证警告] 任务={task.task_id} 内容过长({expected_len}字符), "
+                f"可能超出预期字数"
+            )
+
+        if task.task_type == "table_cell" and expected_len > 200:
+            _LOG.warning(
+                f"[验证警告] 任务={task.task_id} 表格单元格内容过长({expected_len}字符), "
+                f"建议控制在120字以内"
+            )
+
+        _LOG.info(
+            f"[验证成功] 任务={task.task_id} 章节='{task.target_chapter}' "
+            f"类型={task.task_type} 内容长度={expected_len}"
+        )
+
+    def _replace_anchor_everywhere(self, doc: Document, anchor: str, content: str) -> int:
+        """替换所有锚点，返回替换次数"""
+        count = 0
         for para in doc.paragraphs:
-            self._replace_once_in_paragraph(para, anchor, content)
+            if anchor in para.text:
+                count += 1
+                self._replace_once_in_paragraph(para, anchor, content)
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
                     for para in cell.paragraphs:
-                        self._replace_once_in_paragraph(para, anchor, content)
+                        if anchor in para.text:
+                            count += 1
+                            self._replace_once_in_paragraph(para, anchor, content)
+        return count
 
     @staticmethod
     def _sample_rPr_from_paragraph(para: Paragraph):
@@ -482,18 +608,106 @@ class WordFiller:
         return start_idx, scope
 
     def _score_paragraph_candidate(
-        self, para: Paragraph, para_text_hint: str
+        self, para: Paragraph, para_text_hint: str, position: int = 0, scope_len: int = 1
     ) -> int:
+        """增强的段落评分机制，考虑多个因素
+
+        评分维度：
+        1. 关键词精确匹配 (3分)
+        2. 占位符存在 (2分)
+        3. 模板指引 (2分)
+        4. 描述相关性 (+2分)
+        5. 位置权重 (+1分)
+        6. 段落长度匹配 (+1分)
+        7. 空段落兜底 (1分)
+        """
         text = para.text.strip()
+        score = 0
+
         if para_text_hint and para_text_hint in (para.text or ""):
+            _LOG.debug(f"[评分] 关键词精确匹配 +3: '{para_text_hint}' in '{text[:30]}...'")
             return 3
+
         if self._text_has_placeholder(text):
-            return 2
+            score += 2
+            _LOG.debug(f"[评分] 占位符 +2: '{text[:30]}...'")
+
         if self._looks_like_template_guidance(text):
-            return 2
+            score += 2
+            _LOG.debug(f"[评分] 模板指引 +2: '{text[:30]}...'")
+
+        desc_keywords = self._extract_chapter_keywords(text)
+        if desc_keywords and len(desc_keywords) >= 1:
+            score += min(len(desc_keywords), 2)
+            _LOG.debug(f"[评分] 描述关键词 +{min(len(desc_keywords), 2)}: {desc_keywords}")
+
+        position_weight = self._calculate_position_weight(position, scope_len)
+        if position_weight > 0:
+            score += position_weight
+            _LOG.debug(f"[评分] 位置权重 +{position_weight}: position={position}/{scope_len}")
+
+        if 10 <= len(text) <= 500:
+            score += 1
+            _LOG.debug(f"[评分] 长度适中 +1: len={len(text)}")
+
         if not text:
+            score = 1
+            _LOG.debug(f"[评分] 空段落兜底: 1")
+
+        _LOG.debug(f"[评分] 总分={score}: '{text[:30]}...'")
+        return score
+
+    @staticmethod
+    def _calculate_position_weight(position: int, total: int) -> int:
+        """计算段落位置权重
+
+        策略：
+        - 章节开头部分（1-3段）权重更高
+        - 章节中段权重递减
+        - 章节末尾权重最低
+        """
+        if total <= 0:
+            return 0
+
+        ratio = position / max(total - 1, 1)
+
+        if ratio <= 0.2:
             return 1
-        return 0
+        elif ratio <= 0.5:
+            return 0
+        else:
+            return 0
+
+    def _calculate_description_relevance(self, text: str, description: str) -> float:
+        """计算段落与描述的相关性（基于关键词重叠）
+
+        返回 0.0 ~ 1.0 的相似度分数
+        """
+        if not description or not text:
+            return 0.0
+
+        text_keywords = self._extract_chapter_keywords(text)
+        desc_keywords = self._extract_chapter_keywords(description)
+
+        if not text_keywords or not desc_keywords:
+            return 0.0
+
+        intersection = text_keywords & desc_keywords
+        union = text_keywords | desc_keywords
+
+        jaccard = len(intersection) / len(union) if union else 0.0
+
+        overlap_ratio = len(intersection) / min(len(text_keywords), len(desc_keywords))
+
+        score = (jaccard + overlap_ratio) / 2
+
+        _LOG.debug(
+            f"[相关性] text={text_keywords} desc={desc_keywords} "
+            f"intersection={intersection} score={score:.2f}"
+        )
+
+        return score
+
 
     def _clear_pure_hint_paragraph(self, para: Paragraph) -> None:
         if self._is_pure_hint_line(para.text or ""):
@@ -516,32 +730,78 @@ class WordFiller:
         text = para.text or ""
         mode = (hint.get("replace_mode") or "").strip().lower()
 
-        # 检查是否是"撰写要求"类模板说明文字（需要完全替换）
+        _LOG.debug(
+            f"[写入策略] mode='{mode}' text_len={len(text)} "
+            f"content_len={len(content)} has_placeholder={self._text_has_placeholder(text)}"
+        )
+
         if self._looks_like_writing_rubric(text):
+            _LOG.debug(f"[写入策略] 撰写要求类 -> 完全替换")
             self._set_paragraph_text_keep_style(para, content)
             return
 
-        # 检查是否是"说明...建议..."类模板指引文字
         if self._looks_like_template_guidance(text):
+            _LOG.debug(f"[写入策略] 模板指引 -> 完全替换")
             self._set_paragraph_text_keep_style(para, content)
             return
 
         if self._is_pure_hint_line(text):
+            _LOG.debug(f"[写入策略] 纯提示行 -> 完全替换")
             self._set_paragraph_text_keep_style(para, content)
             return
 
         if mode == "placeholder_only":
+            _LOG.debug(f"[写入策略] 显式 placeholder_only 模式")
             if not self._fill_paragraph_placeholder_only(para, content, hint):
+                _LOG.warning(f"[写入策略] 占位符替换失败，降级为完全替换")
                 self._set_paragraph_text_keep_style(para, content)
             return
 
-        # 混排说明+占位：无显式 full 时先尝试只换占位
-        if self._text_has_placeholder(text) and len(text) > self._PURE_HINT_MAX_LEN:
-            if "说明" in text or len(text) > 60:
+        if mode == "full":
+            _LOG.debug(f"[写入策略] 显式 full 模式 -> 完全替换")
+            self._set_paragraph_text_keep_style(para, content)
+            return
+
+        if self._text_has_placeholder(text):
+            placeholder_ratio = self._calculate_placeholder_ratio(text)
+            content_len_ratio = len(content) / max(len(text), 1)
+
+            _LOG.debug(
+                f"[写入策略] 混合内容 placeholder_ratio={placeholder_ratio:.2f} "
+                f"content_len_ratio={content_len_ratio:.2f}"
+            )
+
+            should_partial_replace = (
+                placeholder_ratio < 0.7
+                and len(text) > self._PURE_HINT_MAX_LEN
+                and content_len_ratio < 2.0
+            )
+
+            if should_partial_replace:
+                _LOG.debug(f"[写入策略] 尝试部分替换（占位符比例适中）")
                 if self._fill_paragraph_placeholder_only(para, content, hint):
                     return
+                _LOG.warning(f"[写入策略] 部分替换失败，降级为完全替换")
+                self._set_paragraph_text_keep_style(para, content)
+                return
 
+        _LOG.debug(f"[写入策略] 默认 -> 完全替换")
         self._set_paragraph_text_keep_style(para, content)
+
+    @staticmethod
+    def _calculate_placeholder_ratio(text: str) -> float:
+        """计算文本中占位符的长度占比"""
+        if not text:
+            return 0.0
+
+        total_len = len(text)
+        placeholder_len = 0
+
+        for pattern in WordFiller._PLACEHOLDER_PATTERNS:
+            for match in pattern.finditer(text):
+                placeholder_len += match.end() - match.start()
+
+        return placeholder_len / total_len if total_len > 0 else 0.0
 
     def _fill_paragraph(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint or {}
@@ -583,11 +843,18 @@ class WordFiller:
 
         best_idx = -1
         best_score = 0
-        for idx in scope:
-            sc = self._score_paragraph_candidate(paras[idx], para_text_hint)
+        scope_len = len(scope)
+
+        for pos, idx in enumerate(scope):
+            sc = self._score_paragraph_candidate(
+                paras[idx],
+                para_text_hint,
+                position=pos,
+                scope_len=scope_len
+            )
             if sc > 0:
                 _LOG.debug(
-                    f"[段落填充] 段落{idx} score={sc} text='{paras[idx].text[:40]}...'"
+                    f"[段落填充] 段落{idx}(位置{pos}/{scope_len}) score={sc} text='{paras[idx].text[:40]}...'"
                 )
             if sc > best_score:
                 best_score = sc
@@ -612,7 +879,7 @@ class WordFiller:
     def _fill_paragraph_fallback(
         self, doc: Document, task: FillTask, content: str
     ):
-        """段落填充回退策略：全局搜索最匹配的段落"""
+        """段落填充回退策略：全局搜索最匹配的段落（结合评分+语义相似度）"""
         hint = task.location_hint or {}
         description = task.description or ""
         paras = doc.paragraphs
@@ -623,23 +890,41 @@ class WordFiller:
 
         best_idx = -1
         best_score = 0
+        best_similarity = 0.0
+
+        SIMILARITY_THRESHOLD = 0.3
 
         for idx, para in enumerate(paras):
             text = para.text.strip()
             score = self._score_paragraph_candidate(para, description)
 
-            if score > best_score:
-                best_score = score
-                best_idx = idx
+            similarity = 0.0
+            if description:
+                similarity = _calculate_similarity_score(description, text)
+                _LOG.debug(
+                    f"[段落回退] 段落{idx} 评分={score} 相似度={similarity:.2f} "
+                    f"text='{text[:30]}...'"
+                )
 
-        if best_idx >= 0 and best_score > 0:
+            combined_score = score + (similarity * 3)
+
+            if combined_score > best_score:
+                best_score = combined_score
+                best_idx = idx
+                best_similarity = similarity
+
+        if best_idx >= 0 and best_similarity >= SIMILARITY_THRESHOLD:
             _LOG.info(
-                f"[段落回退] 找到最佳段落{best_idx}(score={best_score}): "
+                f"[段落回退] 找到最佳段落{best_idx}(score={best_score} "
+                f"similarity={best_similarity:.2f}): "
                 f"'{paras[best_idx].text[:50]}...'"
             )
             self._write_paragraph_content(paras[best_idx], content, hint)
         else:
-            _LOG.warning("[段落回退] 未找到匹配段落，尝试找第一个空段落")
+            _LOG.warning(
+                f"[段落回退] 相似度不足({best_similarity:.2f}<{SIMILARITY_THRESHOLD})，"
+                f"尝试找第一个空段落"
+            )
             for idx, para in enumerate(paras):
                 if not para.text.strip():
                     _LOG.info(f"[段落回退] 找到空段落{idx}")
