@@ -21,7 +21,7 @@ EMBEDDING_OPENAI_BASE_URL = (
     os.getenv("EMBEDDING_OPENAI_BASE_URL", "").strip() or DASHSCOPE_COMPAT_BASE
 )
 
-# 复星 AI 网关（OpenAI 兼容）；私库可在未设环境变量时使用下方默认 Key
+# 复星 AI 网关（OpenAI 兼容）；未设环境变量时使用默认 Base URL / Key
 FOSUN_AIGW_BASE_URL = (
     os.getenv("FOSUN_AIGW_BASE_URL", "").strip() or "https://aigw.fosunwealth.com/v1"
 )
@@ -39,24 +39,23 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
-# 弱知识库 + 联网档：enable_search（网关实测 qwen3.5-plus / 3.6-plus / max 可用）
-VISION_WEB_MODEL = _vw or "qwen3.5-plus"
-# 模板整页视觉（网关 gemini-3-* 空回复，用 qwen3.5-plus 多模态）
-TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.5-plus"
-# 入库前图片描述
-VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.5-plus"
-# 带截图的 table_cell 多模态
-TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.5-plus"
-# 强检索短文（网关 deepseek chat 易空回复，用 glm-5.1）
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "glm-5.1").strip()
-# 模板结构分析（纯文本 JSON）
+# 弱知识库 + 联网档：enable_search（dashscope_chat 已关深度思考）
+VISION_WEB_MODEL = _vw or "qwen3.5-plus-2026-04-20"
+TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.5-plus-2026-04-20"
+VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "gemini-3-pro"
+TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.5-plus-2026-04-20"
+TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.5-plus"
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-plus").strip()
 TEMPLATE_ANALYZE_MODEL = (
-    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "glm-5.1"
+    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-27b"
 )
-# 主正文（kimi-k2.6 网关额度不足时用 gpt-5.4）
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.4"
-# 生成后审核（不传 enable_search）
-AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "glm-5.1"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.6-max-preview"
+FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "glm-5"
+FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "glm-5.1"
+AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.5-flash-2026-02-23"
+AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.5-flash"
+AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.6-flash-2026-04-16"
+AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "qwen3.6-flash"
 TEMP_AUDIT = float(os.getenv("TEMP_AUDIT", "0.2"))
 
 TEMP_VISION = float(os.getenv("TEMP_VISION", "0.25"))
@@ -107,7 +106,7 @@ TEMPLATE_VISION_MAX_LONG_EDGE = (
 # 多模态模板视觉 API 硬超时（秒），避免网关无响应时界面长期卡在第一步
 TEMPLATE_VISION_API_TIMEOUT = float(os.getenv("TEMPLATE_VISION_API_TIMEOUT", "120"))
 # 设为 0/false/off 则不做 PDF/截图/视觉模型，仅用 OOXML 文本摘要（快，版式信息弱）
-_TVE = os.getenv("TEMPLATE_VISION_ENABLED", "1").strip().lower()
+_TVE = os.getenv("TEMPLATE_VISION_ENABLED", "0").strip().lower()
 TEMPLATE_VISION_ENABLED = _TVE not in ("0", "false", "no", "off")
 # 表格生成附带模板页截图（多模态）；关则仅 OOXML 文本上下文
 _TCV = os.getenv("TABLE_CELL_VISION", "1").strip().lower()
