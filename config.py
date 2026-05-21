@@ -34,33 +34,33 @@ if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
 # 弱知识库 + 联网档：enable_search 路径；视觉审查用 qwen3.6-plus（dashscope_chat 已关深度思考）
 # 表格生成优先使用有视觉能力的模型
-VISION_WEB_MODEL = _vw or "qwen3.5-plus-2026-04-20"
+VISION_WEB_MODEL = _vw or "qwen3.6-plus"
 # 模板整页视觉分析（PDF 页图 → JSON layout / table_page_hints）
-TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.5-plus-2026-04-20"
+TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.6-plus"
 # 入库前图片描述（单图 → 文本，向量库用）
-VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "gemini-3-pro"
-# 表格生成模型（优先使用有视觉能力的 qwen3.5-plus 系列）
-TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.5-plus-2026-04-20"
+VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.6-plus"
+# 表格生成模型（优先使用有视觉能力的 qwen3.6-plus 系列）
+TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.6-plus"
 # 表格生成备选模型
-TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.5-plus"
+TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.6-plus"
 # 强检索短文省 token；主正文用大模型
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-plus").strip()
 # 模板结构分析（纯文本：从 OOXML/视觉摘要推断填空位；与 SMALL_LLM 拆分，默认可用更快模型）
 TEMPLATE_ANALYZE_MODEL = (
-    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-27b"
+    os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "deepseek-v4-pro"
 )
 # 主正文生成（段落/长段/非联网档表格等）
 # 优先使用 qwen3.6-max-preview，额度耗尽时自动切换到 glm-5，再耗尽用 glm-5.1
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.6-max-preview"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "gpt-5.5"
 # 第一备选模型
-FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "glm-5"
+FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.6-max-preview"
 # 第二备选模型（当主模型和第一备选都额度耗尽时使用）
-FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "glm-5.1"
+FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "qwen3.6-plus"
 # 生成后审核（不传 enable_search）
 # 审核模型优先级：qwen3.5-flash-2026-02-23 -> qwen3.5-flash -> qwen3.6-flash-2026-04-16 -> qwen3.6-flash
-AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.5-flash-2026-02-23"
-AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.5-flash"
-AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.6-flash-2026-04-16"
+AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "deepseek-v4-pro"
+AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.6-flash"
+AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.6-plus"
 AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "qwen3.6-flash"
 TEMP_AUDIT = float(os.getenv("TEMP_AUDIT", "0.2"))
 
