@@ -8,6 +8,7 @@ from chromadb.config import Settings
 from core.chunker import Chunk
 from core.kb_registry import collection_name_for_slug
 from core.openai_embeddings import TimeoutOpenAIEmbedding
+from core.cache import cached_query
 import config
 
 

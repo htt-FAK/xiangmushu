@@ -98,6 +98,18 @@ GEN_MAX_TOKENS_WORD_FACTOR = int(os.getenv("GEN_MAX_TOKENS_WORD_FACTOR", "5"))
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "180"))
 OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "4"))
 
+# 性能优化配置
+# 并行任务数（同时进行的LLM调用数）
+MAX_PARALLEL_TASKS = int(os.getenv("MAX_PARALLEL_TASKS", "4"))
+# 是否启用缓存（相同query复用结果）
+ENABLE_QUERY_CACHE = os.getenv("ENABLE_QUERY_CACHE", "1").strip().lower() not in ("0", "false", "no", "off")
+# 缓存大小限制（条）
+QUERY_CACHE_SIZE = int(os.getenv("QUERY_CACHE_SIZE", "100"))
+# 审核开关（可以完全关闭以节省时间）
+ENABLE_AUDIT = os.getenv("ENABLE_AUDIT", "1").strip().lower() not in ("0", "false", "no", "off")
+# 批量表格单元格上限
+BATCH_MAX_CELLS = int(os.getenv("BATCH_MAX_CELLS", "8"))
+
 # 单次入库写入 Chroma 的最大 chunk 数（减小单次 embedding 体积，降低超时概率）
 EMBED_ADD_BATCH_SIZE = int(os.getenv("EMBED_ADD_BATCH_SIZE", "12"))
 
