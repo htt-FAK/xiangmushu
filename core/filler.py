@@ -1,6 +1,9 @@
 from typing import Any, Dict, List, Optional, Tuple
+import logging
 import re
 from copy import deepcopy
+
+_LOG = logging.getLogger(__name__)
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -11,13 +14,25 @@ from docx.text.paragraph import Paragraph
 
 import config
 from core.docx_typography import (
+    apply_abstract_body_formats_in_document,
     apply_document_typography,
     apply_rPr_to_run,
     build_body_rPr,
     build_rPr_for_paragraph,
     heading_level_from_style,
+    insert_paragraph_after,
+    remove_empty_body_paragraphs,
+    split_body_content_blocks,
 )
 from core.fill_task import FillTask
+from core.table_context import get_column_header_from_path
+from core.table_slot_expand import max_chars_for_column_header
+from core.template_slots import (
+    is_bracket_fill_slot,
+    is_pure_hint_line as slot_is_pure_hint_line,
+    looks_like_fill_instruction_line as slot_fill_instruction,
+    paragraph_slot_score,
+)
 
 
 class WordFiller:
@@ -36,9 +51,16 @@ class WordFiller:
         re.compile(r"待填写"),
         re.compile(r"待补充"),
         re.compile(r"此处填写"),
+        re.compile(r"在以下填写"),
+        re.compile(r"以下填写"),
+        re.compile(r"以下空白"),
+        re.compile(r"[X×]{4,}"),
+        re.compile(r"请.{0,12}填写"),
     ]
 
     _PURE_HINT_MAX_LEN = 40
+    _FILL_INSTRUCTION_MAX_LEN = 120
+    _KEYWORD_LINE_PREFIXES = ("关键词", "Key words", "Keywords", "关键字")
 
     @staticmethod
     def _chapter_text_compact(chapter: str) -> str:
@@ -59,7 +81,8 @@ class WordFiller:
 
     @classmethod
     def _is_abstract_chapter(cls, target_chapter: str) -> bool:
-        return "摘要" in cls._chapter_text_compact(target_chapter)
+        c = cls._chapter_text_compact(target_chapter).lower()
+        return "摘要" in c or c == "abstract"
 
     @staticmethod
     def _strip_leading_abstract_label(content: str) -> str:
@@ -254,22 +277,219 @@ class WordFiller:
 
     @classmethod
     def _is_pure_hint_line(cls, text: str) -> bool:
-        """整段几乎全是填写指引（如「（请在此填写摘要正文）」），不含大段说明。"""
+        """整段几乎全是填写指引（含【请在此填写…】）。"""
+        if is_bracket_fill_slot(text):
+            return True
+        return slot_is_pure_hint_line(text)
+
+    @classmethod
+    def _looks_like_fill_instruction_line(cls, text: str) -> bool:
+        """申报模板口语指引（如「摘要：在以下填写…」）。"""
+        if is_bracket_fill_slot(text):
+            return True
+        if slot_is_pure_hint_line(text):
+            return True
+        return slot_fill_instruction(text)
+
+    @staticmethod
+    def _hint_wants_full_replace(hint: Dict[str, Any]) -> bool:
+        rm = (hint.get("replace_mode") or "").strip().lower()
+        fs = (hint.get("fill_strategy") or "").strip().lower()
+        return rm == "full" or fs in ("full", "full_replace")
+
+    @classmethod
+    def _classify_scope_paragraph(cls, text: str) -> str:
         t = (text or "").strip()
-        if not t or len(t) > cls._PURE_HINT_MAX_LEN:
-            return False
-        if not cls._text_has_placeholder(t):
-            return False
-        span = cls._first_placeholder_span(t)
-        if not span:
-            return False
-        start, end = span
-        remainder = (t[:start] + t[end:]).strip()
-        remainder_clean = re.sub(
-            r"[（）()\s_。，,、：:【】《》\[\]「」]", "", remainder
-        )
-        remainder_clean = re.sub(r"(摘要|正文|此处|的)+", "", remainder_clean)
-        return len(remainder_clean) <= 2
+        if not t:
+            return "empty"
+        if any(t.startswith(p) for p in cls._KEYWORD_LINE_PREFIXES):
+            return "keyword"
+        if cls._looks_like_writing_rubric(t) or cls._looks_like_template_guidance(t):
+            return "rubric"
+        if (
+            cls._looks_like_fill_instruction_line(t)
+            or cls._is_pure_hint_line(t)
+            or cls._text_has_placeholder(t)
+        ):
+            return "hint"
+        return "other"
+
+    def _clear_non_body_scope_paragraphs(
+        self,
+        doc: Document,
+        scope: List[int],
+        body_idx: int,
+    ) -> None:
+        paras = doc.paragraphs
+        for idx in scope:
+            if idx == body_idx:
+                continue
+            kind = self._classify_scope_paragraph(paras[idx].text or "")
+            if kind in ("hint", "rubric", "empty"):
+                self._set_paragraph_text_keep_style(paras[idx], "")
+
+    @staticmethod
+    def _table_index_for_element(doc: Document, tbl_el) -> Optional[int]:
+        for i, t in enumerate(doc.tables):
+            if t._element is tbl_el:
+                return i
+        return None
+
+    def _collect_chapter_region(
+        self, doc: Document, target_chapter: str
+    ) -> Tuple[int, List[int], List[int]]:
+        """按 body 顺序返回 (标题段落下标, 本章段落下标, 本章表格 doc.tables 下标)。"""
+        paras = doc.paragraphs
+        start_idx = -1
+        chapter_lvl: Optional[int] = 1
+        para_scope: List[int] = []
+        table_scope: List[int] = []
+        in_chapter = False
+        para_idx = 0
+
+        for child in doc.element.body:
+            if child.tag == qn("w:p"):
+                if para_idx >= len(paras):
+                    break
+                para = paras[para_idx]
+                t = (para.text or "").strip()
+                lvl = self._para_heading_level(para)
+                if not in_chapter:
+                    if target_chapter and self._heading_matches_chapter(
+                        target_chapter, t
+                    ):
+                        in_chapter = True
+                        start_idx = para_idx
+                        chapter_lvl = lvl or 1
+                else:
+                    if (
+                        lvl is not None
+                        and lvl <= (chapter_lvl or 1)
+                        and t
+                    ):
+                        return start_idx, para_scope, table_scope
+                    para_scope.append(para_idx)
+                para_idx += 1
+            elif child.tag == qn("w:tbl") and in_chapter:
+                ti = self._table_index_for_element(doc, child)
+                if ti is not None:
+                    table_scope.append(ti)
+
+        if not in_chapter:
+            return -1, [], []
+        return start_idx, para_scope, table_scope
+
+    @classmethod
+    def _classify_scope_cell(cls, text: str) -> str:
+        t = (text or "").strip()
+        if not t:
+            return "empty"
+        if any(t.startswith(p) for p in cls._KEYWORD_LINE_PREFIXES):
+            return "keyword"
+        if cls._looks_like_writing_rubric(t) or cls._looks_like_template_guidance(
+            t
+        ):
+            return "rubric"
+        if (
+            cls._looks_like_fill_instruction_line(t)
+            or cls._is_pure_hint_line(t)
+            or cls._text_has_placeholder(t)
+        ):
+            return "hint"
+        return "other"
+
+    def _clear_abstract_non_body(
+        self,
+        doc: Document,
+        para_scope: List[int],
+        table_scope: List[int],
+        body_para_idx: int,
+        body_table: Optional[Tuple[int, int, int]],
+    ) -> None:
+        """摘要章：清空非正文槽的段落与表内 rubric/提示单元格。"""
+        paras = doc.paragraphs
+        for idx in para_scope:
+            if idx == body_para_idx:
+                continue
+            kind = self._classify_scope_paragraph(paras[idx].text or "")
+            if kind in ("hint", "rubric", "empty"):
+                self._set_paragraph_text_keep_style(paras[idx], "")
+
+        body_ti, body_r, body_c = body_table if body_table else (-1, -1, -1)
+        for ti in table_scope:
+            if ti >= len(doc.tables):
+                continue
+            table = doc.tables[ti]
+            for ri, row in enumerate(table.rows):
+                for ci, cell in enumerate(row.cells):
+                    if ti == body_ti and ri == body_r and ci == body_c:
+                        continue
+                    kind = self._classify_scope_cell(cell.text or "")
+                    if kind in ("hint", "rubric", "empty"):
+                        self._set_cell_text_keep_style(cell, "")
+
+    def _sweep_abstract_chapter_table_rubrics(self, doc: Document) -> None:
+        """回填结束后：清除摘要章范围内表内残留的撰写要求/提示。"""
+        for i, para in enumerate(doc.paragraphs):
+            t = (para.text or "").strip()
+            if not self._heading_matches_chapter("摘要", t):
+                continue
+            _start, _ps, table_scope = self._collect_chapter_region(doc, t)
+            if _start < 0:
+                continue
+            for ti in table_scope:
+                if ti >= len(doc.tables):
+                    continue
+                for row in doc.tables[ti].rows:
+                    for cell in row.cells:
+                        txt = cell.text or ""
+                        if (
+                            self._looks_like_writing_rubric(txt)
+                            or self._looks_like_template_guidance(txt)
+                            or self._looks_like_fill_instruction_line(txt)
+                            or self._is_pure_hint_line(txt)
+                        ):
+                            self._set_cell_text_keep_style(cell, "")
+            break
+
+    def _remove_chapter_rubric_tables(
+        self,
+        doc: Document,
+        table_scope: List[int],
+        body_table: Optional[Tuple[int, int, int]] = None,
+    ) -> None:
+        """删除章内单行单列且为 rubric/提示/已空的表格（去掉撰写要求框）。"""
+        body_ti, body_r, body_c = body_table if body_table else (-1, -1, -1)
+        for ti in sorted(table_scope, reverse=True):
+            if ti >= len(doc.tables):
+                continue
+            if ti == body_ti:
+                continue
+            table = doc.tables[ti]
+            if len(table.rows) != 1 or len(table.rows[0].cells) != 1:
+                continue
+            cell = table.rows[0].cells[0]
+            txt = cell.text or ""
+            kind = self._classify_scope_cell(txt)
+            if kind not in ("rubric", "hint", "empty") and txt.strip():
+                continue
+            tbl_el = table._tbl
+            parent = tbl_el.getparent()
+            if parent is not None:
+                parent.remove(tbl_el)
+
+    def _remove_rubric_tables_in_abstract_chapters(self, doc: Document) -> None:
+        for para in doc.paragraphs:
+            t = (para.text or "").strip()
+            if not (
+                re.match(r"^摘\s*要\s*$", t)
+                or self._heading_matches_chapter("摘要", t)
+            ):
+                continue
+            _start, _ps, table_scope = self._collect_chapter_region(doc, t)
+            if _start < 0 or not table_scope:
+                continue
+            self._remove_chapter_rubric_tables(doc, table_scope, None)
 
     @staticmethod
     def _para_heading_level(para: Paragraph) -> Optional[int]:
@@ -297,14 +517,25 @@ class WordFiller:
                 self._replace_anchor_everywhere(doc, anchor, content)
                 continue
             if task.task_type == "table_cell":
-                wl = int(task.word_limit or 120)
-                tight = min(60, max(25, wl * 2)) if wl <= 45 else None
-                content = self.clean_table_answer(content, wl, max_chars=tight)
+                wl = int(task.word_limit or 80)
+                loc = task.location_hint or {}
+                hdr = get_column_header_from_path(
+                    template_path,
+                    int(loc.get("table_index", 0)),
+                    int(loc.get("col", 0)),
+                )
+                cap = max_chars_for_column_header(hdr)
+                content = self.clean_table_answer(
+                    content, wl, max_chars=cap
+                )
                 self._fill_table_cell(doc, task, content)
             else:
                 self._fill_paragraph(doc, task, content)
 
         self._sweep_residual_hint_paragraphs(doc)
+        self._sweep_abstract_chapter_table_rubrics(doc)
+        self._remove_rubric_tables_in_abstract_chapters(doc)
+        remove_empty_body_paragraphs(doc)
 
         if getattr(config, "ADJUST_TABLE_READABILITY", True):
             for table in doc.tables:
@@ -312,6 +543,7 @@ class WordFiller:
 
         if getattr(config, "APPLY_UNIFIED_TYPOGRAPHY", True):
             apply_document_typography(doc)
+            apply_abstract_body_formats_in_document(doc)
 
         doc.save(output_path)
 
@@ -355,6 +587,19 @@ class WordFiller:
         else:
             nr = para.add_run(text)
             apply_rPr_to_run(nr, rpr)
+
+    def _set_paragraph_blocks_keep_style(
+        self, anchor_para: Paragraph, content: str
+    ) -> Paragraph:
+        """多段正文写入：首段替换锚点段，后续段紧接插入，不留空行。"""
+        blocks = split_body_content_blocks(content)
+        self._set_paragraph_text_keep_style(anchor_para, blocks[0])
+        last = anchor_para
+        for block in blocks[1:]:
+            np = insert_paragraph_after(last)
+            self._set_paragraph_text_keep_style(np, block)
+            last = np
+        return last
 
     @staticmethod
     def _set_cell_text_keep_style(cell, text: str) -> None:
@@ -409,58 +654,85 @@ class WordFiller:
         self, doc: Document, target_chapter: str
     ) -> Tuple[int, List[int]]:
         """返回 (章节标题段落下标, 本章内后续段落下标列表)。"""
-        paras = doc.paragraphs
-        start_idx = -1
-        chapter_lvl: Optional[int] = 1
-
-        for i, para in enumerate(paras):
-            t = para.text.strip()
-            if target_chapter and self._heading_matches_chapter(target_chapter, t):
-                start_idx = i
-                chapter_lvl = self._para_heading_level(para) or 1
-                break
-
-        if start_idx < 0:
-            return -1, []
-
-        scope: List[int] = []
-        for j in range(start_idx + 1, len(paras)):
-            para = paras[j]
-            t = para.text.strip()
-            lvl = self._para_heading_level(para)
-            if lvl is not None and lvl <= (chapter_lvl or 1) and t:
-                break
-            scope.append(j)
-        return start_idx, scope
+        start_idx, para_scope, _ = self._collect_chapter_region(doc, target_chapter)
+        return start_idx, para_scope
 
     def _score_paragraph_candidate(
         self, para: Paragraph, para_text_hint: str
     ) -> int:
-        text = para.text.strip()
-        if para_text_hint and para_text_hint in (para.text or ""):
-            return 3
-        if self._text_has_placeholder(text):
-            return 2
-        if self._looks_like_template_guidance(text):
-            return 2
-        if not text:
-            return 1
-        return 0
+        return paragraph_slot_score(
+            para.text or "",
+            para_text_hint,
+            writing_rubric_fn=self._looks_like_writing_rubric,
+            template_guidance_fn=self._looks_like_template_guidance,
+        )
 
-    def _clear_pure_hint_paragraph(self, para: Paragraph) -> None:
-        if self._is_pure_hint_line(para.text or ""):
+    def _score_table_cell_candidate(
+        self, cell_text: str, para_text_hint: str
+    ) -> int:
+        return paragraph_slot_score(
+            cell_text or "",
+            para_text_hint,
+            writing_rubric_fn=self._looks_like_writing_rubric,
+            template_guidance_fn=self._looks_like_template_guidance,
+        )
+
+    def _find_best_table_body_slot(
+        self, doc: Document, table_scope: List[int], para_text_hint: str
+    ) -> Tuple[int, Tuple[int, int, int], int]:
+        """返回 (score, (table_index, row, col), table_index)。"""
+        best_score = 0
+        best_slot: Tuple[int, int, int] = (0, 0, 0)
+        best_ti = -1
+        for ti in table_scope:
+            if ti >= len(doc.tables):
+                continue
+            table = doc.tables[ti]
+            for ri, row in enumerate(table.rows):
+                for ci, cell in enumerate(row.cells):
+                    sc = self._score_table_cell_candidate(
+                        cell.text or "", para_text_hint
+                    )
+                    if sc > best_score:
+                        best_score = sc
+                        best_slot = (ti, ri, ci)
+                        best_ti = ti
+        return best_score, best_slot, best_ti
+
+    def _write_table_cell_content(
+        self, cell, content: str, hint: Dict[str, Any]
+    ) -> None:
+        cell_text = cell.text or ""
+        if (
+            self._hint_wants_full_replace(hint)
+            or self._looks_like_writing_rubric(cell_text)
+            or self._looks_like_template_guidance(cell_text)
+            or self._looks_like_fill_instruction_line(cell_text)
+            or self._is_pure_hint_line(cell_text)
+        ):
+            self._set_cell_text_keep_style(cell, content)
+            return
+        self._set_cell_text_keep_style(cell, content)
+
+    def _clear_residual_hint_paragraph(self, para: Paragraph) -> None:
+        t = para.text or ""
+        if (
+            is_bracket_fill_slot(t)
+            or self._is_pure_hint_line(t)
+            or self._looks_like_fill_instruction_line(t)
+        ):
             self._set_paragraph_text_keep_style(para, "")
 
     def _clear_adjacent_pure_hints(self, doc: Document, filled_idx: int) -> None:
         paras = doc.paragraphs
         for j in (filled_idx - 1, filled_idx + 1):
             if 0 <= j < len(paras):
-                self._clear_pure_hint_paragraph(paras[j])
+                self._clear_residual_hint_paragraph(paras[j])
 
     def _sweep_residual_hint_paragraphs(self, doc: Document) -> None:
         """邻接清理未覆盖的独立提示行，回填结束后再扫一遍正文段落。"""
         for para in doc.paragraphs:
-            self._clear_pure_hint_paragraph(para)
+            self._clear_residual_hint_paragraph(para)
 
     def _write_paragraph_content(
         self, para: Paragraph, content: str, hint: Dict[str, Any]
@@ -468,18 +740,37 @@ class WordFiller:
         text = para.text or ""
         mode = (hint.get("replace_mode") or "").strip().lower()
 
+        if is_bracket_fill_slot(text):
+            blocks = split_body_content_blocks(content)
+            if len(blocks) <= 1:
+                self._set_paragraph_text_keep_style(para, blocks[0])
+            else:
+                self._set_paragraph_blocks_keep_style(para, content)
+            return
+
+        if self._hint_wants_full_replace(hint) and (
+            self._looks_like_fill_instruction_line(text)
+            or self._is_pure_hint_line(text)
+            or self._looks_like_writing_rubric(text)
+            or self._looks_like_template_guidance(text)
+        ):
+            self._write_body_content_to_paragraph(para, content)
+            return
+
         # 检查是否是"撰写要求"类模板说明文字（需要完全替换）
         if self._looks_like_writing_rubric(text):
-            self._set_paragraph_text_keep_style(para, content)
+            self._write_body_content_to_paragraph(para, content)
             return
 
         # 检查是否是"说明...建议..."类模板指引文字
         if self._looks_like_template_guidance(text):
-            self._set_paragraph_text_keep_style(para, content)
+            self._write_body_content_to_paragraph(para, content)
             return
 
-        if self._is_pure_hint_line(text):
-            self._set_paragraph_text_keep_style(para, content)
+        if self._is_pure_hint_line(text) or self._looks_like_fill_instruction_line(
+            text
+        ):
+            self._write_body_content_to_paragraph(para, content)
             return
 
         if mode == "placeholder_only":
@@ -493,7 +784,17 @@ class WordFiller:
                 if self._fill_paragraph_placeholder_only(para, content, hint):
                     return
 
-        self._set_paragraph_text_keep_style(para, content)
+        self._write_body_content_to_paragraph(para, content)
+
+    def _write_body_content_to_paragraph(
+        self, para: Paragraph, content: str
+    ) -> None:
+        """写入正文：多段时用连续段落、无空行。"""
+        blocks = split_body_content_blocks(content)
+        if len(blocks) <= 1:
+            self._set_paragraph_text_keep_style(para, blocks[0])
+        else:
+            self._set_paragraph_blocks_keep_style(para, content)
 
     def _fill_paragraph(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint or {}
@@ -504,8 +805,10 @@ class WordFiller:
             # 无章节：按原逻辑找第一个占位/空段
             for para in paras:
                 text = para.text.strip()
-                if self._text_has_placeholder(text) or (
-                    para_text_hint and para_text_hint in (para.text or "")
+                if (
+                    self._text_has_placeholder(text)
+                    or self._looks_like_fill_instruction_line(text)
+                    or (para_text_hint and para_text_hint in (para.text or ""))
                 ):
                     self._write_paragraph_content(para, content, hint)
                     return
@@ -514,25 +817,77 @@ class WordFiller:
                     return
             return
 
-        _start, scope = self._collect_chapter_scope(doc, task.target_chapter)
-        if not scope:
+        is_abstract = self._is_abstract_chapter(task.target_chapter or "")
+        if is_abstract:
+            _start, para_scope, table_scope = self._collect_chapter_region(
+                doc, task.target_chapter
+            )
+        else:
+            _start, para_scope = self._collect_chapter_scope(
+                doc, task.target_chapter
+            )
+            table_scope = []
+
+        if not para_scope and not (is_abstract and table_scope):
             return
 
         best_idx = -1
         best_score = 0
-        for idx in scope:
+        for idx in para_scope:
             sc = self._score_paragraph_candidate(paras[idx], para_text_hint)
             if sc > best_score:
                 best_score = sc
                 best_idx = idx
 
-        if best_idx < 0 or best_score == 0:
+        table_score = 0
+        table_slot: Tuple[int, int, int] = (-1, -1, -1)
+        if is_abstract and table_scope:
+            table_score, table_slot, _ = self._find_best_table_body_slot(
+                doc, table_scope, para_text_hint
+            )
+
+        body_table: Optional[Tuple[int, int, int]] = None
+        use_table = False
+        if is_abstract:
+            # 摘要：只要有可写段落（含空段），正文写在段落；表内撰写要求只清空
+            if best_score >= 1:
+                use_table = False
+            elif table_score > 0:
+                use_table = True
+            else:
+                return
+        elif best_score < 10:
             return
 
-        target_para = paras[best_idx]
-        self._write_paragraph_content(target_para, content, hint)
+        if use_table and table_slot[0] >= 0:
+            ti, ri, ci = table_slot
+            if ti < len(doc.tables):
+                table = doc.tables[ti]
+                if ri < len(table.rows) and ci < len(table.rows[ri].cells):
+                    cell = table.rows[ri].cells[ci]
+                    self._write_table_cell_content(cell, content, hint)
+                    body_table = table_slot
+                    try:
+                        table.autofit = False
+                    except Exception:
+                        pass
+        elif best_idx >= 0:
+            target_para = paras[best_idx]
+            self._write_paragraph_content(target_para, content, hint)
+        else:
+            return
 
-        if best_score <= 2:
+        if is_abstract:
+            body_para = best_idx if not use_table else -1
+            if body_para >= 0 or body_table:
+                self._clear_abstract_non_body(
+                    doc,
+                    para_scope,
+                    table_scope,
+                    body_para,
+                    body_table,
+                )
+        elif best_idx >= 0 and best_score < 40:
             self._clear_adjacent_pure_hints(doc, best_idx)
 
     def _fill_table_cell(self, doc: Document, task: FillTask, content: str):
@@ -542,6 +897,12 @@ class WordFiller:
         col_idx = hint.get("col", 0)
 
         if table_idx >= len(doc.tables):
+            _LOG.error(
+                "fill_table_cell table_index=%s out of range n_tables=%s chapter=%r",
+                table_idx,
+                len(doc.tables),
+                task.target_chapter,
+            )
             return
         table = doc.tables[table_idx]
         if row_idx >= len(table.rows):

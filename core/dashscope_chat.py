@@ -69,6 +69,13 @@ def _kwargs_for_dashscope_backup(kwargs: dict[str, Any], *, for_enable_search: b
     return bk
 
 
+def _chat_content_empty(response: Any) -> bool:
+    try:
+        return not (response.choices[0].message.content or "").strip()
+    except (AttributeError, IndexError, TypeError, KeyError):
+        return True
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
@@ -80,9 +87,19 @@ def _is_retryable(exc: BaseException) -> bool:
             resp = getattr(exc, "response", None)
             if resp is not None:
                 code = getattr(resp, "status_code", None)
-        if code in (408, 429, 500, 502, 503, 504):
+        if code in (402, 408, 429, 500, 502, 503, 504):
             return True
     return False
+
+
+def _create_on_client(client: Any, kwargs: dict[str, Any], extra_in: dict) -> Any:
+    kw = dict(kwargs)
+    merged = _apply_extra_body(client, dict(extra_in))
+    if merged is not None:
+        kw["extra_body"] = merged
+    else:
+        kw.pop("extra_body", None)
+    return client.chat.completions.create(**kw)
 
 
 def chat_completions_create(client: Any, **kwargs: Any):
@@ -100,8 +117,43 @@ def chat_completions_create(client: Any, **kwargs: Any):
         kwargs["extra_body"] = merged
     enable_search = bool((merged or {}).get("enable_search"))
 
+    backup = config.dashscope_backup_chat_client()
+    model_id = str(kwargs.get("model") or "")
+
+    if (
+        backup is not None
+        and backup is not client
+        and not _is_dashscope_compatible_client(client)
+        and config.chat_prefers_dashscope_first(model_id)
+    ):
+        _LOG.info(
+            "chat 模型 %s 直连百炼 compatible-mode（跳过复星网关）",
+            model_id,
+        )
+        return _create_on_client(
+            backup,
+            _kwargs_for_dashscope_backup(kwargs, for_enable_search=enable_search),
+            extra,
+        )
+
     try:
-        return client.chat.completions.create(**kwargs)
+        resp = _create_on_client(client, kwargs, extra)
+        if (
+            _chat_content_empty(resp)
+            and backup is not None
+            and backup is not client
+            and not _is_dashscope_compatible_client(client)
+        ):
+            _LOG.warning(
+                "chat 主通道空回复 (model=%s)，切换百炼 compatible-mode 重试",
+                kwargs.get("model"),
+            )
+            return _create_on_client(
+                backup,
+                _kwargs_for_dashscope_backup(kwargs, for_enable_search=enable_search),
+                extra,
+            )
+        return resp
     except Exception as e:
         if merged and "enable_thinking" in merged and _is_enable_thinking_rejected(e):
             kwargs_retry = dict(kwargs)
@@ -113,7 +165,6 @@ def chat_completions_create(client: Any, **kwargs: Any):
                 kwargs_retry.pop("extra_body", None)
             _LOG.warning("网关不支持 enable_thinking，已去掉该参数后重试")
             return client.chat.completions.create(**kwargs_retry)
-        backup = config.dashscope_backup_chat_client()
         if (
             enable_search
             and backup is not None
@@ -126,8 +177,10 @@ def chat_completions_create(client: Any, **kwargs: Any):
                 e,
                 config.VISION_WEB_MODEL,
             )
-            return backup.chat.completions.create(
-                **_kwargs_for_dashscope_backup(kwargs, for_enable_search=True)
+            return _create_on_client(
+                backup,
+                _kwargs_for_dashscope_backup(kwargs, for_enable_search=True),
+                extra,
             )
         if not _is_retryable(e):
             raise
@@ -140,6 +193,8 @@ def chat_completions_create(client: Any, **kwargs: Any):
             type(e).__name__,
             e,
         )
-        return backup.chat.completions.create(
-            **_kwargs_for_dashscope_backup(kwargs, for_enable_search=False)
+        return _create_on_client(
+            backup,
+            _kwargs_for_dashscope_backup(kwargs, for_enable_search=False),
+            extra,
         )

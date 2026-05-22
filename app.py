@@ -292,14 +292,24 @@ def _run_template_vision_and_analyze(docx_path: str):
             return None
         status.write(vis_msg or "（视觉阶段无额外说明）")
         analyze_model = config.TEMPLATE_ANALYZE_MODEL
+        analyze_timeout = float(getattr(config, "TEMPLATE_ANALYZE_TIMEOUT", 90))
         status.write(
             "② **结构分析**：识别填空位（纯文本，模型 "
             f"`{analyze_model}`）。若模板无 `{{锚点}}`，此步必调用 LLM；"
-            f"超时见 `OPENAI_TIMEOUT`（当前 {config.OPENAI_TIMEOUT}s）。"
+            f"本步超时 {analyze_timeout:.0f}s（`TEMPLATE_ANALYZE_TIMEOUT`）；"
+            "有百炼 Key 时结构分析走百炼以避开网关卡顿。"
+            "终端 `APP_CONSOLE_LOG=1` 可见 `template_analyze` 日志。"
         )
+        status.write("⏳ 正在请求结构分析 API…（大模板可能需 30～90 秒）")
         try:
+            from core.slot_scanner import scan_deterministic_fill_tasks
+            from core.task_reconcile import reconcile_fill_tasks
+
             tasks: list[FillTask] = get_analyzer().analyze(
                 docx_path, vision_profile=vis_prof
+            )
+            tasks = reconcile_fill_tasks(
+                tasks, scan_deterministic_fill_tasks(docx_path)
             )
         except Exception as e:
             _LOG.exception("TemplateAnalyzer.analyze")
@@ -474,6 +484,51 @@ def _render_persistent_download() -> None:
                 st.session_state.pop(SS_LAST_OUT_PATH, None)
                 st.session_state.pop(SS_LAST_OUT_NAME, None)
                 st.rerun()
+
+
+def _render_hello_tab(active_slug: str) -> None:
+    """首页：产品说明、推荐步骤、环境与配置只读摘要。"""
+    st.markdown("#### 欢迎使用项目计划书生成器")
+    st.markdown(
+        "基于知识库 RAG 与 Word 模板填空，面向申报类、计划类文档的半自动撰写。"
+        "侧栏管理知识库与生成参数；下方标签页完成入库、模板分析与生成下载。"
+    )
+    st.markdown("##### 推荐使用顺序")
+    st.markdown(
+        "1. **侧栏**：确认或新建知识库，设置生成强度与联网/审核等开关。  \n"
+        "2. **知识库管理**：上传 PDF/Word 等资料并入库。  \n"
+        "3. **模板配置**：上传 `.docx` 模板并分析填空位。  \n"
+        "4. **生成预览**：一键生成并下载已填写文档。"
+    )
+    st.markdown("##### 当前环境")
+    embed_ok = config.embedding_llm_configured()
+    chat_ok = config.chat_llm_configured()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("嵌入 / 入库", "就绪" if embed_ok else "未配置")
+    c2.metric("聊天 / 生成", "就绪" if chat_ok else "未配置")
+    c3.metric("生成强度", st.session_state.get(SS_GENERATION_MODE, "普通"))
+    if not embed_ok:
+        st.warning(
+            "入库与检索需百炼兼容 Key：在 `.env` 配置 `DASHSCOPE_API_KEY` 或 `OPENAI_API_KEY`。"
+        )
+    if not chat_ok:
+        st.warning(
+            "生成需聊天通道：配置 `FOSUN_AIGW_API_KEY`（复星网关）或上述百炼 Key。"
+        )
+    reg = load_registry()
+    label = next((e["label"] for e in reg if e["slug"] == active_slug), active_slug)
+    st.caption(f"当前知识库：**{label}** · `{active_slug}`")
+    st.caption(
+        "模型：小 `"
+        + config.SMALL_LLM_MODEL
+        + "` · 大 `"
+        + config.LARGE_LLM_MODEL
+        + "` · 联网 `"
+        + config.VISION_WEB_MODEL
+        + "` · 审核 `"
+        + config.AUDIT_LLM_MODEL
+        + "`"
+    )
 
 
 st.set_page_config(page_title="计划书生成器", page_icon="◆", layout="wide")
@@ -667,9 +722,12 @@ with st.sidebar:
             help="清除已缓存的模板结构分析，用当前文件重新识别填空位。",
         )
 
-st.info("推荐顺序：侧栏确认知识库 → **知识库管理** 入库 → **模板配置** 上传并分析 → **生成预览** 一键生成。")
+tab_home, tab_kb, tab_tpl, tab_gen = st.tabs(
+    ["首页", "知识库管理", "模板配置", "生成预览"]
+)
 
-tab_kb, tab_tpl, tab_gen = st.tabs(["知识库管理", "模板配置", "生成预览"])
+with tab_home:
+    _render_hello_tab(active_slug)
 
 with tab_kb:
     st.markdown("#### 知识库管理")
@@ -961,6 +1019,13 @@ with tab_gen:
                     for i, task in enumerate(tasks):
                         if task.word_limit <= 0:
                             task.word_limit = default_word
+                        if task.task_type == "paragraph" and WordFiller._is_abstract_chapter(
+                            task.target_chapter or ""
+                        ):
+                            task.word_limit = max(
+                                int(task.word_limit),
+                                int(getattr(config, "ABSTRACT_WORD_LIMIT", 650)),
+                            )
                         st.markdown(
                             f"**正在生成** · {task.target_chapter} · {i + 1}/{n_tasks} · "
                             f"累计约 {total_chars} 字"

@@ -1035,6 +1035,76 @@ def _offline_filler_abstract_hint_line() -> bool:
     return True
 
 
+def _offline_filler_abstract_instruction_below_fill() -> bool:
+    """「摘要：在以下填写…」指引行应被替换/清除，勿仅在下方空段叠稿。"""
+    print("=== WordFiller 摘要在以下填写指引（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    try:
+        d.styles["Heading 1"]
+    except KeyError:
+        d.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+    d.add_paragraph("摘  要", style="Heading 1")
+    d.add_paragraph("摘要：在以下填写正文，字数 300–500 字。")
+    d.add_paragraph("")
+    d.add_paragraph("关键词：测试")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="abs_inst",
+                    target_chapter="摘要",
+                    task_type="paragraph",
+                    description="摘要正文",
+                    location_hint={},
+                    word_limit=500,
+                )
+            ],
+            ["本项目面向申报场景，实现了基于 RAG 的计划书半自动撰写与 Word 回填。"],
+            out,
+        )
+        d2 = Doc(out)
+        texts = [p.text for p in d2.paragraphs]
+        joined = "\n".join(texts)
+        if "在以下填写" in joined:
+            print(f"  [FAIL] 仍含指引行 {texts!r}")
+            return False
+        if "本项目面向申报场景" not in joined:
+            print(f"  [FAIL] 未写入摘要 {texts!r}")
+            return False
+        body_parts = [
+            t.strip()
+            for t in texts
+            if "本项目面向申报场景" in t
+        ]
+        if not body_parts:
+            print(f"  [FAIL] 未找到正文段 {texts!r}")
+            return False
+        if len(body_parts) > 1:
+            print(f"  [FAIL] 正文不应拆成多段叠写 {texts!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
 def _offline_filler_abstract_heading_alias() -> bool:
     """任务章节写「摘要」、模板标题为「摘  要」且占位为【】时仍能命中并写入。"""
     print("=== WordFiller 摘要章节别名匹配（offline）===")
@@ -1154,6 +1224,213 @@ def _offline_filler_abstract_writing_rubric() -> bool:
                 os.remove(p)
             except OSError:
                 pass
+    print("  [OK]")
+    return True
+
+
+def _offline_filler_abstract_rubric_in_table() -> bool:
+    """撰写要求位于表格单元格（灰框）时清空表内说明，正文写在下方段落。"""
+    print("=== WordFiller 摘要表内撰写要求（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+    from docx.enum.style import WD_STYLE_TYPE
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    rubric = (
+        "撰写要求\n"
+        "• 用300—500字概述智能体应用项目：面向什么真实场景、解决什么问题、目标用户是谁。\n"
+        "• 说明综合使用的核心能力：角色设定、工作流、数据库、知识库、插件调用、测试与演示方式。\n"
+        "• 概括最终成果：可运行入口、主要功能、典型演示效果、创新点与不足。\n"
+        "• 摘要中避免只写“我学会了什么”，应突出“项目做成了什么、如何做成、效果如何”。"
+    )
+    body = "表内 rubric 已清除，摘要正文写在灰框下方段落。"
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    try:
+        d.styles["Heading 1"]
+    except KeyError:
+        d.styles.add_style("Heading 1", WD_STYLE_TYPE.PARAGRAPH)
+    d.add_paragraph("摘  要", style="Heading 1")
+    tbl = d.add_table(rows=1, cols=1)
+    tbl.cell(0, 0).text = rubric
+    d.add_paragraph("")
+    d.add_paragraph("关键词：测试")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="rub_tbl",
+                    target_chapter="摘要",
+                    task_type="paragraph",
+                    description="摘要正文",
+                    location_hint={},
+                    word_limit=500,
+                )
+            ],
+            [body],
+            out,
+        )
+        d2 = Doc(out)
+        joined_para = "\n".join(p.text for p in d2.paragraphs)
+        joined_tables = "\n".join(
+            cell.text
+            for t in d2.tables
+            for row in t.rows
+            for cell in row.cells
+        )
+        joined = joined_para + "\n" + joined_tables
+        if "用300—500字" in joined or "我学会了什么" in joined or "撰写要求" in joined:
+            print(f"  [FAIL] 表内 rubric 应清除 {joined[:500]!r}…")
+            return False
+        if len(d2.tables) > 0:
+            print(f"  [FAIL] 摘要 rubric 单格表应删除，仍有 {len(d2.tables)} 个表")
+            return False
+        if body not in joined_para:
+            print(f"  [FAIL] 正文应在段落而非表内 {joined_para!r}")
+            return False
+        if "关键词：测试" not in joined_para:
+            print(f"  [FAIL] 关键词行应保留 {joined_para!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_innovation_table_scan_tasks() -> bool:
+    print("=== 创新点三列表扫槽（offline）===")
+    from core.slot_scanner import scan_placeholder_slots
+
+    p = "data/templates/智能体应用开发实践.docx"
+    slots = [
+        s
+        for s in scan_placeholder_slots(p)
+        if s.location_hint.get("table_index") == 35
+    ]
+    keys = {(s.location_hint["row"], s.location_hint["col"]) for s in slots}
+    if not {(1, 0), (1, 1), (1, 2)}.issubset(keys):
+        print(f"  [FAIL] 第 1 数据行三列均应有任务，得 {keys}")
+        return False
+    if len(keys) < 5:
+        print(f"  [FAIL] 创新点表任务过少 {keys}")
+        return False
+    if not any(s.word_limit <= 60 for s in slots if s.location_hint["col"] == 0):
+        print("  [FAIL] 创新点列应有较短字数上限")
+        return False
+    print("  [OK]")
+    return True
+
+
+def _offline_filler_bracket_fill_slot() -> bool:
+    """【请在此填写…】应写入占位行，而非 6.x 小节标题。"""
+    print("=== WordFiller bracket 占位行（offline）===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+
+    from core.fill_task import FillTask
+    from core.filler import WordFiller
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    d.add_paragraph("第6章 总结与反思")
+    d.add_paragraph("6.1 核心收获")
+    d.add_paragraph("围绕角色设定与工作流进行总结。")
+    d.add_paragraph("【请在此填写核心收获】")
+    d.save(path)
+    out = path.replace(".docx", "_out.docx")
+    body = "本项目通过角色设定与工作流串联知识库，实现可演示的智能体应用。"
+    try:
+        WordFiller().fill_template(
+            path,
+            [
+                FillTask(
+                    task_id="b1",
+                    target_chapter="第6章 总结与反思",
+                    task_type="paragraph",
+                    description="核心收获",
+                    location_hint={
+                        "paragraph_text": "【请在此填写核心收获】",
+                        "replace_mode": "full",
+                    },
+                    word_limit=500,
+                )
+            ],
+            [body],
+            out,
+        )
+        d2 = Doc(out)
+        texts = [p.text.strip() for p in d2.paragraphs if p.text.strip()]
+        if "【请在此填写核心收获】" in "\n".join(texts):
+            print(f"  [FAIL] 占位行应被替换 {texts!r}")
+            return False
+        if body not in texts:
+            print(f"  [FAIL] 正文未写入 {texts!r}")
+            return False
+        if texts[1] != "6.1 核心收获":
+            print(f"  [FAIL] 小节标题被改写 {texts!r}")
+            return False
+    finally:
+        for p in (path, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    print("  [OK]")
+    return True
+
+
+def _offline_reconcile_bracket_task() -> bool:
+    print("=== reconcile_fill_tasks 补 bracket 任务（offline）===")
+    from core.fill_task import FillTask
+    from core.task_reconcile import reconcile_fill_tasks
+
+    analyzer: list = []
+    scanner = [
+        FillTask(
+            task_id="s1",
+            target_chapter="第6章 总结与反思",
+            task_type="paragraph",
+            description="填写：请在此填写未来展望",
+            location_hint={
+                "paragraph_text": "【请在此填写未来展望】",
+                "replace_mode": "full",
+            },
+            word_limit=500,
+        )
+    ]
+    merged = reconcile_fill_tasks(analyzer, scanner)
+    if len(merged) != 1:
+        print(f"  [FAIL] 应补 1 条任务，得 {len(merged)}")
+        return False
+    if merged[0].location_hint.get("paragraph_text") != "【请在此填写未来展望】":
+        print(f"  [FAIL] hint 异常 {merged[0].location_hint!r}")
+        return False
+    print("  [OK]")
+    return True
+
+
+def _offline_batch_json_recover() -> bool:
+    print("=== batch_generator._parse_batch_json 宽松解析（offline）===")
+    from core.batch_generator import _parse_batch_json
+
+    raw = '说明\n{"0": "甲", "1": "乙"}'
+    data = _parse_batch_json(raw, 2)
+    if not data or data.get(0) != "甲" or data.get(1) != "乙":
+        print(f"  [FAIL] {data!r}")
+        return False
     print("  [OK]")
     return True
 
@@ -1407,8 +1684,14 @@ def _run_all_offline() -> bool:
         ("batch_json_fence", _offline_batch_json_fence),
         ("filler_placeholder_only_para", _offline_filler_paragraph_placeholder_only),
         ("filler_abstract_hint", _offline_filler_abstract_hint_line),
+        ("filler_abstract_instruction", _offline_filler_abstract_instruction_below_fill),
         ("filler_abstract_heading_alias", _offline_filler_abstract_heading_alias),
         ("filler_abstract_writing_rubric", _offline_filler_abstract_writing_rubric),
+        ("filler_abstract_rubric_in_table", _offline_filler_abstract_rubric_in_table),
+        ("innovation_table_scan", _offline_innovation_table_scan_tasks),
+        ("filler_bracket_slot", _offline_filler_bracket_fill_slot),
+        ("reconcile_bracket", _offline_reconcile_bracket_task),
+        ("batch_json_recover", _offline_batch_json_recover),
         ("filler_guidance_beats_empty", _offline_filler_guidance_beats_empty),
         ("docx_typography", _offline_docx_typography),
         ("table_cell_multimodal", _offline_table_cell_multimodal_content),

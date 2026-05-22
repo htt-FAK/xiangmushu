@@ -9,6 +9,7 @@ import config
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.enum.text import WD_LINE_SPACING
 from docx.shared import Pt
 from docx.text.paragraph import Paragraph
 
@@ -20,6 +21,40 @@ SZ_H3 = 24  # 小四 12pt
 
 _FONT_ASCII = "SimSun"
 _FONT_EAST_ASIA = "宋体"
+
+_KEYWORD_PREFIXES = ("关键词", "Key words", "Keywords", "关键字")
+
+
+def body_first_line_indent_pt() -> float:
+    """正文首行缩进：小四宋体下 24pt ≈ 两个汉字宽。"""
+    return float(getattr(config, "BODY_FIRST_LINE_INDENT_PT", 24) or 24)
+
+
+def is_keyword_line(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and any(t.startswith(p) for p in _KEYWORD_PREFIXES)
+
+
+def split_body_content_blocks(text: str) -> list[str]:
+    """按换行拆成段落块，合并连续空行，段间不留空。"""
+    if not text:
+        return [""]
+    s = re.sub(r"\r\n?", "\n", text.strip())
+    s = re.sub(r"\n{2,}", "\n", s)
+    parts = [p.strip() for p in s.split("\n") if p.strip()]
+    return parts if parts else [""]
+
+
+def insert_paragraph_after(paragraph: Paragraph) -> Paragraph:
+    new_p = OxmlElement("w:p")
+    paragraph._p.addnext(new_p)
+    return Paragraph(new_p, paragraph._parent)
+
+
+def apply_compact_paragraph_spacing(para: Paragraph) -> None:
+    pf = para.paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(0)
 
 
 def heading_level_from_style(style_name: str) -> Optional[int]:
@@ -114,8 +149,8 @@ def apply_document_typography(doc: Document) -> None:
 
 
 def apply_body_first_line_indent(doc: Document) -> None:
-    """正文段落首行缩进（不处理标题行、摘要标题、表格内段落）。"""
-    pt_val = float(getattr(config, "BODY_FIRST_LINE_INDENT_PT", 0) or 0)
+    """正文段落首行缩进两字符（不处理标题、摘要标题行、关键词行）。"""
+    pt_val = body_first_line_indent_pt()
     if pt_val <= 0:
         return
     for para in doc.paragraphs:
@@ -125,13 +160,64 @@ def apply_body_first_line_indent(doc: Document) -> None:
         t = (para.text or "").strip()
         if re.match(r"^摘\s*要\s*$", t):
             continue
+        if is_keyword_line(t):
+            continue
         if not t:
             continue
-        ex = para.paragraph_format.first_line_indent
-        if ex is not None:
-            try:
-                if ex.pt and float(ex.pt) > 0.01:
-                    continue
-            except (TypeError, ValueError, AttributeError):
-                pass
         para.paragraph_format.first_line_indent = Pt(pt_val)
+        apply_compact_paragraph_spacing(para)
+
+
+def apply_long_form_body_paragraph_format(para: Paragraph) -> None:
+    """长文正文段：宋体小四 + 1.5 倍行距 + 首行缩进两字符 + 段前后无空距。"""
+    apply_typography_to_paragraph(para)
+    pf = para.paragraph_format
+    pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+    pf.line_spacing = 1.5
+    pt_val = body_first_line_indent_pt()
+    if pt_val > 0:
+        pf.first_line_indent = Pt(pt_val)
+    apply_compact_paragraph_spacing(para)
+
+
+def remove_empty_body_paragraphs(doc: Document) -> None:
+    """删除正文中无文字的空白段落（段间不留空行）。"""
+    for para in reversed(doc.paragraphs):
+        if (para.text or "").strip():
+            continue
+        parent = para._element.getparent()
+        if parent is not None:
+            parent.remove(para._element)
+
+
+def apply_abstract_body_formats_in_document(doc: Document) -> None:
+    """摘要章内各正文段：1.5 倍行距、首行缩进两字符、段间无空行。"""
+    from core.filler import WordFiller
+
+    wf = WordFiller()
+    seen: set[int] = set()
+    for para in doc.paragraphs:
+        t = (para.text or "").strip()
+        if not t:
+            continue
+        if not (
+            re.match(r"^摘\s*要\s*$", t)
+            or WordFiller._heading_matches_chapter("摘要", t)
+        ):
+            continue
+        _start, scope, _ = wf._collect_chapter_region(doc, t)
+        if _start < 0:
+            continue
+        if any(i in seen for i in scope):
+            continue
+        seen.update(scope)
+        for idx in scope:
+            p = doc.paragraphs[idx]
+            tx = (p.text or "").strip()
+            if len(tx) < 40 or is_keyword_line(tx):
+                continue
+            if WordFiller._looks_like_writing_rubric(tx):
+                continue
+            if wf._classify_scope_paragraph(tx) in ("hint", "empty"):
+                continue
+            apply_long_form_body_paragraph_format(p)

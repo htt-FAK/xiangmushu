@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List, Optional
 
 from core.dashscope_chat import chat_completions_create
@@ -13,12 +14,14 @@ from docx import Document
 
 from core.filler import WordFiller
 
+_LOG = logging.getLogger(__name__)
+
 
 class TemplateAnalyzer:
     """分析模板：优先锚点 {{NAME}} 扫描；否则 LLM + 装饰性空位提示。"""
 
     def __init__(self):
-        self._client = config.openai_client_for_chat()
+        self._client = config.openai_client_for_template_analyze()
         self._parser = DocumentParser()
 
     def analyze(
@@ -57,6 +60,15 @@ class TemplateAnalyzer:
                     + fb[:6000]
                 )
 
+        max_prompt = int(getattr(config, "TEMPLATE_ANALYZE_MAX_PROMPT_CHARS", 12000))
+        if len(structure_text) > max_prompt // 2:
+            structure_text = (
+                structure_text[: max_prompt // 2]
+                + "\n…(上文结构已截断，请根据可见表格索引与标题继续识别填空位)…\n"
+            )
+        if len(vision_append) > max_prompt // 3:
+            vision_append = vision_append[: max_prompt // 3] + "\n…(视觉摘要已截断)…\n"
+
         prompt = f"""你是一个文档分析助手。以下是项目计划书模板的结构：
 
 {structure_text}
@@ -72,7 +84,10 @@ class TemplateAnalyzer:
 - replace_mode: （可选，**仅 type 为 paragraph 时有效**）"full" 或 "placeholder_only"。
   若同一段内左侧/前后为固定说明文字、仅「请填写」「请在此填写」「____」「（ ）」等为待填占位，必须填 **placeholder_only**；
   若整行仅为「（请在此填写…）」类短提示（独立一行），用 **full** 或省略（整行替换为正文）；
+  若独立一行为「摘要：在以下填写…」「在以下填写」类章节填写指引（无长段成稿），必须用 **full**；
+  若整段为「【请在此填写……】」类括号占位行，必须单独一条 paragraph、**full**、location_hint.paragraph_text 为整行原文；
   若整段几乎全为待生成正文，用 **full** 或省略。table_cell 省略本字段。
+  摘要 chapter 的 word_limit 建议约 650 字；正文宜连贯分段，段首缩进两字符，段间勿留空行；须与程序扫槽一一对应，勿漏「【请在此填写】」行。
 
 重要（表格）：
 - location_hint.table_index **必须**等于上文中「doc.tables索引=」后面的整数，与整篇文档中表格的全局顺序一致，**绝不是**每个章节内从 0 重新编号。
@@ -85,20 +100,48 @@ class TemplateAnalyzer:
 
         analyze_model = config.TEMPLATE_ANALYZE_MODEL
         analyze_temp = config.TEMP_TEMPLATE_ANALYZE
-        response = chat_completions_create(
-            self._client,
-            model=analyze_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "你是文档分析助手，只输出 JSON，不要任何解释。",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=analyze_temp,
+        analyze_timeout = float(getattr(config, "TEMPLATE_ANALYZE_TIMEOUT", 90))
+        prompt_chars = len(prompt)
+        _LOG.info(
+            "template_analyze request model=%s timeout=%.0fs prompt_chars=%d",
+            analyze_model,
+            analyze_timeout,
+            prompt_chars,
         )
 
+        def _call_analyze(model: str):
+            return chat_completions_create(
+                self._client,
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是文档分析助手，只输出 JSON，不要任何解释。",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=analyze_temp,
+                max_tokens=8192,
+                timeout=analyze_timeout,
+            )
+
+        response = _call_analyze(analyze_model)
         content = (response.choices[0].message.content or "").strip()
+        if not content:
+            fallback = getattr(config, "TEMPLATE_ANALYZE_FALLBACK_MODEL", "") or (
+                config.FALLBACK_LLM_MODEL_1
+            )
+            if fallback and fallback != analyze_model:
+                _LOG.warning(
+                    "template_analyze 空回复，改用 %s 重试", fallback
+                )
+                response = _call_analyze(fallback)
+                content = (response.choices[0].message.content or "").strip()
+        _LOG.info(
+            "template_analyze done model=%s content_len=%d",
+            analyze_model,
+            len(content),
+        )
         if content.startswith("```"):
             content = content.split("```")[1]
             if content.startswith("json"):
@@ -175,6 +218,12 @@ class TemplateAnalyzer:
             if not para_text:
                 continue
             if WordFiller._is_pure_hint_line(para_text):
+                lh["replace_mode"] = "full"
+                task.location_hint = lh
+                continue
+            if WordFiller._looks_like_fill_instruction_line(para_text):
+                lh["replace_mode"] = "full"
+                task.location_hint = lh
                 continue
             if WordFiller._text_has_placeholder(para_text) and (
                 "说明" in para_text or len(para_text) > 50

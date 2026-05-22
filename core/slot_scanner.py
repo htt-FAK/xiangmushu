@@ -13,6 +13,15 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
 from core.fill_task import FillTask
+from core.table_slot_expand import scan_table_fill_tasks
+from core.template_slots import (
+    cell_needs_fill,
+    default_word_limit_for_paragraph,
+    is_bracket_fill_slot,
+    is_pure_hint_line,
+    looks_like_fill_instruction_line,
+    text_has_placeholder,
+)
 
 ANCHOR_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 
@@ -123,6 +132,94 @@ def _table_index_for_element(doc: Document, tbl_el) -> Optional[int]:
         if t._element is tbl_el:
             return i
     return None
+
+
+def _header_cells(table) -> List[str]:
+    if not table.rows:
+        return []
+    return [(c.text or "").strip() for c in table.rows[0].cells]
+
+
+def scan_placeholder_slots(template_path: str) -> List[FillTask]:
+    """按 body 顺序扫描段落占位与表格待填格（不含 {{锚点}}）。"""
+    doc = Document(template_path)
+    tasks: List[FillTask] = []
+    current_chapter = "文档开头"
+    para_idx = 0
+
+    for child in doc.element.body:
+        if child.tag == qn("w:p"):
+            if para_idx >= len(doc.paragraphs):
+                break
+            para = doc.paragraphs[para_idx]
+            text_full = (para.text or "").strip()
+            style_name = para.style.name if para.style else ""
+            if text_full and _heading_like(text_full, style_name):
+                current_chapter = text_full
+
+            if text_full and not ANCHOR_PATTERN.search(text_full):
+                need = (
+                    is_bracket_fill_slot(text_full)
+                    or is_pure_hint_line(text_full)
+                    or looks_like_fill_instruction_line(text_full)
+                    or (
+                        text_has_placeholder(text_full)
+                        and len(text_full) <= 120
+                    )
+                )
+                if need:
+                    lh: dict = {"paragraph_text": text_full}
+                    if is_bracket_fill_slot(text_full) or is_pure_hint_line(
+                        text_full
+                    ):
+                        lh["replace_mode"] = "full"
+                    wl = default_word_limit_for_paragraph(
+                        current_chapter, text_full
+                    )
+                    desc = text_full[:80]
+                    if is_bracket_fill_slot(text_full):
+                        inner = text_full.strip("【】")
+                        desc = f"填写：{inner}"
+                    tasks.append(
+                        FillTask(
+                            task_id=str(uuid.uuid4()),
+                            target_chapter=current_chapter,
+                            task_type="paragraph",
+                            description=desc,
+                            location_hint=lh,
+                            word_limit=wl,
+                        )
+                    )
+            para_idx += 1
+
+        elif child.tag == qn("w:tbl"):
+            tidx = _table_index_for_element(doc, child)
+            if tidx is None:
+                continue
+            table = doc.tables[tidx]
+            tasks.extend(
+                scan_table_fill_tasks(table, tidx, current_chapter)
+            )
+
+    return tasks
+
+
+def scan_deterministic_fill_tasks(template_path: str) -> List[FillTask]:
+    """锚点 + 占位槽，供 reconcile 与结构分析结果合并。"""
+    seen: set[str] = set()
+    out: List[FillTask] = []
+    for t in scan_anchor_tasks(template_path) + scan_placeholder_slots(
+        template_path
+    ):
+        key = (
+            f"{t.task_type}|{t.target_chapter}|"
+            f"{t.location_hint}|{t.description[:40]}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
 
 
 def build_decorative_hints_for_llm(template_path: str) -> str:

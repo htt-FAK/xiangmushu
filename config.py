@@ -36,7 +36,7 @@ else:
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 
 # 场景 LLM / 视觉（复星网关 ID；对齐 leaderboard v2026.05.21 fosun 主榜，均可 env 覆盖）
-# 视觉/联网/大段：qwen3.6-plus (G_doc≈947)；强 RAG/表格快批：glm-5.1 (G_doc≈923, p50 更低)
+# 视觉/联网/大段：qwen3.6-plus；强 RAG/表格快批：kimi-k2.6（复星网关 glm-5.1 chat 常空回复）
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
@@ -45,8 +45,18 @@ TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3
 VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.6-plus"
 TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.6-plus"
 TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.5-plus"
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "glm-5.1").strip()
-TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "glm-5.1"
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "kimi-k2.6").strip()
+# 结构分析：复星网关上 glm-5.1 chat 易空回复或长时间无响应，默认 qwen3.5-plus
+TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.5-plus"
+TEMPLATE_ANALYZE_FALLBACK_MODEL = (
+    os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.6-plus"
+)
+# 结构分析专用超时（秒），避免沿用 OPENAI_TIMEOUT=300 时界面长时间无反馈
+TEMPLATE_ANALYZE_TIMEOUT = float(os.getenv("TEMPLATE_ANALYZE_TIMEOUT", "180"))
+# 结构分析提示词上限（字符），避免超大模板 + 视觉摘要导致 API 超时
+TEMPLATE_ANALYZE_MAX_PROMPT_CHARS = int(
+    os.getenv("TEMPLATE_ANALYZE_MAX_PROMPT_CHARS", "8000")
+)
 LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.6-plus"
 FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.5-plus"
 FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "glm-5.1"
@@ -80,6 +90,9 @@ USE_SMALL_LLM_FOR_STRONG_RAG = _USE_SSR not in ("0", "false", "no", "off")
 STRONG_RAG_SIMILARITY_FLOOR = float(os.getenv("STRONG_RAG_SIMILARITY_FLOOR", "0.5"))
 # 段落任务字数超过该阈值时强制用大模型，减轻长文质量下降
 LONG_PARAGRAPH_WORDS = int(os.getenv("LONG_PARAGRAPH_WORDS", "600"))
+ABSTRACT_WORD_LIMIT = int(os.getenv("ABSTRACT_WORD_LIMIT", "650"))
+_BAWK = os.getenv("BATCH_TABLE_ALLOW_WEAK_KB", "1").strip().lower()
+BATCH_TABLE_ALLOW_WEAK_KB = _BAWK not in ("0", "false", "no", "off")
 # 每条检索片段写入提示词的最大字符数（超出截断，减输入 token）
 RAG_SNIPPET_MAX_CHARS = int(os.getenv("RAG_SNIPPET_MAX_CHARS", "1100"))
 # 生成 max_tokens 上限（输出侧控费；实际取 min(硬顶, 字数×系数+余量)）
@@ -113,8 +126,23 @@ TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")
 _BTF = os.getenv("BATCH_TABLE_FAST", "1").strip().lower()
 BATCH_TABLE_FAST = _BTF not in ("0", "false", "no", "off")
 BATCH_TABLE_FAST_MODEL = (
-    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "glm-5.1"
+    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "kimi-k2.6"
 )
+
+# 复星网关上 chat 不可靠的模型：直接走百炼 compatible-mode，避免空回复再等一轮
+def _parse_fosun_chat_skip_models() -> frozenset[str]:
+    raw = os.getenv(
+        "FOSUN_CHAT_SKIP_MODELS",
+        "glm-5.1,glm-5,kimi-k2.6,kimi-k2.5",
+    ).strip()
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
+FOSUN_CHAT_SKIP_MODELS = _parse_fosun_chat_skip_models()
+
+
+def chat_prefers_dashscope_first(model: str) -> bool:
+    return (model or "").strip() in FOSUN_CHAT_SKIP_MODELS
 # 每格请求最多附带几页 PNG（减延迟；默认同模板视觉页数上限）
 TABLE_VISION_MAX_PAGES = int(os.getenv("TABLE_VISION_MAX_PAGES", str(TEMPLATE_VISION_MAX_PAGES)))
 # 正文首行缩进（pt），约 2 个中文字宽；0 表示不自动加
@@ -175,6 +203,21 @@ def openai_client_for_chat() -> Any:
             max_retries=OPENAI_MAX_RETRIES,
         )
     return _chat_client_singleton
+
+
+def openai_client_for_template_analyze() -> Any:
+    """结构分析专用：优先百炼（复星网关上 glm/qwen 大 prompt 易长时间无响应），短超时、不重试。"""
+    from openai import OpenAI
+
+    key = (DASHSCOPE_API_KEY or OPENAI_API_KEY or "").strip()
+    if key:
+        return OpenAI(
+            api_key=key,
+            base_url=DASHSCOPE_COMPAT_BASE,
+            timeout=TEMPLATE_ANALYZE_TIMEOUT,
+            max_retries=0,
+        )
+    return openai_client_for_chat()
 
 
 def dashscope_backup_chat_client() -> Optional[Any]:
