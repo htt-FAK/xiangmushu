@@ -77,7 +77,7 @@ MODE_DEFAULTS = {
         "top_k": 3,
         "retrieval_max_distance": 0.7,
         "use_tavily": False,
-        "default_word_limit": 300,
+        "default_word_limit": 500,
         "stream": False,
         "web_writing_mode": "calm",
     },
@@ -85,7 +85,7 @@ MODE_DEFAULTS = {
         "top_k": 5,
         "retrieval_max_distance": 0.8,
         "use_tavily": False,
-        "default_word_limit": 500,
+        "default_word_limit": 800,
         "stream": True,
         "web_writing_mode": "calm",
     },
@@ -93,7 +93,7 @@ MODE_DEFAULTS = {
         "top_k": 10,
         "retrieval_max_distance": 0.9,
         "use_tavily": True,
-        "default_word_limit": 800,
+        "default_word_limit": 1200,
         "stream": True,
         "web_writing_mode": "calm",
     },
@@ -721,6 +721,18 @@ with st.sidebar:
             value=False,
             help="清除已缓存的模板结构分析，用当前文件重新识别填空位。",
         )
+        st.checkbox(
+            "启用视觉审核",
+            key="adv_visual_audit_enabled",
+            value=getattr(config, "VISUAL_AUDIT_ENABLED", True),
+            help="生成后对文档进行视觉质量审核（需要 VLM 支持）。",
+        )
+        st.checkbox(
+            "使用 MiMo 模型",
+            key="adv_use_mimo",
+            value=False,
+            help="使用 MiMo-V2.5-Pro 进行内容生成（支持联网搜索）。",
+        )
 
 tab_home, tab_kb, tab_tpl, tab_gen = st.tabs(
     ["首页", "知识库管理", "模板配置", "生成预览"]
@@ -1282,6 +1294,61 @@ with tab_gen:
                 output_path = os.path.join(config.OUTPUT_DIR, output_name)
                 with st.spinner("正在写入 Word…"):
                     filler.fill_template(template_path, tasks, results, output_path)
+
+                # 视觉审核（如果启用）
+                if getattr(config, "VISUAL_AUDIT_ENABLED", True):
+                    try:
+                        from core.visual_auditor import audit_document_visual, should_optimize
+                        from core.document_optimizer import optimize_document, format_optimization_report
+
+                        with st.spinner("正在进行视觉审核…"):
+                            visual_result = audit_document_visual(output_path)
+
+                        if visual_result.parse_ok:
+                            st.info(f"视觉审核完成：总分 {visual_result.score}/100")
+
+                            # 显示详细评分
+                            cols = st.columns(5)
+                            cols[0].metric("水印", f"{visual_result.watermark_score}/20")
+                            cols[1].metric("格式", f"{visual_result.format_score}/20")
+                            cols[2].metric("内容", f"{visual_result.content_score}/20")
+                            cols[3].metric("表格", f"{visual_result.table_score}/20")
+                            cols[4].metric("排版", f"{visual_result.layout_score}/20")
+
+                            # 显示保护元素检测
+                            if visual_result.protected_elements:
+                                with st.expander("检测到的保护元素"):
+                                    for elem in visual_result.protected_elements:
+                                        st.write(f"- {elem}")
+
+                            # 封面修改警告
+                            if visual_result.cover_modified:
+                                st.error("⚠️ 封面被意外修改！请检查封面内容是否被填充或修改。")
+
+                            # 评分表修改警告
+                            if visual_result.rating_table_modified:
+                                st.error("⚠️ 评分表/评价表被意外修改！请检查评分区域是否被填充。")
+
+                            # 如果需要优化
+                            if should_optimize(visual_result):
+                                st.warning(f"文档质量未达标（{visual_result.score} < {config.VISUAL_AUDIT_PASS_SCORE}），启动二轮优化…")
+
+                                # 简化版优化：记录问题并提示用户
+                                if visual_result.issues:
+                                    with st.expander("发现的问题"):
+                                        for issue in visual_result.issues:
+                                            st.write(f"- {issue}")
+                                if visual_result.suggestions:
+                                    with st.expander("改进建议"):
+                                        for suggestion in visual_result.suggestions:
+                                            st.write(f"- {suggestion}")
+                            else:
+                                st.success("文档质量审核通过！")
+                        else:
+                            st.warning("视觉审核失败，跳过优化检查")
+                    except Exception as e:
+                        _LOG.warning("视觉审核流程异常: %s", e)
+                        st.warning(f"视觉审核异常: {e}")
 
                 st.session_state[SS_LAST_OUT_PATH] = output_path
                 st.session_state[SS_LAST_OUT_NAME] = output_name

@@ -1,5 +1,7 @@
-"""百炼 compatible-mode：chat 请求统一关闭深度思考（enable_thinking=False）。
+"""百炼/DeepSeek compatible-mode：chat 请求统一关闭深度思考。
 
+DeepSeek 模型（deepseek-v4-pro）：禁用 thinking（{"thinking": {"type": "disabled"}}）。
+百炼模型（qwen 系列）：enable_thinking=False。
 网关优先时：可恢复类错误自动回落到百炼 compatible-mode（须配置 DASHSCOPE_API_KEY）。"""
 from __future__ import annotations
 
@@ -36,11 +38,19 @@ def _is_dashscope_compatible_client(client: Any) -> bool:
     return "dashscope.aliyuncs.com" in u or "compatible-mode" in u
 
 
+def _is_deepseek_client(client: Any) -> bool:
+    return "api.deepseek.com" in _client_base_url(client).lower()
+
+
 def _apply_extra_body(client: Any, extra_in: dict | None) -> dict | None:
-    """仅百炼 compatible-mode 附带 enable_thinking=False；复星网关不支持该字段，绝不发送。"""
+    """DeepSeek 用 thinking.type=disabled 关闭深度思考；百炼用 enable_thinking=False；
+    复星网关不支持该字段，绝不发送。"""
     extra = dict(extra_in or {})
     extra.pop("enable_thinking", None)
-    if _is_dashscope_compatible_client(client):
+    extra.pop("thinking", None)
+    if _is_deepseek_client(client):
+        extra["thinking"] = {"type": "disabled"}
+    elif _is_dashscope_compatible_client(client):
         extra["enable_thinking"] = False
     return extra if extra else None
 
@@ -76,6 +86,29 @@ def _chat_content_empty(response: Any) -> bool:
         return True
 
 
+def _is_error_response(response: Any) -> bool:
+    """检测响应内容是否为 API 错误信息。"""
+    try:
+        content = (response.choices[0].message.content or "").strip()
+    except (AttributeError, IndexError, TypeError, KeyError):
+        return False
+    if not content:
+        return False
+    error_markers = [
+        "Error code:",
+        "error:",
+        "'error':",
+        "AllocationQuota",
+        "FreeTierOnly",
+        "exhausted",
+        "chatcmpl-",
+        "request_id",
+        "The free tier",
+        "paid basis",
+    ]
+    return any(marker in content for marker in error_markers)
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
@@ -105,12 +138,21 @@ def _create_on_client(client: Any, kwargs: dict[str, Any], extra_in: dict) -> An
 def chat_completions_create(client: Any, **kwargs: Any):
     """
     包装 OpenAI SDK 的 chat.completions.create。
-    百炼 compatible-mode 写入 extra_body.enable_thinking=False；
-    复星网关不传该字段（网关会 400 unknown_parameter）。
+
+    - DeepSeek 模型（deepseek-*）：自动切换到 DeepSeek client，extra_body 写入
+      thinking.type=disabled 关闭深度思考。
+    - 百炼模型（qwen* 等）：extra_body 写入 enable_thinking=False。
+    - 复星网关不传该字段（网关会 400 unknown_parameter）。
 
     当 client 指向非百炼 compatible-mode（如复星网关）且发生可恢复错误时，
     使用百炼 Key 重试同一请求（stream=True 时仅捕获 create 阶段异常；迭代期错误不包装）。
     """
+    model_id = str(kwargs.get("model") or "")
+
+    # DeepSeek 模型：切换至 DeepSeek client
+    if config.is_deepseek_model(model_id):
+        client = config.deepseek_client()
+
     extra = dict(kwargs.pop("extra_body", None) or {})
     merged = _apply_extra_body(client, extra)
     if merged is not None:
@@ -118,26 +160,30 @@ def chat_completions_create(client: Any, **kwargs: Any):
     enable_search = bool((merged or {}).get("enable_search"))
 
     backup = config.dashscope_backup_chat_client()
-    model_id = str(kwargs.get("model") or "")
-
-    if (
-        backup is not None
-        and backup is not client
-        and not _is_dashscope_compatible_client(client)
-        and config.chat_prefers_dashscope_first(model_id)
-    ):
-        _LOG.info(
-            "chat 模型 %s 直连百炼 compatible-mode（跳过复星网关）",
-            model_id,
-        )
-        return _create_on_client(
-            backup,
-            _kwargs_for_dashscope_backup(kwargs, for_enable_search=enable_search),
-            extra,
-        )
 
     try:
         resp = _create_on_client(client, kwargs, extra)
+        # 检测错误内容
+        if _is_error_response(resp):
+            _LOG.error("主通道返回错误内容，尝试切换备用通道")
+            if backup is not None and backup is not client:
+                try:
+                    backup_resp = _create_on_client(
+                        backup,
+                        _kwargs_for_dashscope_backup(
+                            kwargs, for_enable_search=enable_search),
+                        extra,
+                    )
+                    if not _is_error_response(backup_resp):
+                        return backup_resp
+                except Exception as backup_e:
+                    _LOG.warning("备用通道也失败: %s", backup_e)
+            # 返回空响应，让上层处理
+            raise APIStatusError(
+                "模型返回错误内容，请检查 API 配置或配额",
+                response=getattr(resp, "response", None),
+                body=None,
+            )
         if (
             _chat_content_empty(resp)
             and backup is not None
@@ -150,7 +196,8 @@ def chat_completions_create(client: Any, **kwargs: Any):
             )
             return _create_on_client(
                 backup,
-                _kwargs_for_dashscope_backup(kwargs, for_enable_search=enable_search),
+                _kwargs_for_dashscope_backup(
+                    kwargs, for_enable_search=enable_search),
                 extra,
             )
         return resp

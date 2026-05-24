@@ -92,17 +92,18 @@ async def kb_upload(slug: str = Form(...), files: list[UploadFile] = File(...)):
     vs = _get_vs(slug)
     results = []
     for f in files:
-        save_path = os.path.join(config.HISTORICAL_DIR, f.name)
+        fname = f.filename or getattr(f, "name", "unknown")
+        save_path = os.path.join(config.HISTORICAL_DIR, fname)
         content = await f.read()
         with open(save_path, "wb") as out:
             out.write(content)
         try:
-            parsed = path_to_parsed_document(save_path, original_name=f.name)
+            parsed = path_to_parsed_document(save_path, original_name=fname)
             chunks = _chunker.chunk(parsed)
             vs.add_documents(chunks)
-            results.append({"file": f.name, "ok": True, "chunks": len(chunks)})
+            results.append({"file": fname, "ok": True, "chunks": len(chunks)})
         except Exception as e:
-            results.append({"file": f.name, "ok": False, "error": str(e)})
+            results.append({"file": fname, "ok": False, "error": str(e)})
     return {"results": results}
 
 
@@ -135,14 +136,16 @@ async def template_list():
 
 @app.post("/api/template/analyze")
 async def template_analyze(file: UploadFile = File(...)):
-    save_path = os.path.join(config.TEMPLATE_DIR, file.name)
+    fname = file.filename or getattr(file, "name", "unknown")
+    save_path = os.path.join(config.TEMPLATE_DIR, fname)
     content = await file.read()
     with open(save_path, "wb") as out:
         out.write(content)
     try:
         tasks = _analyzer.analyze(save_path)
         task_dicts = [asdict(t) for t in tasks]
-        mode = "anchor" if tasks and tasks[0].location_hint.get("anchor") else "infer"
+        mode = "anchor" if tasks and tasks[0].location_hint.get(
+            "anchor") else "infer"
         return {"ok": True, "tasks": task_dicts, "count": len(tasks), "mode": mode}
     except Exception as e:
         return {"ok": False, "error": str(e)}

@@ -12,6 +12,120 @@ from docx.oxml.ns import qn
 from docx.shared import Inches
 from docx.text.paragraph import Paragraph
 
+
+class WatermarkPreserver:
+    """水印保留器：备份并恢复整个页眉/页脚 XML + 正文段落中的图片/Drawing。"""
+
+    # VML 命名空间常量（保留用于兼容检测）
+    WATERMARK_TAG = qn("w:pict")
+    VML_SHAPETYPE = "{urn:schemas-microsoft-com:vml}shapetype"
+    VML_SHAPE = "{urn:schemas-microsoft-com:vml}shape"
+    WATERMARK_ALTERNATIVE_TAGS = [VML_SHAPETYPE, VML_SHAPE]
+
+    @staticmethod
+    def extract_watermarks(doc: Document) -> Dict[str, List[Any]]:
+        """备份页眉/页脚 + 正文段落的图片/Drawing 元素。
+
+        Returns:
+            dict: {
+                "headers": [...],
+                "footers": [...],
+                "body_drawings": [(para_index, run_index, drawing_xml), ...]
+            }
+        """
+        watermarks: Dict[str, List[Any]] = {
+            "headers": [],
+            "footers": [],
+            "body_drawings": [],
+        }
+        try:
+            # 备份页眉/页脚
+            for section in doc.sections:
+                header = section.header
+                if header is not None:
+                    watermarks["headers"].append(deepcopy(header._element))
+                else:
+                    watermarks["headers"].append(None)
+
+                footer = section.footer
+                if footer is not None:
+                    watermarks["footers"].append(deepcopy(footer._element))
+                else:
+                    watermarks["footers"].append(None)
+
+            # 备份正文段落中的图片/Drawing
+            for pi, para in enumerate(doc.paragraphs):
+                for ri, run in enumerate(para.runs):
+                    # 查找 w:drawing 元素
+                    drawings = run._element.xpath(".//w:drawing")
+                    for di, d in enumerate(drawings):
+                        watermarks["body_drawings"].append(
+                            (pi, ri, di, deepcopy(d))
+                        )
+
+            _LOG.info(
+                "水印/图片备份完成: sections=%s, body_drawings=%s",
+                len(watermarks["headers"]),
+                len(watermarks["body_drawings"]),
+            )
+        except Exception as e:
+            _LOG.warning("水印/图片备份失败: %s", e)
+        return watermarks
+
+    @staticmethod
+    def restore_watermarks(doc: Document, watermarks: Dict[str, List[Any]]) -> None:
+        """将备份的页眉/页脚 + 正文图片还原到文档中。"""
+        try:
+            # 还原页眉/页脚
+            for i, section in enumerate(doc.sections):
+                if i < len(watermarks["headers"]) and watermarks["headers"][i] is not None:
+                    header_el = section.header._element
+                    backup_el = watermarks["headers"][i]
+                    for child in list(header_el):
+                        header_el.remove(child)
+                    for child in backup_el:
+                        header_el.append(deepcopy(child))
+
+                if i < len(watermarks["footers"]) and watermarks["footers"][i] is not None:
+                    footer_el = section.footer._element
+                    backup_el = watermarks["footers"][i]
+                    for child in list(footer_el):
+                        footer_el.remove(child)
+                    for child in backup_el:
+                        footer_el.append(deepcopy(child))
+
+            # 还原正文图片
+            for pi, ri, di, drawing_xml in watermarks["body_drawings"]:
+                if pi < len(doc.paragraphs):
+                    para = doc.paragraphs[pi]
+                    if ri < len(para.runs):
+                        run = para.runs[ri]
+                        # 找到对应位置的 drawing 并替换
+                        existing = run._element.xpath(".//w:drawing")
+                        if di < len(existing):
+                            # 替换原有 drawing
+                            existing[di].addprevious(deepcopy(drawing_xml))
+                            existing[di].getparent().remove(existing[di])
+                        else:
+                            # 追加到 run 末尾
+                            run._element.append(deepcopy(drawing_xml))
+
+            _LOG.info("页眉/页脚/正文图片已完整还原")
+        except Exception as e:
+            _LOG.warning("水印/图片还原失败: %s", e)
+
+    @staticmethod
+    def _is_watermark_element(element) -> bool:
+        """判断元素是否为水印元素（保留用于兼容）。"""
+        tag = element.tag
+        if tag == WatermarkPreserver.WATERMARK_TAG:
+            return True
+        if tag in WatermarkPreserver.WATERMARK_ALTERNATIVE_TAGS:
+            return True
+        if "watermark" in str(tag).lower():
+            return True
+        return False
+
 import config
 from core.docx_typography import (
     apply_abstract_body_formats_in_document,
@@ -506,6 +620,15 @@ class WordFiller:
     ):
         doc = Document(template_path)
 
+        # 提取水印（如果启用）
+        watermarks = None
+        if getattr(config, "PRESERVE_WATERMARK", True):
+            try:
+                watermarks = WatermarkPreserver.extract_watermarks(doc)
+                _LOG.info("已提取水印，准备保留")
+            except Exception as e:
+                _LOG.warning("水印提取失败，继续处理: %s", e)
+
         for task, raw in zip(tasks, contents):
             content = self.strip_markdown_light(raw)
             if task.task_type == "paragraph" and self._is_abstract_chapter(
@@ -536,6 +659,14 @@ class WordFiller:
         self._sweep_abstract_chapter_table_rubrics(doc)
         self._remove_rubric_tables_in_abstract_chapters(doc)
         remove_empty_body_paragraphs(doc)
+
+        # 恢复水印（在排版调整之前，确保页眉/页脚 XML 完整还原）
+        if watermarks is not None and getattr(config, "PRESERVE_WATERMARK", True):
+            try:
+                WatermarkPreserver.restore_watermarks(doc, watermarks)
+                _LOG.info("已恢复水印到输出文档")
+            except Exception as e:
+                _LOG.warning("水印恢复失败: %s", e)
 
         if getattr(config, "ADJUST_TABLE_READABILITY", True):
             for table in doc.tables:
@@ -576,17 +707,43 @@ class WordFiller:
 
     @staticmethod
     def _set_paragraph_text_keep_style(para: Paragraph, text: str) -> None:
-        """写入整段文本并应用统一宋体规格（按段落样式分档）。"""
+        """写入整段文本并应用统一宋体规格（按段落样式分档），保留段落中的图片/Drawing。"""
         rpr = build_rPr_for_paragraph(para)
+        
+        # 备份段落中的 drawing 元素（图片/WordArt）
+        drawings_backup = []
         for r in para.runs:
-            r.text = ""
+            drawings = r._element.xpath(".//w:drawing")
+            for d in drawings:
+                drawings_backup.append((r, deepcopy(d)))
+        
+        # 清空文本但保留 drawing：只删除 w:t 节点
+        for r in para.runs:
+            for child in list(r._r):
+                if child.tag == qn("w:t"):
+                    r._r.remove(child)
+        
         if para.runs:
             run = para.runs[0]
-            run.text = text
+            # 添加新文本节点（插入到 drawing 之前）
+            t_elem = run._r.makeelement(qn("w:t"))
+            t_elem.text = text
+            drawings = run._r.xpath(".//w:drawing")
+            if drawings:
+                drawings[0].addprevious(t_elem)
+            else:
+                run._r.insert(0, t_elem)
             apply_rPr_to_run(run, rpr)
         else:
             nr = para.add_run(text)
             apply_rPr_to_run(nr, rpr)
+        
+        # 如果原段落有 drawing 但当前 run 没有，追加回去
+        for orig_run, d_xml in drawings_backup:
+            if orig_run in para.runs:
+                existing = orig_run._element.xpath(".//w:drawing")
+                if not existing:
+                    orig_run._element.append(d_xml)
 
     def _set_paragraph_blocks_keep_style(
         self, anchor_para: Paragraph, content: str
@@ -600,6 +757,50 @@ class WordFiller:
             self._set_paragraph_text_keep_style(np, block)
             last = np
         return last
+
+    @staticmethod
+    def _replace_cell_text_preserve_format(cell, text: str) -> None:
+        """替换单元格文本但保留原有格式（字体、颜色、大小等）。"""
+        try:
+            paragraphs = cell.paragraphs
+            if not paragraphs:
+                # 没有段落，回退到标准方法
+                WordFiller._set_cell_text_keep_style(cell, text)
+                return
+
+            first_para = paragraphs[0]
+            # 保留第一个 run 的格式
+            preserved_rPr = None
+            for run in first_para.runs:
+                if run._r.rPr is not None:
+                    preserved_rPr = deepcopy(run._r.rPr)
+                    break
+
+            # 清空所有 run 的文本
+            for run in first_para.runs:
+                run.text = ""
+
+            # 在第一个 run 写入新文本
+            if first_para.runs:
+                first_run = first_para.runs[0]
+                first_run.text = text or ""
+                if preserved_rPr is not None:
+                    first_run._r.insert(0, preserved_rPr)
+            else:
+                run = first_para.add_run(text or "")
+                if preserved_rPr is not None:
+                    run._r.insert(0, preserved_rPr)
+
+            # 删除多余的段落（保留第一个）
+            tc = cell._tc
+            p_elements = [child for child in list(tc) if child.tag == qn("w:p")]
+            for p_elem in p_elements[1:]:
+                tc.remove(p_elem)
+
+            _LOG.debug("表格单元格格式保留成功")
+        except Exception as e:
+            _LOG.warning("表格格式保留失败，回退到标准方法: %s", e)
+            WordFiller._set_cell_text_keep_style(cell, text)
 
     @staticmethod
     def _set_cell_text_keep_style(cell, text: str) -> None:
@@ -730,8 +931,16 @@ class WordFiller:
                 self._clear_residual_hint_paragraph(paras[j])
 
     def _sweep_residual_hint_paragraphs(self, doc: Document) -> None:
-        """邻接清理未覆盖的独立提示行，回填结束后再扫一遍正文段落。"""
+        """邻接清理未覆盖的独立提示行，回填结束后再扫一遍正文段落。
+        跳过封面段落和评分表段落。"""
         for para in doc.paragraphs:
+            text = para.text or ""
+            # 跳过封面段落
+            if self._is_cover_paragraph(text):
+                continue
+            # 跳过包含评分表关键词的段落
+            if any(kw in text for kw in ["评分", "评价", "打分", "得分", "总分", "等级"]):
+                continue
             self._clear_residual_hint_paragraph(para)
 
     def _write_paragraph_content(
@@ -796,6 +1005,21 @@ class WordFiller:
         else:
             self._set_paragraph_blocks_keep_style(para, content)
 
+    @staticmethod
+    def _is_cover_paragraph(text: str) -> bool:
+        """检测段落是否为封面内容（不应被填充）。"""
+        if not text:
+            return False
+        cover_keywords = [
+            "广东理工学院", "结课报告", "课程报告", "实验报告",
+            "作品名称", "应用平台", "信息技术学院",
+            "人工智能与大模型技术应用微专业", "微专业 01 班",
+            "学号", "姓名", "总分", "任课教师",
+            "2026", "年", "月", "日",
+        ]
+        matched = sum(1 for kw in cover_keywords if kw in text)
+        return matched >= 2
+
     def _fill_paragraph(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint or {}
         para_text_hint = (hint.get("paragraph_text") or "").strip()
@@ -805,6 +1029,10 @@ class WordFiller:
             # 无章节：按原逻辑找第一个占位/空段
             for para in paras:
                 text = para.text.strip()
+                # 跳过封面段落
+                if self._is_cover_paragraph(text):
+                    _LOG.debug("跳过封面段落: %s", text[:50])
+                    continue
                 if (
                     self._text_has_placeholder(text)
                     or self._looks_like_fill_instruction_line(text)
@@ -890,6 +1118,48 @@ class WordFiller:
         elif best_idx >= 0 and best_score < 40:
             self._clear_adjacent_pure_hints(doc, best_idx)
 
+    @staticmethod
+    def _is_cover_table(table) -> bool:
+        """检测表格是否为封面表格（包含作品名称、学号、姓名等封面信息）。"""
+        try:
+            # 提取表格所有文本
+            table_text = ""
+            for row in table.rows:
+                for cell in row.cells:
+                    table_text += cell.text or ""
+
+            # 封面表格关键词
+            cover_keywords = [
+                "作品名称", "应用平台", "学院", "专业", "班级",
+                "学号", "姓名", "总分", "任课教师", "日期",
+                "结课报告", "课程报告", "实验报告",
+            ]
+
+            # 如果包含多个封面关键词，则认为是封面表格
+            matched = sum(1 for kw in cover_keywords if kw in table_text)
+            return matched >= 3
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_rating_table(table) -> bool:
+        """检测表格是否为评分表/评价表。"""
+        try:
+            table_text = ""
+            for row in table.rows:
+                for cell in row.cells:
+                    table_text += cell.text or ""
+
+            rating_keywords = [
+                "评分", "评价", "打分", "得分", "总分", "等级",
+                "优秀", "良好", "中等", "及格", "不及格",
+            ]
+
+            matched = sum(1 for kw in rating_keywords if kw in table_text)
+            return matched >= 2
+        except Exception:
+            return False
+
     def _fill_table_cell(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint or {}
         table_idx = hint.get("table_index", 0)
@@ -905,6 +1175,15 @@ class WordFiller:
             )
             return
         table = doc.tables[table_idx]
+
+        # 保护封面表格和评分表
+        if self._is_cover_table(table):
+            _LOG.info("检测到封面表格，跳过填充 (table_idx=%s)", table_idx)
+            return
+        if self._is_rating_table(table):
+            _LOG.info("检测到评分表，跳过填充 (table_idx=%s)", table_idx)
+            return
+
         if row_idx >= len(table.rows):
             return
         row = table.rows[row_idx]
@@ -916,7 +1195,10 @@ class WordFiller:
 
         # 检查是否是"例如：..."等示例/提示文字，如果是则直接替换
         if self._looks_like_example_or_hint(cell_text):
-            self._set_cell_text_keep_style(cell, content)
+            if getattr(config, "PRESERVE_TABLE_FORMAT", True):
+                self._replace_cell_text_preserve_format(cell, content)
+            else:
+                self._set_cell_text_keep_style(cell, content)
             try:
                 table.autofit = False
             except Exception:
@@ -929,14 +1211,20 @@ class WordFiller:
             if span:
                 start, end = span
                 new_text = cell_text[:start] + content + cell_text[end:]
-                self._set_cell_text_keep_style(cell, new_text)
+                if getattr(config, "PRESERVE_TABLE_FORMAT", True):
+                    self._replace_cell_text_preserve_format(cell, new_text)
+                else:
+                    self._set_cell_text_keep_style(cell, new_text)
                 try:
                     table.autofit = False
                 except Exception:
                     pass
                 return
 
-        self._set_cell_text_keep_style(cell, content)
+        if getattr(config, "PRESERVE_TABLE_FORMAT", True):
+            self._replace_cell_text_preserve_format(cell, content)
+        else:
+            self._set_cell_text_keep_style(cell, content)
         try:
             table.autofit = False
         except Exception:

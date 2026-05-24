@@ -46,8 +46,20 @@ def split_body_content_blocks(text: str) -> list[str]:
 
 
 def insert_paragraph_after(paragraph: Paragraph) -> Paragraph:
+    """在段落后插入新段落，保留分节符等结构元素。"""
     new_p = OxmlElement("w:p")
     paragraph._p.addnext(new_p)
+
+    # 检查原段落是否包含分节符属性，如果有则复制到新段落
+    # 这样分节符不会被意外删除
+    pPr = paragraph._p.find(qn("w:pPr"))
+    if pPr is not None:
+        sectPr = pPr.find(qn("w:sectPr"))
+        if sectPr is not None:
+            # 分节符应该在段落的 pPr 中，保留它
+            new_pPr = OxmlElement("w:pPr")
+            new_p.append(new_pPr)
+
     return Paragraph(new_p, paragraph._parent)
 
 
@@ -180,10 +192,32 @@ def apply_long_form_body_paragraph_format(para: Paragraph) -> None:
     apply_compact_paragraph_spacing(para)
 
 
+def _paragraph_has_break_element(para: Paragraph) -> bool:
+    """检查段落是否包含分页符、分节符、分页断点等结构元素。"""
+    p_el = para._element
+    for child in p_el:
+        tag = child.tag
+        # w:br 带 type=page 为分页断点
+        if tag == qn("w:br"):
+            br_type = child.get(qn("w:type"))
+            if br_type and br_type.lower() in ("page", "column", "textWrapping"):
+                return True
+        # w:lastRenderedPageBreak 为渲染分页
+        if tag == qn("w:lastRenderedPageBreak"):
+            return True
+        # w:sectPr 为分节符（section break）
+        if tag == qn("w:sectPr"):
+            return True
+    return False
+
+
 def remove_empty_body_paragraphs(doc: Document) -> None:
-    """删除正文中无文字的空白段落（段间不留空行）。"""
+    """删除正文中无文字的空白段落（段间不留空行），但保护含分页符/分节符的段落。"""
     for para in reversed(doc.paragraphs):
         if (para.text or "").strip():
+            continue
+        # 保护：含分页符/分节符的段落不能删，否则排版结构崩溃
+        if _paragraph_has_break_element(para):
             continue
         parent = para._element.getparent()
         if parent is not None:

@@ -10,6 +10,11 @@ DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+# DeepSeek API（免费额度已用完，暂时禁用）
+# DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
+# DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
+DEEPSEEK_API_KEY = ""
+DEEPSEEK_BASE_URL = ""
 # 嵌入 / 回落聊天：优先百炼 Key，兼容仅配 OPENAI_API_KEY
 OPENAI_COMPAT_API_KEY = DASHSCOPE_API_KEY or OPENAI_API_KEY
 
@@ -22,15 +27,14 @@ EMBEDDING_OPENAI_BASE_URL = (
 )
 
 # 复星 AI 网关（OpenAI 兼容）；未设环境变量时使用默认 Base URL / Key
-FOSUN_AIGW_BASE_URL = (
-    os.getenv("FOSUN_AIGW_BASE_URL", "").strip() or "https://aigw.fosunwealth.com/v1"
-)
-_env_fosun_key = os.getenv("FOSUN_AIGW_API_KEY")
-if _env_fosun_key is None:
-    _DEFAULT_FOSUN_AIGW_API_KEY = "ak-d492348389a555b285fe216dcbe70d22"
-    FOSUN_AIGW_API_KEY = _DEFAULT_FOSUN_AIGW_API_KEY.strip()
-else:
-    FOSUN_AIGW_API_KEY = _env_fosun_key.strip()
+# 注意：复星网关当前不可用（403 Forbidden），强制禁用
+_env_fosun_key = os.getenv("FOSUN_AIGW_API_KEY", "").strip()
+FOSUN_AIGW_BASE_URL = os.getenv("FOSUN_AIGW_BASE_URL", "").strip() or "https://aigw.fosunwealth.com/v1"
+# 强制禁用复星网关（2026-05-24 测试显示 403 Forbidden）
+FOSUN_AIGW_API_KEY = ""  # 清空 Key 强制禁用
+
+# 重置已缓存的客户端单例（避免使用旧的复星网关配置）
+_chat_client_singleton = None
 
 # Embedding 模型（百炼 compatible-mode 用 text-embedding-v3 等）
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
@@ -165,9 +169,33 @@ for d in [HISTORICAL_DIR, TEMPLATE_DIR, OUTPUT_DIR]:
     os.makedirs(d, exist_ok=True)
 
 
+# MiMo API (小米大模型，支持联网搜索，2026-05-30 过期)
+MIMO_API_KEY = os.getenv("MIMO_API_KEY", "sk-c50gmirnbpkuijji4dxax4vlj2ca52t05ljozgsho06l0d4w").strip()
+MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
+MIMO_MODEL = "mimo-v2.5-pro"
+
+# 视觉审核配置（测试阶段全部拉满）
+_VISUAL_AUDIT = os.getenv("VISUAL_AUDIT_ENABLED", "1").strip().lower()
+VISUAL_AUDIT_ENABLED = _VISUAL_AUDIT not in ("0", "false", "no", "off")
+VISUAL_AUDIT_MAX_ROUNDS = int(os.getenv("VISUAL_AUDIT_MAX_ROUNDS", "3"))
+VISUAL_AUDIT_PASS_SCORE = int(os.getenv("VISUAL_AUDIT_PASS_SCORE", "85"))
+VISUAL_AUDIT_MODEL = os.getenv("VISUAL_AUDIT_MODEL", "qwen3.6-plus-2026-04-02").strip()
+
+# 内容充实度配置
+_CONTENT_RICHNESS = os.getenv("CONTENT_RICHNESS_ENABLED", "1").strip().lower()
+CONTENT_RICHNESS_ENABLED = _CONTENT_RICHNESS not in ("0", "false", "no", "off")
+CONTENT_RICHNESS_THRESHOLD = float(os.getenv("CONTENT_RICHNESS_THRESHOLD", "0.8"))
+
+# 格式保留配置
+_PRESERVE_WATERMARK = os.getenv("PRESERVE_WATERMARK", "1").strip().lower()
+PRESERVE_WATERMARK = _PRESERVE_WATERMARK not in ("0", "false", "no", "off")
+_PRESERVE_TABLE_FORMAT = os.getenv("PRESERVE_TABLE_FORMAT", "1").strip().lower()
+PRESERVE_TABLE_FORMAT = _PRESERVE_TABLE_FORMAT not in ("0", "false", "no", "off")
+
+
 def chat_llm_configured() -> bool:
-    """是否具备聊天/多模态调用所需 Key（网关或百炼其一）。"""
-    return bool((FOSUN_AIGW_API_KEY or OPENAI_COMPAT_API_KEY or "").strip())
+    """是否具备聊天/多模态调用所需 Key（网关或百炼或 MiMo 其一）。"""
+    return bool((FOSUN_AIGW_API_KEY or OPENAI_COMPAT_API_KEY or MIMO_API_KEY or "").strip())
 
 
 def embedding_llm_configured() -> bool:
@@ -179,6 +207,8 @@ def embedding_llm_configured() -> bool:
 _chat_client_singleton: Optional[Any] = None
 _dashscope_backup_chat_singleton: Optional[Any] = None
 _dashscope_backup_chat_checked_none: bool = False
+_mimo_client_singleton: Optional[Any] = None
+_mimo_client_checked_none: bool = False
 
 
 def openai_client_for_chat() -> Any:
@@ -205,6 +235,37 @@ def openai_client_for_chat() -> Any:
     return _chat_client_singleton
 
 
+def is_deepseek_model(model_id: str) -> bool:
+    """判断是否为 DeepSeek 模型。"""
+    return "deepseek" in model_id.lower()
+
+
+_deepseek_client_singleton: Optional[Any] = None
+_deepseek_client_checked_none: bool = False
+
+
+def deepseek_client() -> Optional[Any]:
+    """DeepSeek API 客户端（OpenAI 兼容），未配置 Key 时返回 None。"""
+    global _deepseek_client_singleton, _deepseek_client_checked_none
+    if _deepseek_client_checked_none:
+        return None
+    if _deepseek_client_singleton is not None:
+        return _deepseek_client_singleton
+    key = (DEEPSEEK_API_KEY or "").strip()
+    if not key:
+        _deepseek_client_checked_none = True
+        return None
+    from openai import OpenAI
+
+    _deepseek_client_singleton = OpenAI(
+        api_key=key,
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=OPENAI_TIMEOUT,
+        max_retries=OPENAI_MAX_RETRIES,
+    )
+    return _deepseek_client_singleton
+
+
 def openai_client_for_template_analyze() -> Any:
     """结构分析专用：优先百炼（复星网关上 glm/qwen 大 prompt 易长时间无响应），短超时、不重试。"""
     from openai import OpenAI
@@ -218,6 +279,28 @@ def openai_client_for_template_analyze() -> Any:
             max_retries=0,
         )
     return openai_client_for_chat()
+
+
+def mimo_client() -> Optional[Any]:
+    """MiMo API 客户端（支持联网搜索）。"""
+    global _mimo_client_singleton, _mimo_client_checked_none
+    if _mimo_client_checked_none:
+        return None
+    if _mimo_client_singleton is not None:
+        return _mimo_client_singleton
+    key = (MIMO_API_KEY or "").strip()
+    if not key:
+        _mimo_client_checked_none = True
+        return None
+    from openai import OpenAI
+
+    _mimo_client_singleton = OpenAI(
+        api_key=key,
+        base_url=MIMO_BASE_URL,
+        timeout=OPENAI_TIMEOUT,
+        max_retries=OPENAI_MAX_RETRIES,
+    )
+    return _mimo_client_singleton
 
 
 def dashscope_backup_chat_client() -> Optional[Any]:

@@ -79,6 +79,12 @@ USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
 要求：{description}
 字数：约 {word_limit} 字{hint_block}{vision_block}
 
+【内容要求】
+- 内容要充实，避免简短或过于概括
+- 请详细展开，不要只写要点或提纲
+- 每个要点需有具体说明和数据支撑
+- 确保内容完整，达到指定字数要求
+
 【参考资料】
 {retrieved_texts}
 {kb_note}
@@ -160,11 +166,25 @@ class GenerationBundle:
 
 
 class ContentGenerator:
-    """RAG + 距离阈值；空库/无命中，或（开启联网且）最佳命中估算相似度过低时，走百炼内置搜索（enable_search + 联网档模型）。"""
+    """RAG + 距离阈值；空库/无命中，或（开启联网且）最佳命中估算相似度过低时，走百炼内置搜索（enable_search + 联网档模型）。
+    支持 MiMo 模型作为备选生成引擎。"""
 
     def __init__(self, vector_store: VectorStore):
         self._vs = vector_store
         self._client = config.openai_client_for_chat()
+        self._mimo_client = config.mimo_client()
+
+    def _get_client(self, use_mimo: bool = False) -> Any:
+        """获取 API 客户端，支持 MiMo 回落。"""
+        if use_mimo and self._mimo_client is not None:
+            return self._mimo_client
+        return self._client
+
+    def _get_model(self, use_mimo: bool = False, default_model: str = "") -> str:
+        """获取模型名称，支持 MiMo。"""
+        if use_mimo and self._mimo_client is not None:
+            return config.MIMO_MODEL
+        return default_model or config.LARGE_LLM_MODEL
 
     def _build_chat_request(
         self,
@@ -564,12 +584,15 @@ class ContentGenerator:
         self,
         bundle: GenerationBundle,
         route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
+        use_mimo: bool = False,
     ) -> Iterator[str]:
         if route_hook:
             route_hook(bundle.route_meta)
+        client = self._get_client(use_mimo=use_mimo)
+        model = self._get_model(use_mimo=use_mimo, default_model=bundle.model)
         stream = chat_completions_create(
-            self._client,
-            model=bundle.model,
+            client,
+            model=model,
             messages=bundle.messages,
             temperature=bundle.temperature,
             stream=True,
@@ -619,16 +642,36 @@ class ContentGenerator:
         )
         yield from self.stream_from_bundle(bundle, route_hook=route_hook)
 
+    @staticmethod
+    def _is_error_content(text: str) -> bool:
+        """检测内容是否为 API 错误信息。"""
+        if not text:
+            return False
+        error_markers = [
+            "Error code:",
+            "error:",
+            "'error':",
+            "AllocationQuota",
+            "FreeTierOnly",
+            "exhausted",
+            "chatcmpl-",
+            "request_id",
+        ]
+        return any(marker in text for marker in error_markers)
+
     def generate_from_bundle(
         self,
         bundle: GenerationBundle,
         route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
+        use_mimo: bool = False,
     ) -> str:
         if route_hook:
             route_hook(bundle.route_meta)
+        client = self._get_client(use_mimo=use_mimo)
+        model = self._get_model(use_mimo=use_mimo, default_model=bundle.model)
         resp = chat_completions_create(
-            self._client,
-            model=bundle.model,
+            client,
+            model=model,
             messages=bundle.messages,
             temperature=bundle.temperature,
             stream=False,
@@ -637,6 +680,12 @@ class ContentGenerator:
         )
         ch0 = resp.choices[0] if resp.choices else None
         text = (ch0.message.content if ch0 and ch0.message else "") or ""
+
+        # 检测错误内容
+        if self._is_error_content(text):
+            _LOG.error("生成内容包含错误信息: %s", text[:200])
+            return "（生成失败，请重试或检查模型配置）"
+
         _ensure_gen_logger()
         _LOG.info(
             "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",

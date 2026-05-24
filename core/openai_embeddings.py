@@ -1,19 +1,21 @@
-"""带超时与重试的 OpenAI Embedding，供 Chroma 使用（避免默认短超时导致入库失败）。
+"""使用 dashscope SDK 的 Embedding，供 Chroma 使用。
 
 `name()` 必须返回与 Chroma 内置 `OpenAIEmbeddingFunction` 相同的注册名 `"openai"`，
 否则对已存在的集合调用 `get_or_create_collection(..., embedding_function=...)` 会触发
-persisted `openai` vs 新函数名的 ValueError。本实现仍为 OpenAI embeddings API，仅客户端
-超时/重试与官方封装不同。
+persisted `openai` vs 新函数名的 ValueError。
 """
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import List, Optional
 
-from openai import OpenAI
+import dashscope
 
 
 class TimeoutOpenAIEmbedding:
-    """Chroma 可调用 embedding；与持久化 `openai` 名称兼容，使用可配置 timeout 的 OpenAI 客户端。"""
+    """Chroma 可调用 embedding；内部使用 dashscope.TextEmbedding 而非 OpenAI API。
+    类名、`name()` / `default_space()` 与 Chroma 持久化兼容。
+    """
 
     def __init__(
         self,
@@ -24,29 +26,26 @@ class TimeoutOpenAIEmbedding:
         max_retries: int,
         dimensions: Optional[int] = None,
     ):
-        kw: dict = {
-            "api_key": api_key or "sk-placeholder",
-            "timeout": timeout,
-            "max_retries": max_retries,
-        }
-        if base_url:
-            kw["base_url"] = base_url
-        self._client = OpenAI(**kw)
+        self._api_key = api_key
         self._model_name = model_name
+        self._timeout = timeout
+        self._max_retries = max_retries
         self._dimensions = dimensions
 
     def __call__(self, input: List[str]) -> List[List[float]]:
         if not input:
             return []
-        params: dict = {"model": self._model_name, "input": input}
-        if self._dimensions is not None and (
-            "text-embedding-3" in self._model_name or "text-embedding-v3" in self._model_name
-        ):
-            params["dimensions"] = self._dimensions
-        response = self._client.embeddings.create(**params)
-        # Chroma 0.5 _validate_embedding_record 对 embedding 做 `if record["embedding"]`；
-        # numpy 向量会触发 ambiguous truth value，须返回 Python list。
-        return [list(d.embedding) for d in response.data]
+        resp = dashscope.TextEmbedding.call(
+            model=self._model_name,
+            input=input,
+            api_key=self._api_key,
+        )
+        if resp.status_code != HTTPStatus.OK:
+            raise RuntimeError(
+                f"DashScope TextEmbedding 调用失败: "
+                f"status={resp.status_code}, message={resp}"
+            )
+        return [list(item.get("embedding")) for item in resp.output.get("embeddings", [])]
 
     def embed_query(self, input: List[str]) -> List[List[float]]:
         """Chroma 0.5+ 查询路径调用 embed_query；与官方 EmbeddingFunction 默认语义一致。"""

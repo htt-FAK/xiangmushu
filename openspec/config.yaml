@@ -1,20 +1,44 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  ## 项目概述
+  项目计划书生成器 — 基于 RAG 与 Word 模板填空的智能文档撰写系统。
+  面向申报类、计划类文档的半自动生成，支持知识库检索、联网补料、内容审核。
+  
+  ## 技术栈
+  - 后端：Python 3.10+, FastAPI, Streamlit
+  - AI/LLM：OpenAI API 兼容接口（百炼/复星网关），DashScope
+  - 向量数据库：ChromaDB
+  - 文档处理：python-docx, pypdf, pymupdf, python-pptx
+  - 多模态：模板视觉理解（LibreOffice + 页图 + VLM）
+  
+  ## 核心模块
+  - `core/generator.py`：内容生成器，支持流式/非流式、联网补料
+  - `core/filler.py`：Word 模板填空
+  - `core/template_analyzer.py`：模板结构分析
+  - `core/template_vision.py`：模板视觉理解
+  - `core/vector_store.py`：向量存储封装
+  - `core/content_auditor.py`：内容审核 Agent
+  
+  ## 代码规范
+  - 类型注解：使用 Python 3.10+ 类型语法（list[str], dict[str, Any]）
+  - 日志：使用 logging 模块，避免 print
+  - 配置：通过 config.py 读取环境变量
+  - 错误处理：使用 try/except，记录日志后抛出或返回 None
+  
+  ## 测试规范
+  - 模型测试：smoke_test_models.py
+  - 手动验收：app.py Streamlit 界面
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - 提案应简洁明了，包含背景、目标、方案概述
+    - 方案设计需考虑向后兼容性
+    - 涉及 API 变更需注明接口变化
+  design:
+    - 复杂流程需包含时序图或流程图
+    - 新增模块需说明与现有模块的交互
+  tasks:
+    - 每个任务应可独立完成和测试
+    - 任务粒度适中，避免过大或过细
+    - 需标明任务涉及的模块和文件路径

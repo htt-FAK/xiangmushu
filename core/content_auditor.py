@@ -146,6 +146,31 @@ _HIGH_RISK_KEYWORDS = [
 ]
 
 
+def check_content_richness(content: str, word_limit: int) -> tuple[bool, str]:
+    """检查内容充实度。
+    
+    Returns:
+        (是否合格, 建议信息)
+    """
+    if not content or not word_limit:
+        return True, ""
+    
+    # 计算中文字数（去除空白和标点）
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', content))
+    total_chars = len(content.replace(" ", "").replace("\n", ""))
+    
+    # 使用总字符数作为字数估计
+    actual_words = total_chars
+    threshold = word_limit * config.CONTENT_RICHNESS_THRESHOLD
+    
+    if actual_words < word_limit * 0.5:
+        return False, f"内容严重不足：实际约 {actual_words} 字，要求约 {word_limit} 字（低于 50%）"
+    elif actual_words < threshold:
+        return False, f"内容不够充实：实际约 {actual_words} 字，要求约 {word_limit} 字（低于 {int(config.CONTENT_RICHNESS_THRESHOLD * 100)}%）"
+    
+    return True, f"内容充实度合格：实际约 {actual_words} 字，要求约 {word_limit} 字"
+
+
 def rule_audit(
     task: FillTask,
     answer: str,
@@ -178,6 +203,17 @@ def rule_audit(
 
     if task.task_type == "table_cell" and "\n" in text:
         issues.append("表格单元格含换行（可能导致 Word 格式错乱）")
+
+    # 内容充实度检查
+    if getattr(config, "CONTENT_RICHNESS_ENABLED", True) and task.word_limit:
+        is_rich, richness_msg = check_content_richness(text, task.word_limit)
+        if not is_rich:
+            # 根据充实度决定严重程度
+            actual_chars = len(text.replace(" ", "").replace("\n", ""))
+            if actual_chars < task.word_limit * 0.5:
+                issues.append(f"[major_issue] {richness_msg}")
+            else:
+                issues.append(richness_msg)
 
     return issues
 
