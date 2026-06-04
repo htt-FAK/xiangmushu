@@ -174,8 +174,8 @@ for d in [HISTORICAL_DIR, TEMPLATE_DIR, OUTPUT_DIR]:
     os.makedirs(d, exist_ok=True)
 
 
-# MiMo API (小米大模型，支持联网搜索，2026-05-30 过期)
-MIMO_API_KEY = os.getenv("MIMO_API_KEY", "sk-c50gmirnbpkuijji4dxax4vlj2ca52t05ljozgsho06l0d4w").strip()
+# MiMo API: disabled by default. Set MIMO_API_KEY explicitly only for legacy experiments.
+MIMO_API_KEY = os.getenv("MIMO_API_KEY", "").strip()
 MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 MIMO_MODEL = "mimo-v2.5-pro"
 

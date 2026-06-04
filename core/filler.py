@@ -235,8 +235,8 @@ class WordFiller:
         # 明确的撰写要求标题
         if re.match(r"^\s*(撰写要求|写作说明|摘要要求)", t):
             return True
-        # 更宽松的检测：包含"撰写要求"或"写作说明"关键字
-        if "撰写要求" in t[:50] or "写作说明" in t[:50]:
+        # 独立标题行可视为 rubric；正文里提到“写作说明”不应被误清理。
+        if re.search(r"(?m)^\s*(撰写要求|写作说明|摘要要求)\s*[:：]?\s*$", t[:120]):
             return True
         # 检测 bullet 点 + 关键词
         bullet_marks = "•·●◦‣⁃"
@@ -1161,6 +1161,8 @@ class WordFiller:
         best_score = 0
         for idx in para_scope:
             sc = self._score_paragraph_candidate(paras[idx], para_text_hint)
+            if is_abstract and self._classify_scope_paragraph(paras[idx].text or "") == "empty":
+                sc = max(sc, 34)
             if sc > best_score:
                 best_score = sc
                 best_idx = idx

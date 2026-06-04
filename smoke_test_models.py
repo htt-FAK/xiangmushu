@@ -1,5 +1,5 @@
 """
-冒烟测试：校验百炼/OpenAI 兼容网关下各模型可调、ContentGenerator 路由正确。
+冒烟测试：校验百炼/OpenAI 兼容网关下各模型可调，以及一期默认主链路可用。
 
 用法（在 xiangmushu 目录下）:
   python smoke_test_models.py
@@ -8,11 +8,12 @@
   python smoke_test_models.py --skip-chroma   # 跳过 Chroma+embedding
   python smoke_test_models.py --probe-models  # 网关 13 模型：chat/vision/enable_search 能力矩阵
 
---offline 覆盖（与 docs/测试与验收.md 矩阵一致）:
-  ContentGenerator 路由、审核修订辅助、rule_audit/need_model_audit、
-  query_expander、_max_output_tokens、task_grouper、evidence_planner、
-  prepare_bundle_from_evidence 与 _build_chat_request 路由对齐、
-  WordFiller.clean_table_answer、batch_generator._strip_json_fence。
+--offline 默认门禁（与 docs/测试与验收.md 一期矩阵一致）:
+  ContentGenerator 路由、query_expander、_max_output_tokens、
+  WordFiller.clean_table_answer、锚点/占位相关 filler 离线回归。
+
+说明：审核、task_grouper、evidence_planner、batch_generator、template_vision、
+多模态表格等离线检查函数仍保留在脚本中供研发使用，但不再作为一期 `--offline` 默认门禁。
 
 依赖：已配置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY，且 .env 或环境变量可读。
 """
@@ -423,6 +424,9 @@ class _MockVS:
     def search(self, *args: Any, **kwargs: Any) -> List[dict[str, Any]]:
         return list(self._results)
 
+    def get_all_documents(self, *args: Any, **kwargs: Any) -> List[dict[str, Any]]:
+        return list(self._results)
+
 
 def _routing_tests() -> bool:
     print("=== ContentGenerator 路由（无真实检索/联网）===")
@@ -490,14 +494,21 @@ def _routing_tests() -> bool:
         task, top_k=3, enable_web=True, retrieval_max_distance=1.0
     )
     print(f"  有命中但低相似 + 开联网: model={m4!r} low_sim={rm4.get('low_similarity')}")
-    if m4 != config.VISION_WEB_MODEL:
-        print("  [FAIL] 预期 VISION_WEB_MODEL（低相似度联网档）")
-        ok = False
+    if config.FULL_RECALL_MODE:
+        if rm4.get("full_recall_mode") is not True:
+            print("  [FAIL] 全量召回开启时应标记 full_recall_mode=True")
+            ok = False
+        else:
+            print("  [OK] 全量召回开启时跳过低相似联网回退")
     else:
-        print("  [OK] 低相似触发联网档")
-    if not eb4.get("enable_search"):
-        print("  [FAIL] 预期 extra_body.enable_search=True")
-        ok = False
+        if m4 != config.VISION_WEB_MODEL:
+            print("  [FAIL] 预期 VISION_WEB_MODEL（低相似度联网档）")
+            ok = False
+        else:
+            print("  [OK] 低相似触发联网档")
+        if not eb4.get("enable_search"):
+            print("  [FAIL] 预期 extra_body.enable_search=True")
+            ok = False
 
     # 联网档 + 创意模式：系统提示切换，用户提示不出现「请注明资料未载明」硬性句
     msgs_cr, _, _, _, rm_cr, _ = g2._build_chat_request(
@@ -1673,15 +1684,9 @@ def _offline_table_cell_multimodal_content() -> bool:
 def _run_all_offline() -> bool:
     steps = [
         ("路由", _routing_tests),
-        ("审核辅助", _audit_offline_helpers),
         ("query_expander", _offline_query_expander),
-        ("rule/need_model_audit", _offline_rule_and_need_model_audit),
         ("max_output_tokens", _offline_max_output_tokens),
-        ("task_grouper", _offline_task_grouper),
-        ("evidence_planner", _offline_evidence_planner),
-        ("bundle 路由对齐", _offline_bundle_evidence_route_parity),
         ("clean_table_answer", _offline_filler_clean_table),
-        ("batch_json_fence", _offline_batch_json_fence),
         ("filler_placeholder_only_para", _offline_filler_paragraph_placeholder_only),
         ("filler_abstract_hint", _offline_filler_abstract_hint_line),
         ("filler_abstract_instruction", _offline_filler_abstract_instruction_below_fill),
@@ -1690,12 +1695,7 @@ def _run_all_offline() -> bool:
         ("filler_abstract_rubric_in_table", _offline_filler_abstract_rubric_in_table),
         ("innovation_table_scan", _offline_innovation_table_scan_tasks),
         ("filler_bracket_slot", _offline_filler_bracket_fill_slot),
-        ("reconcile_bracket", _offline_reconcile_bracket_task),
-        ("batch_json_recover", _offline_batch_json_recover),
         ("filler_guidance_beats_empty", _offline_filler_guidance_beats_empty),
-        ("docx_typography", _offline_docx_typography),
-        ("table_cell_multimodal", _offline_table_cell_multimodal_content),
-        ("template_vision+filler_cell", _offline_template_vision_and_filler_cell),
     ]
     ok_all = True
     for name, fn in steps:

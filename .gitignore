@@ -1,0 +1,29 @@
+# Local secrets
+.env
+
+# Python/runtime caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE local state
+.idea/dataSources.xml
+
+# Generated runtime data and evaluation artifacts
+data/.cache/
+data/kb_sources/
+data/outputs/
+data/templates/*.docx
+chroma_db/
+*.zip
+api_eval_result.json
+ui_eval_result.json
+model_health_report.json
+model_health_report.md
+
+# Local screenshots and browser debug captures
+debug.png
+frontend*.png
+fg_*.png
+git_log*.png
+git_log.html
