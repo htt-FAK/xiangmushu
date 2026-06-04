@@ -8,12 +8,17 @@ import type {
   UploadResult,
 } from "./types";
 
-export const API_BASE =
-  import.meta.env.VITE_API_BASE?.replace(/\/$/, "") ||
-  (window.location.port === "5173" ? "" : "http://localhost:8000");
+const DEFAULT_API_BASE = "http://localhost:8502";
+const configuredApiBase = import.meta.env.VITE_API_BASE?.trim().replace(/\/+$/, "");
+
+export const API_BASE = configuredApiBase || (import.meta.env.DEV ? "" : DEFAULT_API_BASE);
+
+function apiUrl(path: string) {
+  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
+  const response = await fetch(apiUrl(path), init);
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || `HTTP ${response.status}`);
@@ -88,7 +93,7 @@ export async function removeKnowledgeSource(slug: string, source: string) {
 }
 
 export function downloadUrl(path: string) {
-  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  return apiUrl(path);
 }
 
 export async function streamGenerate(
@@ -105,7 +110,7 @@ export async function streamGenerate(
   form.append("enable_web", String(params.enableWeb));
   form.append("use_stream", String(params.useStream));
 
-  const response = await fetch(`${API_BASE}/api/generate`, {
+  const response = await fetch(apiUrl("/api/generate"), {
     method: "POST",
     body: form,
     signal,

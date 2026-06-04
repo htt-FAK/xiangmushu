@@ -33,7 +33,7 @@ export default function HomePage() {
       <div className="grid gap-4 md:grid-cols-3">
         <Stat label="模板数量" value={templates.loading ? "..." : templateItems.length} />
         <Stat label="知识库数量" value={kbs.loading ? "..." : kbItems.length} tone="lime" />
-        <Stat label="后端目标" value="8000" tone="amber" />
+        <Stat label="后端目标" value="8502" tone="amber" />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">

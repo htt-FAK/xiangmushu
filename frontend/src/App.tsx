@@ -69,7 +69,7 @@ function Shell() {
             API
           </p>
           <p className="mt-2 break-all text-xs leading-5 text-slate-500">
-            Vite 代理到 localhost:8000
+            Vite 代理到 localhost:8502
           </p>
         </div>
       </aside>
