@@ -90,6 +90,11 @@ RETRIEVAL_WEB_SIMILARITY_THRESHOLD = float(
 # 省 token：强检索时正文生成可走小模型（同一套检索片段）；环境变量设为 0/false/off 关闭
 _USE_SSR = os.getenv("USE_SMALL_LLM_FOR_STRONG_RAG", "1").strip().lower()
 USE_SMALL_LLM_FOR_STRONG_RAG = _USE_SSR not in ("0", "false", "no", "off")
+# 全量召回模式：跳过向量检索，将知识库所有文档直接拼入 prompt
+_FULL_RECALL = os.getenv("FULL_RECALL_MODE", "1").strip().lower()
+FULL_RECALL_MODE = _FULL_RECALL not in ("0", "false", "no", "off")
+# 全量召回最大总字符数（0=不限制）
+FULL_RECALL_MAX_CHARS = int(os.getenv("FULL_RECALL_MAX_CHARS", "80000"))
 # 最佳估算相似度 >= 该值且非长段时，用 SMALL_LLM 写正文（弱库/低相似/联网档仍走大模型或联网档）
 STRONG_RAG_SIMILARITY_FLOOR = float(os.getenv("STRONG_RAG_SIMILARITY_FLOOR", "0.5"))
 # 段落任务字数超过该阈值时强制用大模型，减轻长文质量下降

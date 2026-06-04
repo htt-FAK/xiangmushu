@@ -193,21 +193,20 @@ def apply_long_form_body_paragraph_format(para: Paragraph) -> None:
 
 
 def _paragraph_has_break_element(para: Paragraph) -> bool:
-    """检查段落是否包含分页符、分节符、分页断点等结构元素。"""
+    """检查段落是否包含分页符、分节符、分页断点、图片/水印等结构元素。"""
     p_el = para._element
-    for child in p_el:
-        tag = child.tag
-        # w:br 带 type=page 为分页断点
-        if tag == qn("w:br"):
-            br_type = child.get(qn("w:type"))
-            if br_type and br_type.lower() in ("page", "column", "textWrapping"):
-                return True
-        # w:lastRenderedPageBreak 为渲染分页
-        if tag == qn("w:lastRenderedPageBreak"):
+
+    # w:br/w:lastRenderedPageBreak 通常嵌在 w:r 内，必须递归检查。
+    for br in p_el.xpath(".//w:br"):
+        br_type = br.get(qn("w:type"))
+        if br_type and br_type.lower() in ("page", "column", "textwrapping"):
             return True
-        # w:sectPr 为分节符（section break）
-        if tag == qn("w:sectPr"):
-            return True
+    if p_el.xpath(".//w:lastRenderedPageBreak"):
+        return True
+    if p_el.xpath(".//w:sectPr"):
+        return True
+    if p_el.xpath(".//w:drawing | .//w:pict"):
+        return True
     return False
 
 

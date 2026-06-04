@@ -301,14 +301,56 @@ class WordFiller:
     def _looks_like_template_guidance(cls, text: str) -> bool:
         """模板「说明……建议……」或「撰写要求」类填写指引（无占位符），与占位同级、优先于空段。"""
         t = (text or "").strip()
-        if len(t) < 18 or len(t) > 1200:
+        if not t or len(t) > 1200:
             return False
+
+        compact = re.sub(r"\s+", "", t)
+
+        # 图片/截图占位说明通常很短，且会包含“请在此”等占位语，必须优先识别。
+        if re.match(r"^请在此处粘贴.+", t):
+            return True
+        if re.match(r"^图\s*\d+(?:\.\d+)*\s*.+?(截图|图片|示意图|界面图|流程图)$", t):
+            return True
+        if re.match(r"^图\d+(?:\.\d+)*.+?(截图|图片|示意图|界面图|流程图)$", compact):
+            return True
+        if re.match(r"^(截图|图片|示意图|界面图|流程图)\s*[:：]", t):
+            return True
+
         if cls._text_has_placeholder(t):
             return False
         if cls._is_pure_hint_line(t):
             return False
         if cls._looks_like_writing_rubric(t):
             return True
+
+        if len(t) < 8:
+            return False
+
+        guidance_patterns = (
+            r"^说明.{2,}(项目来源|项目背景|现实痛点|应用价值|调用了哪些|插件|外部工具|输入参数|输出结果|工作流)",
+            r"^描述.{2,}(目标用户|使用场景|核心功能|业务流程|应用场景)",
+            r"^展示.{2,}(智能体|角色设定|提示词|工作流|知识库|运行效果)",
+            r"^填写.{2,}(应用|入口|平台|版本|账号|权限|演示设备|必要说明)",
+            r"^本节应.{2,}",
+            r"^学生提交时.{2,}",
+            r"^结果分析[:：].{2,}",
+            r"^客观分析.{2,}",
+            r"^展望.{2,}",
+            r"^总分\s*\d+\s*分.{2,}",
+            r"建议从.+展开",
+            r"建议至少.+",
+            r"建议包含.+",
+            r"建议写.+",
+            r"至少(给出|设计|包含|上传|展示).+",
+            r"(不要|不能|避免)只写.+",
+            r"应(完整)?(体现|展示|包含|说明|把).+",
+            r"请在此处粘贴.+",
+        )
+        if any(re.search(p, t) for p in guidance_patterns):
+            return True
+
+        if len(t) < 18:
+            return False
         starters = (
             "说明",
             "描述",
@@ -317,7 +359,13 @@ class WordFiller:
             "简述",
             "阐述",
             "介绍",
+            "展示",
+            "分析",
+            "展望",
+            "建议",
             "应从",
+            "应把",
+            "本节应",
             "需说明",
             "请围绕",
             "围绕",
@@ -336,6 +384,12 @@ class WordFiller:
             "层次",
             "展开",
             "格式",
+            "截图",
+            "图片",
+            "提示词",
+            "工作流",
+            "知识库",
+            "插件",
         )
         return any(m in t for m in markers)
 
@@ -351,8 +405,9 @@ class WordFiller:
         s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
         return s.strip()
 
-    @staticmethod
+    @classmethod
     def clean_table_answer(
+        cls,
         text: str,
         word_limit: int = 120,
         max_chars: Optional[int] = None,
@@ -375,6 +430,16 @@ class WordFiller:
         s = re.sub(r"_{4,}", "", s)
         s = re.sub(r"[\r\n]+", " ", s)
         s = re.sub(r"\s{2,}", " ", s).strip()
+
+        if cls._looks_like_template_guidance(s):
+            return ""
+
+        parts = re.split(r"(?<=[。！？!?；;])\s*", s)
+        kept = [p.strip() for p in parts if p.strip() and not cls._looks_like_template_guidance(p)]
+        if kept:
+            s = "".join(kept).strip()
+        elif parts:
+            s = ""
 
         cap = max_chars if max_chars is not None else max(20, int(word_limit * 1.5))
         if (word_limit or 120) <= 45:
@@ -656,6 +721,7 @@ class WordFiller:
                 self._fill_paragraph(doc, task, content)
 
         self._sweep_residual_hint_paragraphs(doc)
+        self._sweep_residual_hint_table_cells(doc)
         self._sweep_abstract_chapter_table_rubrics(doc)
         self._remove_rubric_tables_in_abstract_chapters(doc)
         remove_empty_body_paragraphs(doc)
@@ -924,6 +990,17 @@ class WordFiller:
         ):
             self._set_paragraph_text_keep_style(para, "")
 
+    @staticmethod
+    def _clear_paragraph_text_preserve_structure(para: Paragraph) -> None:
+        """清除可见文本，保留段落、run、分页符、分节符、图片/水印等非文本结构。"""
+        for node in para._element.xpath(".//w:t | .//w:instrText | .//w:delText"):
+            node.text = ""
+
+    def _clear_cell_text_preserve_structure(self, cell) -> None:
+        """清除单元格可见文本，保留单元格属性、段落结构、图片和分页符。"""
+        for para in cell.paragraphs:
+            self._clear_paragraph_text_preserve_structure(para)
+
     def _clear_adjacent_pure_hints(self, doc: Document, filled_idx: int) -> None:
         paras = doc.paragraphs
         for j in (filled_idx - 1, filled_idx + 1):
@@ -938,10 +1015,31 @@ class WordFiller:
             # 跳过封面段落
             if self._is_cover_paragraph(text):
                 continue
+            if self._looks_like_template_guidance(text):
+                self._clear_paragraph_text_preserve_structure(para)
+                continue
             # 跳过包含评分表关键词的段落
             if any(kw in text for kw in ["评分", "评价", "打分", "得分", "总分", "等级"]):
                 continue
             self._clear_residual_hint_paragraph(para)
+
+    def _sweep_residual_hint_table_cells(self, doc: Document) -> None:
+        """清理未被任务覆盖的表格模板指引，保留表格结构和非文本对象。"""
+        for table in doc.tables:
+            if self._is_cover_table(table) or self._is_rating_table(table):
+                continue
+            for row in table.rows:
+                for cell in row.cells:
+                    text = (cell.text or "").strip()
+                    if not text:
+                        continue
+                    if (
+                        self._looks_like_template_guidance(text)
+                        or self._looks_like_fill_instruction_line(text)
+                        or self._is_pure_hint_line(text)
+                        or self._looks_like_example_or_hint(text)
+                    ):
+                        self._clear_cell_text_preserve_structure(cell)
 
     def _write_paragraph_content(
         self, para: Paragraph, content: str, hint: Dict[str, Any]

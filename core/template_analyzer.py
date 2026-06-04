@@ -8,6 +8,7 @@ from core.slot_scanner import scan_anchor_tasks, build_decorative_hints_for_llm
 from core.template_vision import apply_chapter_hints_to_tasks, compact_profile_for_analyzer
 import config
 import json
+import re
 import uuid
 
 from docx import Document
@@ -150,7 +151,7 @@ class TemplateAnalyzer:
         try:
             raw_tasks = json.loads(content)
         except json.JSONDecodeError:
-            return []
+            raw_tasks = []
 
         tasks = []
         for item in raw_tasks:
@@ -177,10 +178,234 @@ class TemplateAnalyzer:
                     word_limit=wl,
                 )
             )
+        self._supplement_section_paragraph_tasks(doc, tasks)
         if vision_profile:
             apply_chapter_hints_to_tasks(tasks, vision_profile)
         self._apply_replace_mode_heuristics(template_path, tasks)
         return tasks
+
+    def _supplement_section_paragraph_tasks(self, doc, tasks: List[FillTask]) -> None:
+        """补齐章节正文段落任务，避免只有表格任务导致小节正文为空。"""
+        for sec in doc.sections:
+            if self._skip_section_paragraph_task(sec):
+                continue
+
+            candidate = self._pick_section_body_paragraph(sec)
+            if self._has_matching_paragraph_task(tasks, sec.title, candidate):
+                continue
+
+            location_hint: Dict[str, Any] = {"replace_mode": "full"}
+            if candidate:
+                location_hint["paragraph_text"] = candidate
+                description = self._paragraph_description(sec.title, candidate)
+            elif self._section_can_use_empty_paragraph(sec):
+                location_hint["paragraph_text"] = ""
+                description = self._paragraph_description(sec.title, "")
+            else:
+                continue
+
+            tasks.append(
+                FillTask(
+                    task_id=str(uuid.uuid4()),
+                    target_chapter=sec.title,
+                    task_type="paragraph",
+                    description=description,
+                    location_hint=location_hint,
+                    word_limit=self._word_limit_for_section(sec.title),
+                )
+            )
+
+    @staticmethod
+    def _compact_text(text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
+    def _skip_section_paragraph_task(self, sec) -> bool:
+        title = (sec.title or "").strip()
+        compact = self._compact_text(title)
+        if not title or title == "文档开头":
+            return True
+        if "目录" in compact:
+            return True
+        if compact.startswith("附录"):
+            return True
+        if "评分标准" in compact or "提交材料清单" in compact:
+            return True
+        if sec.level <= 0:
+            return True
+        if sec.level == 1 and not sec.content.strip():
+            return True
+        return False
+
+    def _pick_section_body_paragraph(self, sec) -> Optional[str]:
+        lines = [
+            line.strip()
+            for line in (sec.content or "").splitlines()
+            if line.strip()
+        ]
+        if not lines:
+            return None
+
+        for line in lines:
+            if self._is_body_fill_candidate(line, allow_placeholder=True):
+                return line
+
+        for line in lines:
+            if self._is_body_fill_candidate(line, allow_placeholder=False):
+                return line
+
+        return None
+
+    def _is_body_fill_candidate(self, text: str, *, allow_placeholder: bool) -> bool:
+        t = (text or "").strip()
+        if not t or self._is_non_body_template_line(t):
+            return False
+        if allow_placeholder and (
+            WordFiller._is_pure_hint_line(t)
+            or WordFiller._looks_like_fill_instruction_line(t)
+            or WordFiller._text_has_placeholder(t)
+        ):
+            return True
+        if allow_placeholder:
+            return False
+        if self._looks_like_section_body_guidance(t):
+            return True
+        return (
+            WordFiller._looks_like_writing_rubric(t)
+            or WordFiller._looks_like_template_guidance(t)
+        )
+
+    @staticmethod
+    def _looks_like_section_body_guidance(text: str) -> bool:
+        t = (text or "").strip()
+        if len(t) < 12 or len(t) > 500:
+            return False
+        starters = (
+            "说明",
+            "描述",
+            "填写",
+            "本节应",
+            "请",
+            "用文字",
+            "工作流应",
+            "角色设定是",
+            "知识库不是",
+            "从",
+            "客观分析",
+            "围绕",
+            "展望",
+            "至少设计",
+            "结果分析",
+        )
+        if not t.startswith(starters):
+            return False
+        guidance_markers = (
+            "建议",
+            "至少",
+            "必须",
+            "应",
+            "不要",
+            "不能",
+            "避免",
+            "如何",
+            "哪些",
+            "什么",
+            "截图",
+            "展示",
+            "分析",
+            "总结",
+            "说明",
+            "描述",
+            "填写",
+            "项目",
+            "智能体",
+            "工作流",
+            "数据库",
+            "知识库",
+            "插件",
+            "演示",
+            "用户",
+            "场景",
+        )
+        return any(marker in t for marker in guidance_markers)
+
+    @staticmethod
+    def _is_non_body_template_line(text: str) -> bool:
+        t = (text or "").strip()
+        if not t:
+            return True
+        if re.match(r"^图\s*\d+(?:\.\d+)*\s*.+", t):
+            return True
+        if t.startswith(("关键词", "Key words", "Keywords", "关键字")):
+            return True
+        return False
+
+    def _section_can_use_empty_paragraph(self, sec) -> bool:
+        """无可见正文提示时，用小节内空段承载正文；主要覆盖表格型小节。"""
+        if sec.level < 2:
+            return False
+        title = self._compact_text(sec.title)
+        if not re.match(r"^\d+\.\d+", title):
+            return False
+        return bool(sec.tables or not (sec.content or "").strip())
+
+    def _has_matching_paragraph_task(
+        self,
+        tasks: List[FillTask],
+        chapter: str,
+        paragraph_text: Optional[str],
+    ) -> bool:
+        chapter_key = self._compact_text(chapter)
+        candidate_key = self._compact_text(paragraph_text or "")
+        same_chapter_tasks = [
+            t
+            for t in tasks
+            if t.task_type == "paragraph"
+            and self._compact_text(t.target_chapter) == chapter_key
+        ]
+        if not same_chapter_tasks:
+            return False
+        if not candidate_key:
+            return True
+
+        for task in same_chapter_tasks:
+            hint = task.location_hint or {}
+            existing = str(hint.get("paragraph_text") or "")
+            existing_key = self._compact_text(existing)
+            if not existing_key:
+                continue
+            if (
+                existing_key == candidate_key
+                or existing_key in candidate_key
+                or candidate_key in existing_key
+            ):
+                return True
+        return False
+
+    def _paragraph_description(self, chapter: str, candidate: str) -> str:
+        if candidate:
+            return f"填写「{chapter}」正文：{candidate[:100]}"
+        return (
+            f"补充「{chapter}」的小节正文，概括本节完成情况、关键证据、"
+            "实现效果和可复核材料。"
+        )
+
+    def _word_limit_for_section(self, chapter: str) -> int:
+        compact = self._compact_text(chapter)
+        if "摘要" in compact:
+            return int(getattr(config, "ABSTRACT_WORD_LIMIT", 650))
+        if compact.startswith(("1.1", "1.2", "2.1", "2.2")):
+            return 450
+        if compact.startswith(("3.2", "3.3", "3.4", "3.5", "3.6")):
+            return 520
+        if compact.startswith("4.3"):
+            return 500
+        if compact.startswith(("5.2", "5.3", "6.1", "6.2", "6.3")):
+            return 480
+        if compact.startswith(("1.3", "2.3", "3.1", "4.2")):
+            return 420
+        if compact.startswith(("4.1", "5.1")):
+            return 350
+        return 400
 
     def _apply_replace_mode_heuristics(
         self, template_path: str, tasks: List[FillTask]

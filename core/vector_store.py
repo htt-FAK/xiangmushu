@@ -203,6 +203,33 @@ class VectorStore:
         except Exception:
             return 0
 
+    def get_all_documents(self, max_chars: int = 0) -> List[Dict]:
+        """全量召回：返回知识库中所有文档片段。
+
+        Args:
+            max_chars: 最大总字符数，0 表示不限制。
+        """
+        try:
+            results = self._collection.get()
+        except Exception:
+            return []
+        if not results:
+            return []
+
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+        items: List[Dict] = []
+        total_chars = 0
+        for i, doc_text in enumerate(docs):
+            if not doc_text:
+                continue
+            meta = metas[i] if i < len(metas) and isinstance(metas[i], dict) else {}
+            if max_chars > 0 and total_chars + len(doc_text) > max_chars:
+                break
+            items.append({"text": doc_text, "metadata": meta})
+            total_chars += len(doc_text)
+        return items
+
     def delete_entire_collection(self):
         """删除当前 kb 对应的整个 Chroma collection。"""
         try:

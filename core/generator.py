@@ -206,32 +206,45 @@ class ContentGenerator:
         )
 
         kb_empty = self._vs.get_collection_count() == 0
-        if kb_empty:
-            results = []
-        else:
-            results = self._vs.search(
-                query, top_k=top_k, max_distance=max_d
+
+        # 全量召回模式：跳过向量检索，直接读取知识库全部文档
+        if config.FULL_RECALL_MODE and not kb_empty:
+            all_docs = self._vs.get_all_documents(
+                max_chars=config.FULL_RECALL_MAX_CHARS
             )
-
-        weak_kb = kb_empty or len(results) == 0
-
-        best_hit_distance: Optional[float] = None
-        best_similarity_est: Optional[float] = None
-        low_similarity = False
-        if results:
-            dists = [
-                float(r["distance"])
-                for r in results
-                if r.get("distance") is not None
-            ]
-            if dists:
-                best_hit_distance = min(dists)
-                best_similarity_est = max(
-                    0.0, min(1.0, 1.0 - best_hit_distance)
+            results = all_docs
+            ref_texts = self._format_full_recall(all_docs)
+            weak_kb = False
+            best_hit_distance = None
+            best_similarity_est = 1.0
+            low_similarity = False
+        else:
+            if kb_empty:
+                results = []
+            else:
+                results = self._vs.search(
+                    query, top_k=top_k, max_distance=max_d
                 )
-                low_similarity = best_similarity_est < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
 
-        ref_texts = self._format_kb(results)
+            weak_kb = kb_empty or len(results) == 0
+
+            best_hit_distance: Optional[float] = None
+            best_similarity_est: Optional[float] = None
+            low_similarity = False
+            if results:
+                dists = [
+                    float(r["distance"])
+                    for r in results
+                    if r.get("distance") is not None
+                ]
+                if dists:
+                    best_hit_distance = min(dists)
+                    best_similarity_est = max(
+                        0.0, min(1.0, 1.0 - best_hit_distance)
+                    )
+                    low_similarity = best_similarity_est < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
+
+            ref_texts = self._format_kb(results)
 
         word_limit = task.word_limit
         if task.task_type == "table_cell":
@@ -373,6 +386,7 @@ class ContentGenerator:
             "table_cell_multimodal": bool(table_cell_mm),
             "table_vision_n_images": len(table_cell_vision_pngs or []),
             "fast_mode": bool(fast_mode),
+            "full_recall_mode": bool(config.FULL_RECALL_MODE),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route %s", route_meta)
@@ -751,3 +765,21 @@ class ContentGenerator:
                 f"【参考{i}】相似度距离={dist_s} 来源:{r['metadata'].get('source', '未知')}\n{body}"
             )
         return "\n\n---\n\n".join(parts)
+
+    @staticmethod
+    def _format_full_recall(docs: List[Dict]) -> str:
+        """全量召回格式化：按来源文件分组拼接，不显示距离分数。"""
+        if not docs:
+            return "（知识库中无可用文档。）"
+        # 按来源文件分组
+        by_source: Dict[str, List[str]] = {}
+        for d in docs:
+            src = (d.get("metadata") or {}).get("source", "未知来源")
+            text = (d.get("text") or "").strip()
+            if text:
+                by_source.setdefault(src, []).append(text)
+        parts = []
+        for src, texts in by_source.items():
+            body = "\n\n".join(texts)
+            parts.append(f"【文档：{src}】\n{body}")
+        return "\n\n===\n\n".join(parts)
