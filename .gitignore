@@ -7,7 +7,10 @@ __pycache__/
 .pytest_cache/
 
 # IDE local state
+.idea/
 .idea/dataSources.xml
+.idea/claudeCodeTabState.xml
+.idea/workspace.xml
 
 # Generated runtime data and evaluation artifacts
 data/.cache/
@@ -27,3 +30,7 @@ frontend*.png
 fg_*.png
 git_log*.png
 git_log.html
+
+# Local dev/runtime logs
+backend-*.log
+frontend-*.log
