@@ -1,56 +1,69 @@
-"""测试模型连接"""
-import openai
-import config
+"""Quick model connectivity check using the configured model chains."""
 
-# 使用 config 中的配置
+import openai
+
+import config
+from core.dashscope_chat import direct_chat_completions_create
+
+
+def _ordered_models(*models: str) -> list[str]:
+    out: list[str] = []
+    seen = set()
+    for model in models:
+        mid = (model or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append(mid)
+    return out
+
+
 api_key = config.OPENAI_COMPAT_API_KEY
 base_url = config.OPENAI_BASE_URL
 
-print('测试模型连接...')
-print(f'API Key: {api_key[:10]}...' if api_key else 'API Key: 未设置')
-print(f'Base URL: {base_url}')
+print("Testing model connectivity...")
+print(f"API Key: {api_key[:10]}..." if api_key else "API Key: not configured")
+print(f"Base URL: {base_url}")
 print()
 
 if not api_key:
-    print('❌ API Key 未设置，请在 .env 文件中配置')
-    exit(1)
+    print("No API key configured in .env")
+    raise SystemExit(1)
 
-client = openai.OpenAI(
-    api_key=api_key,
-    base_url=base_url,
+client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+models_to_test = _ordered_models(
+    config.LARGE_LLM_MODEL,
+    getattr(config, "FALLBACK_LLM_MODEL_1", ""),
+    getattr(config, "FALLBACK_LLM_MODEL_2", ""),
+    getattr(config, "FALLBACK_LLM_MODEL_3", ""),
+    config.SMALL_LLM_MODEL,
+    getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
+    config.VISION_WEB_MODEL,
+    getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
+    config.VISUAL_AUDIT_MODEL,
+    getattr(config, "VISUAL_AUDIT_FALLBACK_MODEL", ""),
 )
 
-# 测试多个可能的模型
-models_to_test = [
-    "gpt-5.4",
-    "gpt-5.3",
-    "gpt-5.2",
-    "gpt-5.1",
-    "gpt-5",
-    "gpt-4",
-    "qwen-max",
-    "qwen-plus",
-    "deepseek-v4-pro",
-]
-
 for model in models_to_test:
-    print(f'测试模型: {model}...', end=' ')
+    print(f"Testing model: {model}...", end=" ")
     try:
-        response = client.chat.completions.create(
+        direct_chat_completions_create(
+            client,
             model=model,
             messages=[
-                {'role': 'system', 'content': '你是一个 helpful assistant'},
-                {'role': 'user', 'content': '你好，请回复"模型连接成功"'}
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": 'Reply with "model connection ok"'},
             ],
             max_tokens=50,
-            timeout=30
+            timeout=30,
         )
-        print(f'✅ 成功！')
+        print("OK")
     except Exception as e:
         error_msg = str(e)
         if "model" in error_msg.lower() and "not exist" in error_msg.lower():
-            print(f'❌ 模型不存在')
+            print("MODEL_NOT_FOUND")
         elif "authentication" in error_msg.lower():
-            print(f'❌ 认证失败')
+            print("AUTH_FAILED")
         else:
-            print(f'❌ 错误: {error_msg[:50]}')
+            print(f"ERROR: {error_msg[:80]}")

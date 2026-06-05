@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openai import OpenAI
 
 import config
-from core.dashscope_chat import chat_completions_create
+from core.dashscope_chat import chat_completions_create, direct_chat_completions_create
 from core.leaderboard.models_registry import ModelEntry
 
 
@@ -84,7 +84,7 @@ def probe_chat(
         if use_wrapper:
             resp = chat_completions_create(client, **kwargs)
         else:
-            resp = client.chat.completions.create(**kwargs)
+            resp = direct_chat_completions_create(client, **kwargs)
         text = (resp.choices[0].message.content if resp.choices else "") or ""
         text = text.strip()
         pt, ct = _usage_from_response(resp)
@@ -126,7 +126,7 @@ def probe_vision(
         if use_wrapper:
             resp = chat_completions_create(client, **kwargs)
         else:
-            resp = client.chat.completions.create(**kwargs)
+            resp = direct_chat_completions_create(client, **kwargs)
         text = (resp.choices[0].message.content if resp.choices else "") or ""
         text = text.strip()
         pt, ct = _usage_from_response(resp)
@@ -167,7 +167,7 @@ def probe_search(
         if use_wrapper and not gateway_raw:
             resp = chat_completions_create(client, **kwargs)
         else:
-            resp = client.chat.completions.create(**kwargs)
+            resp = direct_chat_completions_create(client, **kwargs)
         text = (resp.choices[0].message.content if resp.choices else "") or ""
         text = text.strip()
         pt, ct = _usage_from_response(resp)
@@ -277,7 +277,7 @@ def chat_completion_text(
         if use_wrapper:
             resp = chat_completions_create(client, **kwargs)
         else:
-            resp = client.chat.completions.create(**kwargs)
+            resp = direct_chat_completions_create(client, **kwargs)
         text = (resp.choices[0].message.content if resp.choices else "") or ""
         pt, ct = _usage_from_response(resp)
         dt = (time.perf_counter() - t0) * 1000

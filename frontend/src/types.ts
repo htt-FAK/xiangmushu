@@ -39,11 +39,47 @@ export type UploadResult = {
   error?: string;
 };
 
+export type PostFillChecks = {
+  ok: boolean;
+  leftover_placeholders?: string[];
+  missing_chapters?: string[];
+  protected_issues?: string[];
+  cover_modified?: boolean;
+  rating_table_modified?: boolean;
+  template_words?: number;
+  output_words?: number;
+  template_tables?: number;
+  output_tables?: number;
+};
+
 export type GenerateEvent =
   | { type: "task"; index: number; total: number; chapter: string }
+  | {
+      type: "route";
+      index: number;
+      model: string;
+      tier?: string;
+      kb_hits?: number;
+      evidence_refs?: string[];
+    }
   | { type: "chunk"; index: number; text: string }
+  | {
+      type: "audit";
+      index: number;
+      verdict: string;
+      issues: string[];
+      revised: boolean;
+    }
   | { type: "progress"; index: number; total: number }
-  | { type: "done"; filename: string; download: string }
+  | {
+      type: "done";
+      filename: string;
+      download: string;
+      report_download?: string;
+      report_summary?: string;
+      post_fill_checks?: PostFillChecks;
+      visual_score?: number | null;
+    }
   | { type: "error"; index?: number; error: string };
 
 export type GenerateParams = {
@@ -54,4 +90,6 @@ export type GenerateParams = {
   maxDistance: number;
   enableWeb: boolean;
   useStream: boolean;
+  enableAudit: boolean;
+  enableVisualAudit: boolean;
 };

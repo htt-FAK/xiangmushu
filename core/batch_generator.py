@@ -241,8 +241,51 @@ def batch_generate_table_row(
 
     # 尝试主模型，失败则使用备选模型
     models_to_try = [model]
-    if hasattr(config, 'TABLE_CELL_FALLBACK_MODEL'):
-        models_to_try.append(config.TABLE_CELL_FALLBACK_MODEL)
+    if batch_fast or (
+        evidence.best_similarity is not None
+        and evidence.best_similarity >= config.STRONG_RAG_SIMILARITY_FLOOR
+        and not use_plus
+    ):
+        models_to_try.extend(
+            [
+                getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
+                getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
+                getattr(config, "TABLE_CELL_FALLBACK_MODEL", ""),
+            ]
+        )
+    elif use_plus:
+        models_to_try.extend(
+            [
+                getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
+                getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
+                getattr(config, "TABLE_CELL_FALLBACK_MODEL", ""),
+            ]
+        )
+    elif use_mm and isinstance(user_content, list):
+        models_to_try.extend(
+            [
+                getattr(config, "TABLE_CELL_VISION_FALLBACK_MODEL", ""),
+                getattr(config, "TABLE_CELL_FALLBACK_MODEL", ""),
+            ]
+        )
+    else:
+        models_to_try.extend(
+            [
+                getattr(config, "FALLBACK_LLM_MODEL_1", ""),
+                getattr(config, "FALLBACK_LLM_MODEL_2", ""),
+                getattr(config, "FALLBACK_LLM_MODEL_3", ""),
+                getattr(config, "TABLE_CELL_FALLBACK_MODEL", ""),
+            ]
+        )
+    deduped_models: List[str] = []
+    seen_models = set()
+    for try_model in models_to_try:
+        mid = (try_model or "").strip()
+        if not mid or mid in seen_models:
+            continue
+        seen_models.add(mid)
+        deduped_models.append(mid)
+    models_to_try = deduped_models
     
     raw = ""
     last_error = None

@@ -44,16 +44,21 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
-VISION_WEB_MODEL = _vw or "qwen3.6-plus"
-TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.6-plus"
-VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.6-plus"
-TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.6-plus"
-TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.5-plus"
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "kimi-k2.6").strip()
+VISION_WEB_MODEL = _vw or "qwen3.6-flash"
+VISION_WEB_FALLBACK_MODEL = os.getenv("VISION_WEB_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
+TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.6-plus-2026-04-02"
+TEMPLATE_VISION_FALLBACK_MODEL = os.getenv("TEMPLATE_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.6-plus-2026-04-02"
+VISION_EXTRACT_FALLBACK_MODEL = os.getenv("VISION_EXTRACT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.6-plus-2026-04-02"
+TABLE_CELL_VISION_FALLBACK_MODEL = os.getenv("TABLE_CELL_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-flash").strip()
+SMALL_LLM_FALLBACK_MODEL = os.getenv("SMALL_LLM_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
 # 结构分析：复星网关上 glm-5.1 chat 易空回复或长时间无响应，默认 qwen3.5-plus
-TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.5-plus"
+TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-flash"
 TEMPLATE_ANALYZE_FALLBACK_MODEL = (
-    os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.6-plus"
+    os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
 )
 # 结构分析专用超时（秒），避免沿用 OPENAI_TIMEOUT=300 时界面长时间无反馈
 TEMPLATE_ANALYZE_TIMEOUT = float(os.getenv("TEMPLATE_ANALYZE_TIMEOUT", "180"))
@@ -61,13 +66,14 @@ TEMPLATE_ANALYZE_TIMEOUT = float(os.getenv("TEMPLATE_ANALYZE_TIMEOUT", "180"))
 TEMPLATE_ANALYZE_MAX_PROMPT_CHARS = int(
     os.getenv("TEMPLATE_ANALYZE_MAX_PROMPT_CHARS", "8000")
 )
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.6-plus"
-FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.5-plus"
-FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "glm-5.1"
-AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.6-plus"
-AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "glm-5.1"
-AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.5-plus"
-AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "gpt-5.4"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.7-max-preview"
+FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.7-max-2026-05-17"
+FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "qwen3.7-max-2026-05-20"
+FALLBACK_LLM_MODEL_3 = os.getenv("FALLBACK_LLM_MODEL_3", "").strip() or "qwen3.7-max"
+AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.7-max-preview"
+AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.7-max-2026-05-17"
+AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.7-max-2026-05-20"
+AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "qwen3.7-max"
 TEMP_AUDIT = float(os.getenv("TEMP_AUDIT", "0.2"))
 
 TEMP_VISION = float(os.getenv("TEMP_VISION", "0.25"))
@@ -135,14 +141,14 @@ TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")
 _BTF = os.getenv("BATCH_TABLE_FAST", "1").strip().lower()
 BATCH_TABLE_FAST = _BTF not in ("0", "false", "no", "off")
 BATCH_TABLE_FAST_MODEL = (
-    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "kimi-k2.6"
+    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.6-flash"
 )
 
 # 复星网关上 chat 不可靠的模型：直接走百炼 compatible-mode，避免空回复再等一轮
 def _parse_fosun_chat_skip_models() -> frozenset[str]:
     raw = os.getenv(
         "FOSUN_CHAT_SKIP_MODELS",
-        "glm-5.1,glm-5,kimi-k2.6,kimi-k2.5",
+        "",
     ).strip()
     return frozenset(p.strip() for p in raw.split(",") if p.strip())
 
@@ -174,17 +180,13 @@ for d in [HISTORICAL_DIR, TEMPLATE_DIR, OUTPUT_DIR]:
     os.makedirs(d, exist_ok=True)
 
 
-# MiMo API: disabled by default. Set MIMO_API_KEY explicitly only for legacy experiments.
-MIMO_API_KEY = os.getenv("MIMO_API_KEY", "").strip()
-MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
-MIMO_MODEL = "mimo-v2.5-pro"
-
 # 视觉审核配置（测试阶段全部拉满）
 _VISUAL_AUDIT = os.getenv("VISUAL_AUDIT_ENABLED", "1").strip().lower()
 VISUAL_AUDIT_ENABLED = _VISUAL_AUDIT not in ("0", "false", "no", "off")
 VISUAL_AUDIT_MAX_ROUNDS = int(os.getenv("VISUAL_AUDIT_MAX_ROUNDS", "3"))
 VISUAL_AUDIT_PASS_SCORE = int(os.getenv("VISUAL_AUDIT_PASS_SCORE", "85"))
 VISUAL_AUDIT_MODEL = os.getenv("VISUAL_AUDIT_MODEL", "qwen3.6-plus-2026-04-02").strip()
+VISUAL_AUDIT_FALLBACK_MODEL = os.getenv("VISUAL_AUDIT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
 
 # 内容充实度配置
 _CONTENT_RICHNESS = os.getenv("CONTENT_RICHNESS_ENABLED", "1").strip().lower()
@@ -199,8 +201,8 @@ PRESERVE_TABLE_FORMAT = _PRESERVE_TABLE_FORMAT not in ("0", "false", "no", "off"
 
 
 def chat_llm_configured() -> bool:
-    """是否具备聊天/多模态调用所需 Key（网关或百炼或 MiMo 其一）。"""
-    return bool((FOSUN_AIGW_API_KEY or OPENAI_COMPAT_API_KEY or MIMO_API_KEY or "").strip())
+    """是否具备聊天/多模态调用所需 Key。"""
+    return bool((FOSUN_AIGW_API_KEY or OPENAI_COMPAT_API_KEY or "").strip())
 
 
 def embedding_llm_configured() -> bool:
@@ -212,8 +214,6 @@ def embedding_llm_configured() -> bool:
 _chat_client_singleton: Optional[Any] = None
 _dashscope_backup_chat_singleton: Optional[Any] = None
 _dashscope_backup_chat_checked_none: bool = False
-_mimo_client_singleton: Optional[Any] = None
-_mimo_client_checked_none: bool = False
 
 
 def openai_client_for_chat() -> Any:
@@ -284,28 +284,6 @@ def openai_client_for_template_analyze() -> Any:
             max_retries=0,
         )
     return openai_client_for_chat()
-
-
-def mimo_client() -> Optional[Any]:
-    """MiMo API 客户端（支持联网搜索）。"""
-    global _mimo_client_singleton, _mimo_client_checked_none
-    if _mimo_client_checked_none:
-        return None
-    if _mimo_client_singleton is not None:
-        return _mimo_client_singleton
-    key = (MIMO_API_KEY or "").strip()
-    if not key:
-        _mimo_client_checked_none = True
-        return None
-    from openai import OpenAI
-
-    _mimo_client_singleton = OpenAI(
-        api_key=key,
-        base_url=MIMO_BASE_URL,
-        timeout=OPENAI_TIMEOUT,
-        max_retries=OPENAI_MAX_RETRIES,
-    )
-    return _mimo_client_singleton
 
 
 def dashscope_backup_chat_client() -> Optional[Any]:

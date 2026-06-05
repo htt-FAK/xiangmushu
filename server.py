@@ -5,20 +5,36 @@ FastAPI 后端 — 为 HTML 前端提供 REST + SSE 接口
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 from dataclasses import asdict
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 import config
 from core.chunker import Chunker
+from core.content_auditor import (
+    ContentAuditor,
+    need_model_audit,
+    rule_audit,
+    should_apply_revision,
+)
 from core.filler import WordFiller
 from core.generator import ContentGenerator
 from core.kb_extract import path_to_parsed_document
 from core.kb_registry import add_kb, load_registry, remove_kb
+from core.post_fill_verifier import verify_filled_document
+from core.reporting import (
+    build_generation_trace,
+    build_quality_report,
+    quality_report_summary,
+    save_quality_report,
+)
 from core.template_analyzer import TemplateAnalyzer
 from core.vector_store import VectorStore
+from core.visual_auditor import audit_document_visual
 
 app = FastAPI(title="智能计划书生成器")
 
@@ -40,14 +56,26 @@ def _get_vs(slug: str) -> VectorStore:
 # ---------------------------------------------------------------------------
 # 静态文件 & 首页
 # ---------------------------------------------------------------------------
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+BASE_DIR = os.path.dirname(__file__)
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+FRONTEND_DIST_DIR = os.path.join(BASE_DIR, "frontend", "dist")
+FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIST_DIR, "assets")
+
+
+def _spa_index_path() -> str:
+    frontend_index = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    if os.path.isfile(frontend_index):
+        return frontend_index
+    return os.path.join(STATIC_DIR, "index.html")
+
+
+if os.path.isdir(FRONTEND_ASSETS_DIR):
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    html_path = os.path.join(STATIC_DIR, "index.html")
-    with open(html_path, encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+    return FileResponse(_spa_index_path(), media_type="text/html")
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +191,8 @@ async def generate(
     max_distance: float = Form(1.25),
     enable_web: bool = Form(False),
     use_stream: bool = Form(True),
+    enable_audit: bool = Form(False),
+    enable_visual_audit: bool = Form(True),
 ):
     vs = _get_vs(slug)
     template_path = os.path.join(config.TEMPLATE_DIR, template)
@@ -178,9 +208,11 @@ async def generate(
         return JSONResponse({"ok": False, "error": "未找到待填位置"}, status_code=400)
 
     generator = ContentGenerator(vs)
+    auditor = ContentAuditor() if enable_audit else None
 
     def event_stream():
         results: list[str] = []
+        traces = []
         for i, task in enumerate(tasks):
             if task.word_limit <= 0:
                 task.word_limit = word_limit
@@ -188,24 +220,85 @@ async def generate(
             yield _sse({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
 
             try:
+                gen_bundle = generator.prepare_generation_bundle(
+                    task,
+                    top_k=top_k,
+                    enable_web=enable_web,
+                    retrieval_max_distance=max_distance,
+                )
+                yield _sse(
+                    {
+                        "type": "route",
+                        "index": i,
+                        "model": gen_bundle.model,
+                        "tier": gen_bundle.route_meta.get("generation_tier"),
+                        "kb_hits": gen_bundle.route_meta.get("kb_hits", 0),
+                        "evidence_refs": gen_bundle.evidence_refs[:5],
+                    }
+                )
                 if use_stream:
                     acc: list[str] = []
-                    for piece in generator.generate_stream(
-                        task, top_k=top_k, enable_web=enable_web, retrieval_max_distance=max_distance
-                    ):
+                    for piece in generator.stream_from_bundle(gen_bundle, route_hook=None):
                         acc.append(piece)
                         yield _sse({"type": "chunk", "index": i, "text": piece})
                     content = "".join(acc).strip()
                 else:
-                    content = generator.generate(
-                        task, top_k=top_k, enable_web=enable_web, retrieval_max_distance=max_distance
-                    )
+                    content = generator.generate_from_bundle(gen_bundle, route_hook=None)
                     yield _sse({"type": "chunk", "index": i, "text": content})
             except Exception as e:
                 content = f"（生成失败：{e}）"
                 yield _sse({"type": "error", "index": i, "error": str(e)})
+                results.append(content)
+                traces.append(
+                    build_generation_trace(
+                        task,
+                        {"model": "", "generation_tier": "error", "evidence_refs": []},
+                        content,
+                        audit_verdict="error",
+                        audit_issues=[str(e)],
+                    )
+                )
+                yield _sse({"type": "progress", "index": i, "total": len(tasks)})
+                continue
+
+            audit_issues = rule_audit(task, content, gen_bundle.route_meta)
+            audit_verdict = "pass" if not audit_issues else "rule_issue"
+            revised = False
+            if auditor is not None and need_model_audit(task, gen_bundle.route_meta, audit_issues):
+                ar = auditor.audit(
+                    task,
+                    content,
+                    gen_bundle.ref_texts,
+                    None,
+                    gen_bundle.route_meta,
+                )
+                audit_verdict = ar.verdict
+                audit_issues = audit_issues + list(ar.issues)
+                if should_apply_revision(task, ar):
+                    content = ar.revised_content.strip()
+                    revised = True
+            if audit_issues:
+                yield _sse(
+                    {
+                        "type": "audit",
+                        "index": i,
+                        "verdict": audit_verdict,
+                        "issues": audit_issues[:5],
+                        "revised": revised,
+                    }
+                )
 
             results.append(content)
+            traces.append(
+                build_generation_trace(
+                    task,
+                    gen_bundle.route_meta,
+                    content,
+                    audit_verdict=audit_verdict,
+                    audit_issues=audit_issues,
+                    revised=revised,
+                )
+            )
             yield _sse({"type": "progress", "index": i, "total": len(tasks)})
 
         # 回填 Word
@@ -213,7 +306,30 @@ async def generate(
         output_path = os.path.join(config.OUTPUT_DIR, output_name)
         try:
             _filler.fill_template(template_path, tasks, results, output_path)
-            yield _sse({"type": "done", "filename": output_name, "download": f"/api/download/{output_name}"})
+            post_fill_checks = verify_filled_document(template_path, output_path, tasks)
+            visual_payload = {}
+            if enable_visual_audit and config.VISUAL_AUDIT_ENABLED:
+                visual_result = audit_document_visual(output_path)
+                visual_payload = asdict(visual_result)
+            report = build_quality_report(
+                template_name=template,
+                output_path=output_path,
+                traces=traces,
+                post_fill_checks=post_fill_checks,
+                visual_audit=visual_payload,
+            )
+            report_path = save_quality_report(output_path, report)
+            yield _sse(
+                {
+                    "type": "done",
+                    "filename": output_name,
+                    "download": f"/api/download/{output_name}",
+                    "report_download": f"/api/download/{os.path.basename(report_path)}",
+                    "report_summary": quality_report_summary(report),
+                    "post_fill_checks": post_fill_checks,
+                    "visual_score": visual_payload.get("score"),
+                }
+            )
         except Exception as e:
             yield _sse({"type": "error", "error": f"回填失败: {e}"})
 
@@ -232,7 +348,27 @@ async def download(filename: str):
     path = os.path.join(config.OUTPUT_DIR, filename)
     if not os.path.isfile(path):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
-    return FileResponse(path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    media_type, _ = mimetypes.guess_type(path)
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type=media_type
+        or "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    if not full_path or full_path.startswith("api/"):
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    if os.path.isdir(FRONTEND_DIST_DIR):
+        candidate = os.path.join(FRONTEND_DIST_DIR, full_path)
+        if os.path.isfile(candidate):
+            media_type, _ = mimetypes.guess_type(candidate)
+            return FileResponse(candidate, media_type=media_type)
+
+    return FileResponse(_spa_index_path(), media_type="text/html")
 
 
 # ---------------------------------------------------------------------------

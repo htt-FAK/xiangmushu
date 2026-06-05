@@ -5,47 +5,84 @@ import mimetypes
 import os
 from typing import Optional
 
+from core.document_models import DocumentBlock
 from core.parser import DocumentParser, ParsedDocument, Section
 
 
-def _synthetic_doc(filename: str, body: str, kb_source_type: str) -> ParsedDocument:
+def _synthetic_doc(
+    filename: str,
+    body: str,
+    kb_source_type: str,
+    *,
+    blocks: Optional[list[DocumentBlock]] = None,
+) -> ParsedDocument:
     text = (body or "").strip()
     if not text:
         text = "（未能提取到有效文本内容）"
     sec = Section(level=0, title="全文", content=text)
+    use_blocks = list(blocks or [])
+    if not use_blocks:
+        use_blocks.append(
+            DocumentBlock(
+                text=text,
+                page=1,
+                block_type="text",
+                source_type=kb_source_type,
+                chapter=sec.title,
+            )
+        )
     return ParsedDocument(
         filename=filename,
         sections=[sec],
         raw_tables=[],
         kb_source_type=kb_source_type,
+        blocks=use_blocks,
     )
 
 
-def _extract_pdf_text(path: str) -> str:
+def _extract_pdf_blocks(path: str) -> list[DocumentBlock]:
     from pypdf import PdfReader
 
     reader = PdfReader(path)
-    parts: list[str] = []
-    for page in reader.pages:
+    blocks: list[DocumentBlock] = []
+    for idx, page in enumerate(reader.pages, start=1):
         t = page.extract_text()
         if t:
-            parts.append(t)
-    return "\n\n".join(parts)
+            blocks.append(
+                DocumentBlock(
+                    text=t.strip(),
+                    page=idx,
+                    block_type="text",
+                    source_type="pdf",
+                    chapter=f"第{idx}页",
+                    metadata={"page_label": idx},
+                )
+            )
+    return blocks
 
 
-def _extract_pptx_text(path: str) -> str:
+def _extract_pptx_blocks(path: str) -> list[DocumentBlock]:
     from pptx import Presentation
 
     prs = Presentation(path)
-    parts: list[str] = []
+    blocks: list[DocumentBlock] = []
     for i, slide in enumerate(prs.slides, start=1):
         lines: list[str] = []
         for shape in slide.shapes:
             if hasattr(shape, "text") and shape.text:
                 lines.append(shape.text.strip())
         if lines:
-            parts.append(f"【第{i}页】\n" + "\n".join(lines))
-    return "\n\n".join(parts)
+            blocks.append(
+                DocumentBlock(
+                    text="\n".join(lines),
+                    page=i,
+                    block_type="slide",
+                    source_type="pptx",
+                    chapter=f"第{i}页",
+                    metadata={"slide_index": i},
+                )
+            )
+    return blocks
 
 
 def _guess_mime(path: str) -> str:
@@ -74,19 +111,23 @@ def path_to_parsed_document(path: str, original_name: Optional[str] = None) -> P
         return DocumentParser().parse(path)
 
     if ext == ".pdf":
-        text = _extract_pdf_text(path)
+        blocks = _extract_pdf_blocks(path)
+        text = "\n\n".join(block.text for block in blocks)
         if not (text or "").strip():
             text = (
                 "（本 PDF 未提取到文本层，可能为纯扫描件。请导出为图片后上传，"
                 "或使用带文字层的 PDF。）"
             )
-        return _synthetic_doc(name, text, "pdf")
+        return _synthetic_doc(name, text, "pdf", blocks=blocks)
 
     if ext == ".pptx":
-        text = _extract_pptx_text(path)
+        blocks = _extract_pptx_blocks(path)
+        text = "\n\n".join(
+            f"【第{block.page}页】\n{block.text}" for block in blocks
+        )
         if not (text or "").strip():
             text = "（未从 PPTX 提取到文本，可能幻灯片主要为图片；可导出为图片后上传以启用视觉解析。）"
-        return _synthetic_doc(name, text, "pptx")
+        return _synthetic_doc(name, text, "pptx", blocks=blocks)
 
     if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
         from core.vision_extract import describe_image_bytes
@@ -95,7 +136,22 @@ def path_to_parsed_document(path: str, original_name: Optional[str] = None) -> P
             raw = f.read()
         mime = _guess_mime(path)
         text = describe_image_bytes(raw, mime)
-        doc = _synthetic_doc(name, f"【图片视觉解析】{name}\n\n{text}", "image_vision")
+        blocks = [
+            DocumentBlock(
+                text=text,
+                page=1,
+                block_type="image",
+                source_type="image_vision",
+                chapter="图片视觉解析",
+                metadata={"mime_type": mime},
+            )
+        ]
+        doc = _synthetic_doc(
+            name,
+            f"【图片视觉解析】{name}\n\n{text}",
+            "image_vision",
+            blocks=blocks,
+        )
         return doc
 
     raise ValueError(f"不支持的文件类型: {ext}")

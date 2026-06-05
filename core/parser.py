@@ -5,6 +5,8 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 import re
 
+from core.document_models import DocumentBlock
+
 
 @dataclass
 class Section:
@@ -22,6 +24,7 @@ class ParsedDocument:
     sections: List[Section] = field(default_factory=list)
     raw_tables: List[List[List[str]]] = field(default_factory=list)
     kb_source_type: str = ""
+    blocks: List[DocumentBlock] = field(default_factory=list)
 
 
 class DocumentParser:
@@ -32,6 +35,7 @@ class DocumentParser:
     def parse(self, file_path: str) -> ParsedDocument:
         doc = Document(file_path)
         filename = file_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        blocks: List[DocumentBlock] = []
 
         all_tables_raw: List[List[List[str]]] = []
         for tbl in doc.tables:
@@ -73,16 +77,50 @@ class DocumentParser:
                 if is_heading:
                     current_section = Section(level=heading_level, title=text)
                     sections.append(current_section)
+                    blocks.append(
+                        DocumentBlock(
+                            text=text,
+                            page=1,
+                            block_type="heading",
+                            source_type="docx",
+                            chapter=text,
+                            metadata={"style_name": style_name or ""},
+                        )
+                    )
                 else:
                     if current_section.content:
                         current_section.content += "\n"
                     current_section.content += text
+                    blocks.append(
+                        DocumentBlock(
+                            text=text,
+                            page=1,
+                            block_type="text",
+                            source_type="docx",
+                            chapter=current_section.title,
+                            metadata={"style_name": style_name or ""},
+                        )
+                    )
 
             elif child.tag == qn("w:tbl"):
                 table_idx = self._table_index_for_element(doc, child)
                 if table_idx is not None and table_idx < len(all_tables_raw):
                     current_section.tables.append(all_tables_raw[table_idx])
                     current_section.table_doc_indices.append(table_idx)
+                    header = " | ".join(all_tables_raw[table_idx][0]) if all_tables_raw[table_idx] else ""
+                    blocks.append(
+                        DocumentBlock(
+                            text=self._table_to_text(all_tables_raw[table_idx]),
+                            page=1,
+                            block_type="table",
+                            source_type="docx",
+                            chapter=current_section.title,
+                            table_index=table_idx,
+                            content_format="markdown",
+                            table_header=header,
+                            metadata={"doc_table_index": table_idx},
+                        )
+                    )
 
         if sections[0].level == 0 and not sections[0].content and not sections[0].tables:
             sections = sections[1:]
@@ -92,6 +130,7 @@ class DocumentParser:
             sections=sections,
             raw_tables=all_tables_raw,
             kb_source_type="docx",
+            blocks=blocks,
         )
 
     @staticmethod
@@ -115,3 +154,8 @@ class DocumentParser:
             elif tag == "p":
                 para_idx += 1
         return positions
+
+    @staticmethod
+    def _table_to_text(table: List[List[str]]) -> str:
+        lines = [" | ".join(row) for row in table if row]
+        return "\n".join(lines)

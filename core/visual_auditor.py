@@ -260,10 +260,9 @@ def audit_document_visual(
         ]
 
         _LOG.info("开始结构化视觉审核")
-
-        # 使用 MiMo 或百炼进行审核
-        client = config.mimo_client() if config.MIMO_API_KEY else config.openai_client_for_chat()
-        model = config.MIMO_MODEL if config.MIMO_API_KEY else config.VISUAL_AUDIT_MODEL
+        # Use the configured visual audit model, then one fallback on empty output.
+        client = config.openai_client_for_chat()
+        model = config.VISUAL_AUDIT_MODEL
 
         resp = chat_completions_create(
             client,
@@ -276,6 +275,20 @@ def audit_document_visual(
 
         ch0 = resp.choices[0] if resp.choices else None
         raw = (ch0.message.content if ch0 and ch0.message else "") or ""
+        if not raw.strip():
+            fallback_model = (getattr(config, "VISUAL_AUDIT_FALLBACK_MODEL", "") or "").strip()
+            if fallback_model and fallback_model != model:
+                _LOG.warning("visual_audit_empty_primary model=%s fallback=%s", model, fallback_model)
+                resp = chat_completions_create(
+                    client,
+                    model=fallback_model,
+                    messages=messages,
+                    temperature=0.2,
+                    stream=False,
+                    max_tokens=2048,
+                )
+                ch0 = resp.choices[0] if resp.choices else None
+                raw = (ch0.message.content if ch0 and ch0.message else "") or ""
 
         # 4. 解析结果
         return _parse_visual_audit_response(raw)

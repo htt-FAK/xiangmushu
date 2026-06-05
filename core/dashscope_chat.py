@@ -33,13 +33,25 @@ def _client_base_url(client: Any) -> str:
     return str(raw).rstrip("/")
 
 
-def _is_dashscope_compatible_client(client: Any) -> bool:
-    u = _client_base_url(client).lower()
+def _normalize_base_url(base_url: str | None) -> str:
+    return str(base_url or "").rstrip("/").lower()
+
+
+def _is_dashscope_compatible_base_url(base_url: str | None) -> bool:
+    u = _normalize_base_url(base_url)
     return "dashscope.aliyuncs.com" in u or "compatible-mode" in u
 
 
+def _is_deepseek_base_url(base_url: str | None) -> bool:
+    return "api.deepseek.com" in _normalize_base_url(base_url)
+
+
+def _is_dashscope_compatible_client(client: Any) -> bool:
+    return _is_dashscope_compatible_base_url(_client_base_url(client))
+
+
 def _is_deepseek_client(client: Any) -> bool:
-    return "api.deepseek.com" in _client_base_url(client).lower()
+    return _is_deepseek_base_url(_client_base_url(client))
 
 
 def _apply_extra_body(client: Any, extra_in: dict | None) -> dict | None:
@@ -53,6 +65,55 @@ def _apply_extra_body(client: Any, extra_in: dict | None) -> dict | None:
     elif _is_dashscope_compatible_client(client):
         extra["enable_thinking"] = False
     return extra if extra else None
+
+
+def prepare_chat_request(client: Any, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
+    """为直连 SDK 调用补齐关闭深度思考所需参数。"""
+    kw = dict(kwargs)
+    model_id = str(kw.get("model") or "")
+    if config.is_deepseek_model(model_id):
+        deepseek_client = config.deepseek_client()
+        if deepseek_client is not None:
+            client = deepseek_client
+    extra = dict(kw.pop("extra_body", None) or {})
+    merged = _apply_extra_body(client, extra)
+    if merged is not None:
+        kw["extra_body"] = merged
+    else:
+        kw.pop("extra_body", None)
+    return client, kw
+
+
+def prepare_raw_chat_body(base_url: str | None, body_in: dict[str, Any]) -> dict[str, Any]:
+    """为裸 HTTP chat/completions 请求补齐关闭深度思考所需字段。"""
+    body = dict(body_in)
+    body.pop("enable_thinking", None)
+    body.pop("thinking", None)
+    if _is_deepseek_base_url(base_url):
+        body["thinking"] = {"type": "disabled"}
+    elif _is_dashscope_compatible_base_url(base_url):
+        body["enable_thinking"] = False
+    return body
+
+
+def direct_chat_completions_create(client: Any, **kwargs: Any):
+    """直连 SDK 调用：统一关闭深度思考，但不做跨通道回落。"""
+    call_client, call_kwargs = prepare_chat_request(client, **kwargs)
+    try:
+        return call_client.chat.completions.create(**call_kwargs)
+    except Exception as exc:
+        merged = dict(call_kwargs.get("extra_body", None) or {})
+        if merged and "enable_thinking" in merged and _is_enable_thinking_rejected(exc):
+            retry_kwargs = dict(call_kwargs)
+            retry_extra = dict(merged)
+            retry_extra.pop("enable_thinking", None)
+            if retry_extra:
+                retry_kwargs["extra_body"] = retry_extra
+            else:
+                retry_kwargs.pop("extra_body", None)
+            _LOG.warning("网关不支持 enable_thinking，已去掉该参数后重试")
+            return call_client.chat.completions.create(**retry_kwargs)
+        raise
 
 
 def _is_enable_thinking_rejected(exc: BaseException) -> bool:
@@ -127,12 +188,10 @@ def _is_retryable(exc: BaseException) -> bool:
 
 def _create_on_client(client: Any, kwargs: dict[str, Any], extra_in: dict) -> Any:
     kw = dict(kwargs)
-    merged = _apply_extra_body(client, dict(extra_in))
-    if merged is not None:
-        kw["extra_body"] = merged
-    else:
-        kw.pop("extra_body", None)
-    return client.chat.completions.create(**kw)
+    if extra_in:
+        kw["extra_body"] = dict(extra_in)
+    call_client, call_kwargs = prepare_chat_request(client, **kw)
+    return call_client.chat.completions.create(**call_kwargs)
 
 
 def chat_completions_create(client: Any, **kwargs: Any):
@@ -147,16 +206,11 @@ def chat_completions_create(client: Any, **kwargs: Any):
     当 client 指向非百炼 compatible-mode（如复星网关）且发生可恢复错误时，
     使用百炼 Key 重试同一请求（stream=True 时仅捕获 create 阶段异常；迭代期错误不包装）。
     """
-    model_id = str(kwargs.get("model") or "")
-
-    # DeepSeek 模型：切换至 DeepSeek client
-    if config.is_deepseek_model(model_id):
-        client = config.deepseek_client()
-
     extra = dict(kwargs.pop("extra_body", None) or {})
-    merged = _apply_extra_body(client, extra)
-    if merged is not None:
-        kwargs["extra_body"] = merged
+    client, kwargs = prepare_chat_request(client, **kwargs, extra_body=extra)
+    merged = dict(kwargs.get("extra_body", None) or {})
+    if not merged:
+        kwargs.pop("extra_body", None)
     enable_search = bool((merged or {}).get("enable_search"))
 
     backup = config.dashscope_backup_chat_client()

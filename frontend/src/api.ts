@@ -8,10 +8,8 @@ import type {
   UploadResult,
 } from "./types";
 
-const DEFAULT_API_BASE = "http://localhost:8502";
 const configuredApiBase = import.meta.env.VITE_API_BASE?.trim().replace(/\/+$/, "");
-
-export const API_BASE = configuredApiBase || (import.meta.env.DEV ? "" : DEFAULT_API_BASE);
+export const API_BASE = configuredApiBase || "";
 
 function apiUrl(path: string) {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
@@ -109,6 +107,8 @@ export async function streamGenerate(
   form.append("max_distance", String(params.maxDistance));
   form.append("enable_web", String(params.enableWeb));
   form.append("use_stream", String(params.useStream));
+  form.append("enable_audit", String(params.enableAudit));
+  form.append("enable_visual_audit", String(params.enableVisualAudit));
 
   const response = await fetch(apiUrl("/api/generate"), {
     method: "POST",

@@ -449,10 +449,10 @@ def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any
     timeout = float(getattr(config, "TEMPLATE_VISION_API_TIMEOUT", 120.0))
     timeout = max(45.0, timeout)
 
-    def _call():
+    def _call(model: str):
         return chat_completions_create(
             client,
-            model=getattr(config, "TEMPLATE_VISION_MODEL", None) or config.VISION_WEB_MODEL,
+            model=model,
             messages=[{"role": "user", "content": content}],
             temperature=config.TEMP_VISION,
             max_tokens=4096,
@@ -460,13 +460,24 @@ def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            resp = pool.submit(_call).result(timeout=timeout)
+            primary_model = getattr(config, "TEMPLATE_VISION_MODEL", None) or config.VISION_WEB_MODEL
+            resp = pool.submit(_call, primary_model).result(timeout=timeout)
     except concurrent.futures.TimeoutError:
         _LOG.warning("模板视觉 API 超过 %.0fs 未返回，已中止等待", timeout)
         return {"error": "vision_api_timeout"}
 
     ch0 = resp.choices[0] if resp.choices else None
     raw = (ch0.message.content if ch0 and ch0.message else "") or ""
+    if not raw.strip():
+        fallback_model = (getattr(config, "TEMPLATE_VISION_FALLBACK_MODEL", "") or "").strip()
+        if fallback_model and fallback_model != primary_model:
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    resp = pool.submit(_call, fallback_model).result(timeout=timeout)
+                ch0 = resp.choices[0] if resp.choices else None
+                raw = (ch0.message.content if ch0 and ch0.message else "") or ""
+            except concurrent.futures.TimeoutError:
+                _LOG.warning("template_vision fallback timeout model=%s", fallback_model)
     return parse_vision_profile_json(raw)
 
 

@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 import config
 from core.dashscope_chat import chat_completions_create
 from core.fill_task import FillTask
+from core.reporting import evidence_refs_from_results
 from core.template_vision import build_table_cell_user_content
 from core.query_expander import expand_query
 from core.vector_store import VectorStore
@@ -163,28 +164,66 @@ class GenerationBundle:
     extra_body: Dict[str, Any]
     route_meta: Dict[str, Any]
     ref_texts: str
+    evidence_refs: List[str]
 
 
 class ContentGenerator:
-    """RAG + 距离阈值；空库/无命中，或（开启联网且）最佳命中估算相似度过低时，走百炼内置搜索（enable_search + 联网档模型）。
-    支持 MiMo 模型作为备选生成引擎。"""
+    """RAG generation with route-aware model fallback chains."""
 
     def __init__(self, vector_store: VectorStore):
         self._vs = vector_store
         self._client = config.openai_client_for_chat()
-        self._mimo_client = config.mimo_client()
 
-    def _get_client(self, use_mimo: bool = False) -> Any:
-        """获取 API 客户端，支持 MiMo 回落。"""
-        if use_mimo and self._mimo_client is not None:
-            return self._mimo_client
+    def _get_client(self) -> Any:
+        """Return the active chat client."""
         return self._client
 
-    def _get_model(self, use_mimo: bool = False, default_model: str = "") -> str:
-        """获取模型名称，支持 MiMo。"""
-        if use_mimo and self._mimo_client is not None:
-            return config.MIMO_MODEL
-        return default_model or config.LARGE_LLM_MODEL
+    def _candidate_models(
+        self,
+        default_model: str,
+        route_meta: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """Return the ordered fallback chain for the current route."""
+        models = [default_model]
+        tier = str((route_meta or {}).get("generation_tier") or "")
+        if tier == "large":
+            models.extend(
+                [
+                    getattr(config, "FALLBACK_LLM_MODEL_1", ""),
+                    getattr(config, "FALLBACK_LLM_MODEL_2", ""),
+                    getattr(config, "FALLBACK_LLM_MODEL_3", ""),
+                ]
+            )
+        elif tier in ("small_rag", "table_cell_fast"):
+            models.extend(
+                [
+                    getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
+                    getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
+                ]
+            )
+        elif tier == "vision_web":
+            models.extend(
+                [
+                    getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
+                    getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
+                ]
+            )
+        elif tier == "table_cell_vision":
+            models.extend(
+                [
+                    getattr(config, "TABLE_CELL_VISION_FALLBACK_MODEL", ""),
+                    getattr(config, "TABLE_CELL_FALLBACK_MODEL", ""),
+                ]
+            )
+        seen = set()
+        ordered: List[str] = []
+        for model in models:
+            mid = (model or "").strip()
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            ordered.append(mid)
+        return ordered
 
     def _build_chat_request(
         self,
@@ -245,6 +284,7 @@ class ContentGenerator:
                     low_similarity = best_similarity_est < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
 
             ref_texts = self._format_kb(results)
+        evidence_refs = evidence_refs_from_results(results)
 
         word_limit = task.word_limit
         if task.task_type == "table_cell":
@@ -387,6 +427,7 @@ class ContentGenerator:
             "table_vision_n_images": len(table_cell_vision_pngs or []),
             "fast_mode": bool(fast_mode),
             "full_recall_mode": bool(config.FULL_RECALL_MODE),
+            "evidence_refs": evidence_refs,
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route %s", route_meta)
@@ -408,6 +449,7 @@ class ContentGenerator:
         from core.evidence_planner import compress_evidence, Evidence
 
         ref_texts = compress_evidence(evidence, task, max_chars=config.RAG_SNIPPET_MAX_CHARS)
+        evidence_refs = evidence_refs_from_results(evidence.raw_results)
 
         word_limit = task.word_limit
         if task.task_type == "table_cell":
@@ -548,6 +590,7 @@ class ContentGenerator:
             "table_cell_multimodal": bool(table_cell_mm),
             "table_vision_n_images": len(table_cell_vision_pngs or []),
             "fast_mode": bool(fast_mode),
+            "evidence_refs": evidence_refs,
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route_evidence %s", route_meta)
@@ -558,6 +601,7 @@ class ContentGenerator:
             extra_body=extra_body,
             route_meta=route_meta,
             ref_texts=ref_texts,
+            evidence_refs=evidence_refs,
         )
 
     def prepare_generation_bundle(
@@ -592,45 +636,56 @@ class ContentGenerator:
             extra_body=extra_body,
             route_meta=route_meta,
             ref_texts=ref_texts,
+            evidence_refs=list(route_meta.get("evidence_refs") or []),
         )
 
     def stream_from_bundle(
         self,
         bundle: GenerationBundle,
         route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
-        use_mimo: bool = False,
     ) -> Iterator[str]:
         if route_hook:
             route_hook(bundle.route_meta)
-        client = self._get_client(use_mimo=use_mimo)
-        model = self._get_model(use_mimo=use_mimo, default_model=bundle.model)
-        stream = chat_completions_create(
-            client,
-            model=model,
-            messages=bundle.messages,
-            temperature=bundle.temperature,
-            stream=True,
-            extra_body=bundle.extra_body,
-            max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
-        )
-        acc_len = 0
-        for chunk in stream:
-            ch = chunk.choices[0] if chunk.choices else None
-            if not ch or not ch.delta:
-                continue
-            piece = ch.delta.content or ""
-            if piece:
-                acc_len += len(piece)
-                yield piece
-        _ensure_gen_logger()
-        _LOG.info(
-            "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
-            bundle.route_meta.get("task_id"),
-            bundle.route_meta.get("target_chapter"),
-            bundle.model,
-            bundle.route_meta.get("native_web_search"),
-            acc_len,
-        )
+        client = self._get_client()
+        model_chain = self._candidate_models(bundle.model, bundle.route_meta)
+        last_error: Optional[Exception] = None
+        for model in model_chain:
+            acc_len = 0
+            try:
+                stream = chat_completions_create(
+                    client,
+                    model=model,
+                    messages=bundle.messages,
+                    temperature=bundle.temperature,
+                    stream=True,
+                    extra_body=bundle.extra_body,
+                    max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
+                )
+                for chunk in stream:
+                    ch = chunk.choices[0] if chunk.choices else None
+                    if not ch or not ch.delta:
+                        continue
+                    piece = ch.delta.content or ""
+                    if piece:
+                        acc_len += len(piece)
+                        yield piece
+                if acc_len > 0:
+                    _ensure_gen_logger()
+                    _LOG.info(
+                        "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
+                        bundle.route_meta.get("task_id"),
+                        bundle.route_meta.get("target_chapter"),
+                        model,
+                        bundle.route_meta.get("native_web_search"),
+                        acc_len,
+                    )
+                    return
+                _LOG.warning("content_gen_stream_empty model=%s, trying next fallback", model)
+            except Exception as e:
+                last_error = e
+                _LOG.warning("content_gen_stream_error model=%s err=%s", model, e)
+        if last_error is not None:
+            raise last_error
 
     def generate_stream(
         self,
@@ -677,41 +732,49 @@ class ContentGenerator:
         self,
         bundle: GenerationBundle,
         route_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
-        use_mimo: bool = False,
     ) -> str:
         if route_hook:
             route_hook(bundle.route_meta)
-        client = self._get_client(use_mimo=use_mimo)
-        model = self._get_model(use_mimo=use_mimo, default_model=bundle.model)
-        resp = chat_completions_create(
-            client,
-            model=model,
-            messages=bundle.messages,
-            temperature=bundle.temperature,
-            stream=False,
-            extra_body=bundle.extra_body,
-            max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
-        )
-        ch0 = resp.choices[0] if resp.choices else None
-        text = (ch0.message.content if ch0 and ch0.message else "") or ""
-
-        # 检测错误内容
-        if self._is_error_content(text):
-            _LOG.error("生成内容包含错误信息: %s", text[:200])
-            return "（生成失败，请重试或检查模型配置）"
-
-        _ensure_gen_logger()
-        _LOG.info(
-            "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
-            bundle.route_meta.get("task_id"),
-            bundle.route_meta.get("target_chapter"),
-            bundle.model,
-            bundle.route_meta.get("native_web_search"),
-            len(text),
-        )
-        return text.strip()
+        client = self._get_client()
+        last_error: Optional[Exception] = None
+        for model in self._candidate_models(bundle.model, bundle.route_meta):
+            try:
+                resp = chat_completions_create(
+                    client,
+                    model=model,
+                    messages=bundle.messages,
+                    temperature=bundle.temperature,
+                    stream=False,
+                    extra_body=bundle.extra_body,
+                    max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
+                )
+                ch0 = resp.choices[0] if resp.choices else None
+                text = (ch0.message.content if ch0 and ch0.message else "") or ""
+                if not text.strip():
+                    _LOG.warning("content_gen_nonstream_empty model=%s, trying next fallback", model)
+                    continue
+                if self._is_error_content(text):
+                    _LOG.warning("content_gen_nonstream_error_text model=%s text=%s", model, text[:200])
+                    continue
+                _ensure_gen_logger()
+                _LOG.info(
+                    "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
+                    bundle.route_meta.get("task_id"),
+                    bundle.route_meta.get("target_chapter"),
+                    model,
+                    bundle.route_meta.get("native_web_search"),
+                    len(text),
+                )
+                return text.strip()
+            except Exception as e:
+                last_error = e
+                _LOG.warning("content_gen_nonstream_error model=%s err=%s", model, e)
+        if last_error is not None:
+            _LOG.error("content_gen_all_models_failed err=%s", last_error)
+        return "(generation failed; check model config and retry)"
 
     def generate(
+
         self,
         task: FillTask,
         top_k: int = 3,

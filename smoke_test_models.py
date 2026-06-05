@@ -31,21 +31,7 @@ import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 # 复星网关可上架的对话模型（不含 embedding）
-GATEWAY_PROBE_MODELS: List[str] = [
-    "claude-sonnet-4.6",
-    "gemini-3-flash",
-    "gemini-3-pro",
-    "gpt-5.4",
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "glm-5",
-    "glm-5.1",
-    "kimi-k2.5",
-    "kimi-k2.6",
-    "qwen3-max",
-    "qwen3.5-plus",
-    "qwen3.6-plus",
-]
+GATEWAY_PROBE_MODELS: List[str] = []
 
 # 保证以仓库内模块方式加载
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -61,10 +47,36 @@ load_dotenv(os.path.join(_ROOT, ".env"))
 
 import config  # noqa: E402
 from openai import OpenAI  # noqa: E402
-from core.dashscope_chat import chat_completions_create  # noqa: E402
+from core.dashscope_chat import chat_completions_create, direct_chat_completions_create  # noqa: E402
 from core.fill_task import FillTask  # noqa: E402
 from core.generator import ContentGenerator, _max_output_tokens  # noqa: E402
 from core.openai_embeddings import TimeoutOpenAIEmbedding  # noqa: E402
+
+
+def _ordered_models(*models: str) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for model in models:
+        mid = (model or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append(mid)
+    return out
+
+
+GATEWAY_PROBE_MODELS = _ordered_models(
+    config.LARGE_LLM_MODEL,
+    getattr(config, "FALLBACK_LLM_MODEL_1", ""),
+    getattr(config, "FALLBACK_LLM_MODEL_2", ""),
+    getattr(config, "FALLBACK_LLM_MODEL_3", ""),
+    config.SMALL_LLM_MODEL,
+    getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
+    config.VISION_WEB_MODEL,
+    getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
+    config.TEMPLATE_VISION_MODEL,
+    getattr(config, "TEMPLATE_VISION_FALLBACK_MODEL", ""),
+)
 
 
 def _rgba_png_bytes(width: int, height: int) -> bytes:
@@ -185,7 +197,7 @@ def _probe_one_gateway(
                 }
             ]
             kwargs["extra_body"] = {"enable_search": True}
-        r = client.chat.completions.create(**kwargs)
+        r = direct_chat_completions_create(client, **kwargs)
         text = (r.choices[0].message.content or "").strip()
         if not text:
             return False, "空回复"
@@ -316,7 +328,7 @@ def _run_probe_models(client: OpenAI, models: Optional[List[str]] = None) -> boo
         f.write(f"通道: {_client_base_label()}\n\n")
         if gw_only:
             f.write(
-                "说明：search(网关) 为直连网关且不带 enable_thinking；"
+                "说明：search(网关) 为直连网关，但同样统一关闭深度思考；"
                 "search(含回落) 经 dashscope_chat（失败时用百炼 + VISION_WEB_MODEL）。\n\n"
             )
             f.write(
@@ -1681,6 +1693,254 @@ def _offline_table_cell_multimodal_content() -> bool:
     return True
 
 
+def _offline_document_blocks_and_chunk_metadata() -> bool:
+    print("=== parsed blocks / chunk metadata (offline) ===")
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+
+    from core.chunker import Chunker
+    from core.parser import DocumentParser
+    from core.reporting import build_evidence_ref
+
+    path = tempfile.mktemp(suffix=".docx")
+    d = Doc()
+    d.add_heading("第一章 项目概述", level=1)
+    d.add_paragraph("这是项目概述正文。")
+    tbl = d.add_table(rows=7, cols=2)
+    tbl.cell(0, 0).text = "字段"
+    tbl.cell(0, 1).text = "说明"
+    long_cell = "这是一段较长的表格内容，用于验证长表格切块时会重复表头上下文。" * 10
+    for i in range(1, 7):
+        tbl.cell(i, 0).text = f"项{i}"
+        tbl.cell(i, 1).text = long_cell
+    d.save(path)
+
+    try:
+        parsed = DocumentParser().parse(path)
+        if not parsed.blocks:
+            print("  [FAIL] parse 后 blocks 为空")
+            return False
+        if parsed.blocks[0].block_type != "heading":
+            print(f"  [FAIL] 首 block 类型异常: {parsed.blocks[0].block_type!r}")
+            return False
+
+        table_blocks = [block for block in parsed.blocks if block.block_type == "table"]
+        if not table_blocks:
+            print("  [FAIL] 未识别 table block")
+            return False
+        if "字段 | 说明" not in (table_blocks[0].table_header or ""):
+            print(f"  [FAIL] table_header 异常: {table_blocks[0].table_header!r}")
+            return False
+
+        chunks = Chunker().chunk(parsed)
+        if not chunks:
+            print("  [FAIL] chunk 结果为空")
+            return False
+        seqs = [chunk.seq for chunk in chunks]
+        if seqs != list(range(len(chunks))):
+            print(f"  [FAIL] seq 不连续: {seqs!r}")
+            return False
+
+        first = chunks[0]
+        required = {"source", "chapter", "type", "page", "seq", "source_type", "content_format", "ref_id"}
+        if not required.issubset(first.metadata):
+            print(f"  [FAIL] metadata 缺字段: {first.metadata!r}")
+            return False
+        ref = build_evidence_ref(first.metadata)
+        if "seq=" not in ref or "page=" not in ref:
+            print(f"  [FAIL] evidence ref 异常: {ref!r}")
+            return False
+
+        table_chunks = [chunk for chunk in chunks if chunk.metadata.get("type") == "table"]
+        if len(table_chunks) < 2:
+            print(f"  [FAIL] 预期长表格被拆成多块，实际只有 {len(table_chunks)} 块")
+            return False
+        if not all("字段 | 说明" in chunk.text for chunk in table_chunks[:2]):
+            print("  [FAIL] 表格切块未保留表头上下文")
+            return False
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    print("  [OK]")
+    return True
+
+
+def _offline_multiformat_parsed_blocks() -> bool:
+    print("=== pdf / pptx / image parsed blocks (offline) ===")
+    import os
+    import tempfile
+    from unittest.mock import patch
+
+    from pypdf import PdfWriter
+    from pptx import Presentation
+
+    from core.kb_extract import path_to_parsed_document
+
+    pdf_path = tempfile.mktemp(suffix=".pdf")
+    pptx_path = tempfile.mktemp(suffix=".pptx")
+    png_path = tempfile.mktemp(suffix=".png")
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=300)
+    with open(pdf_path, "wb") as f:
+        writer.write(f)
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "PPT 标题"
+    slide.placeholders[1].text = "PPT 正文"
+    prs.save(pptx_path)
+
+    with open(png_path, "wb") as f:
+        f.write(_rgba_png_bytes(16, 16))
+
+    try:
+        pdf_doc = path_to_parsed_document(pdf_path, original_name="sample.pdf")
+        if pdf_doc.kb_source_type != "pdf" or not pdf_doc.blocks:
+            print("  [FAIL] pdf 解析未返回 blocks")
+            return False
+        if pdf_doc.blocks[0].source_type != "pdf" or pdf_doc.blocks[0].page != 1:
+            print(f"  [FAIL] pdf block metadata 异常: {pdf_doc.blocks[0]!r}")
+            return False
+
+        ppt_doc = path_to_parsed_document(pptx_path, original_name="deck.pptx")
+        if ppt_doc.kb_source_type != "pptx" or not ppt_doc.blocks:
+            print("  [FAIL] pptx 解析未返回 blocks")
+            return False
+        if "PPT 标题" not in ppt_doc.blocks[0].text or ppt_doc.blocks[0].source_type != "pptx":
+            print(f"  [FAIL] pptx block 异常: {ppt_doc.blocks[0]!r}")
+            return False
+
+        with patch("core.vision_extract.describe_image_bytes", return_value="image summary"):
+            image_doc = path_to_parsed_document(png_path, original_name="sample.png")
+        if image_doc.kb_source_type != "image_vision" or not image_doc.blocks:
+            print("  [FAIL] image 解析未返回 blocks")
+            return False
+        if image_doc.blocks[0].source_type != "image_vision" or "image summary" not in image_doc.blocks[0].text:
+            print(f"  [FAIL] image block 异常: {image_doc.blocks[0]!r}")
+            return False
+    finally:
+        for path in (pdf_path, pptx_path, png_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    print("  [OK]")
+    return True
+
+
+def _offline_quality_report_and_verifier() -> bool:
+    print("=== quality report / verifier (offline) ===")
+    import json
+    import os
+    import tempfile
+
+    from docx import Document as Doc
+
+    from core.post_fill_verifier import verify_filled_document
+    from core.reporting import (
+        build_generation_trace,
+        build_quality_report,
+        quality_report_summary,
+        save_quality_report,
+    )
+
+    template_path = tempfile.mktemp(suffix=".docx")
+    output_path = tempfile.mktemp(suffix=".docx")
+
+    template_doc = Doc()
+    template_doc.add_paragraph("项目申报书封面")
+    template_table = template_doc.add_table(rows=1, cols=2)
+    template_table.cell(0, 0).text = "评分项"
+    template_table.cell(0, 1).text = "分值"
+    template_doc.add_heading("第一章 项目概述", level=1)
+    template_doc.save(template_path)
+
+    output_doc = Doc()
+    output_doc.add_paragraph("项目申报书封面")
+    output_table = output_doc.add_table(rows=1, cols=2)
+    output_table.cell(0, 0).text = "评分项"
+    output_table.cell(0, 1).text = "分值"
+    output_doc.add_heading("第一章 项目概述", level=1)
+    output_doc.add_paragraph("这是已生成的正文。")
+    output_doc.add_paragraph("{{待替换}}")
+    output_doc.save(output_path)
+
+    tasks = [
+        FillTask(
+            task_id="t-report",
+            target_chapter="第二章 技术方案",
+            task_type="paragraph",
+            description="补充方案描述",
+            location_hint={},
+            word_limit=200,
+        )
+    ]
+
+    try:
+        checks = verify_filled_document(template_path, output_path, tasks)
+        if checks["ok"]:
+            print(f"  [FAIL] 预期校验失败，实际为 {checks!r}")
+            return False
+        if not checks["leftover_placeholders"]:
+            print("  [FAIL] 未识别残留占位符")
+            return False
+        if "第二章 技术方案" not in checks["missing_chapters"]:
+            print(f"  [FAIL] 未识别缺失章节: {checks['missing_chapters']!r}")
+            return False
+
+        trace = build_generation_trace(
+            tasks[0],
+            {
+                "model": "demo-model",
+                "generation_tier": "large",
+                "kb_hits": 2,
+                "evidence_refs": ["sample.docx | seq=3 | page=1 | docx"],
+            },
+            "这是已生成的正文。",
+            audit_verdict="rule_issue",
+            audit_issues=["内容过短"],
+            revised=True,
+        )
+        report = build_quality_report(
+            template_name="template.docx",
+            output_path=output_path,
+            traces=[trace],
+            post_fill_checks=checks,
+            visual_audit={"score": 81},
+        )
+        report_path = save_quality_report(output_path, report)
+        summary = quality_report_summary(report)
+        if "任务 1" not in summary or "残留占位 1" not in summary:
+            print(f"  [FAIL] summary 异常: {summary!r}")
+            return False
+
+        with open(report_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("traces", [{}])[0].get("model") != "demo-model":
+            print(f"  [FAIL] report 写入异常: {payload!r}")
+            return False
+        if payload.get("traces", [{}])[0].get("evidence_refs") != ["sample.docx | seq=3 | page=1 | docx"]:
+            print(f"  [FAIL] evidence refs 写入异常: {payload!r}")
+            return False
+    finally:
+        report_path = os.path.splitext(output_path)[0] + ".report.json"
+        for path in (template_path, output_path, report_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    print("  [OK]")
+    return True
+
+
 def _run_all_offline() -> bool:
     steps = [
         ("路由", _routing_tests),
@@ -1696,6 +1956,9 @@ def _run_all_offline() -> bool:
         ("innovation_table_scan", _offline_innovation_table_scan_tasks),
         ("filler_bracket_slot", _offline_filler_bracket_fill_slot),
         ("filler_guidance_beats_empty", _offline_filler_guidance_beats_empty),
+        ("document_blocks_chunk_metadata", _offline_document_blocks_and_chunk_metadata),
+        ("multiformat_parsed_blocks", _offline_multiformat_parsed_blocks),
+        ("quality_report_verifier", _offline_quality_report_and_verifier),
     ]
     ok_all = True
     for name, fn in steps:

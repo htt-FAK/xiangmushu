@@ -14,13 +14,27 @@ import streamlit as st
 
 import config
 from core.chunker import Chunker
+from core.content_auditor import (
+    ContentAuditor,
+    need_model_audit,
+    rule_audit,
+    should_apply_revision,
+)
 from core.fill_task import FillTask
 from core.generator import ContentGenerator
 from core.filler import WordFiller
 from core.kb_registry import add_kb, load_registry, remove_kb
 from core.kb_extract import path_to_parsed_document
+from core.post_fill_verifier import verify_filled_document
+from core.reporting import (
+    build_generation_trace,
+    build_quality_report,
+    quality_report_summary,
+    save_quality_report,
+)
 from core.slot_scanner import scan_anchor_tasks
 from core.vector_store import VectorStore
+from core.visual_auditor import audit_document_visual
 
 
 def _configure_console_logging_from_env() -> None:
@@ -548,6 +562,24 @@ with st.sidebar:
             value=False,
             help="清除已缓存的模板结构分析，用当前文件重新识别填空位。",
         )
+        st.checkbox(
+            "启用内容审核",
+            key="adv_enable_content_audit",
+            value=False,
+            help="规则审核始终执行；开启后对高风险或低相似段落追加模型审核，并在可安全替换时采用修订稿。",
+        )
+        st.checkbox(
+            "生成后输出质量报告",
+            key="adv_enable_quality_report",
+            value=True,
+            help="生成 docx 后执行占位符残留、章节完整性和保护区检查，并输出同名 report.json。",
+        )
+        st.checkbox(
+            "启用视觉审核",
+            key="adv_enable_visual_audit",
+            value=bool(config.VISUAL_AUDIT_ENABLED),
+            help="在质量报告中追加结构化视觉审核得分；关闭后仍会保留基础回填校验。",
+        )
 
 tab_home, tab_kb, tab_tpl, tab_gen = st.tabs(
     ["首页", "知识库管理", "模板配置", "生成预览"]
@@ -698,6 +730,9 @@ with tab_gen:
     enable_web = bool(st.session_state.get("adv_use_tavily", False))
     default_word = int(st.session_state.get("adv_default_word_limit", 500))
     use_stream = bool(st.session_state.get("adv_use_stream", True))
+    enable_content_audit = bool(st.session_state.get("adv_enable_content_audit", False))
+    enable_quality_report = bool(st.session_state.get("adv_enable_quality_report", True))
+    enable_visual_audit = bool(st.session_state.get("adv_enable_visual_audit", config.VISUAL_AUDIT_ENABLED))
     # 全量召回开关：同步到 config，让 generator 读取
     config.FULL_RECALL_MODE = bool(st.session_state.get("adv_full_recall", config.FULL_RECALL_MODE))
 
@@ -746,7 +781,9 @@ with tab_gen:
                 st.warning("没有可用的填空任务，请先在「模板配置」中分析模板。")
             else:
                 generator = ContentGenerator(vs)
+                auditor = ContentAuditor() if enable_content_audit else None
                 results: list[str] = []
+                traces = []
                 total_chars = 0
 
                 with st.status("正在生成…", expanded=True) as status:
@@ -770,14 +807,13 @@ with tab_gen:
                         content = ""
 
                         try:
+                            gen_bundle = generator.prepare_generation_bundle(
+                                task,
+                                top_k=top_k,
+                                enable_web=enable_web,
+                                retrieval_max_distance=retrieval_max_distance,
+                            )
                             if use_stream:
-                                gen_bundle = generator.prepare_generation_bundle(
-                                    task,
-                                    top_k=top_k,
-                                    enable_web=enable_web,
-                                    retrieval_max_distance=retrieval_max_distance,
-                                )
-
                                 def _route_hook_stream(meta: dict) -> None:
                                     if meta.get("full_recall_mode"):
                                         route_slot.success(
@@ -799,6 +835,9 @@ with tab_gen:
                                             f"路由：{tier} · 模型 {meta.get('model','')} · "
                                             f"kb={meta.get('kb_hits',0)} · sim≈{meta.get('best_similarity_est')}"
                                         )
+                                    refs = meta.get("evidence_refs") or []
+                                    if refs:
+                                        st.caption("证据：" + " ; ".join(refs[:3]))
 
                                 content_parts: list[str] = []
                                 _route_hook_stream(gen_bundle.route_meta)
@@ -839,13 +878,10 @@ with tab_gen:
                                             + str(meta.get("model", ""))
                                             + f" · kb_hits={meta.get('kb_hits', 0)} · low_sim={meta.get('low_similarity')} · est_sim≈{meta.get('best_similarity_est')}"
                                         )
+                                    refs = meta.get("evidence_refs") or []
+                                    if refs:
+                                        st.caption("证据：" + " ; ".join(refs[:3]))
 
-                                gen_bundle = generator.prepare_generation_bundle(
-                                    task,
-                                    top_k=top_k,
-                                    enable_web=enable_web,
-                                    retrieval_max_distance=retrieval_max_distance,
-                                )
                                 _route_hook_ns(gen_bundle.route_meta)
                                 content = generator.generate_from_bundle(
                                     gen_bundle, route_hook=None
@@ -853,6 +889,40 @@ with tab_gen:
                         except Exception as e:
                             st.error(f"本段失败：{e}")
                             content = f"（生成失败：{e}）"
+                            traces.append(
+                                build_generation_trace(
+                                    task,
+                                    {"model": "", "generation_tier": "error", "evidence_refs": []},
+                                    content,
+                                    audit_verdict="error",
+                                    audit_issues=[str(e)],
+                                )
+                            )
+                            results.append(content)
+                            prog.progress((i + 1) / n_tasks)
+                            continue
+
+                        audit_issues = rule_audit(task, content, gen_bundle.route_meta)
+                        audit_verdict = "pass" if not audit_issues else "rule_issue"
+                        revised = False
+                        if audit_issues:
+                            st.warning("规则审核：" + "；".join(audit_issues[:3]))
+                        if auditor is not None and need_model_audit(task, gen_bundle.route_meta, audit_issues):
+                            ar = auditor.audit(
+                                task,
+                                content,
+                                gen_bundle.ref_texts,
+                                None,
+                                gen_bundle.route_meta,
+                            )
+                            audit_verdict = ar.verdict
+                            audit_issues = audit_issues + list(ar.issues)
+                            if should_apply_revision(task, ar):
+                                content = ar.revised_content.strip()
+                                revised = True
+                                st.info("已采用审核修订稿。")
+                            elif ar.issues:
+                                st.warning("模型审核：" + "；".join(ar.issues[:3]))
 
                         wc = len(content)
                         total_chars += wc
@@ -865,6 +935,16 @@ with tab_gen:
                         )
 
                         results.append(content)
+                        traces.append(
+                            build_generation_trace(
+                                task,
+                                gen_bundle.route_meta,
+                                content,
+                                audit_verdict=audit_verdict,
+                                audit_issues=audit_issues,
+                                revised=revised,
+                            )
+                        )
                         prog.progress((i + 1) / n_tasks)
 
                     status.update(label="生成结束", state="complete")
@@ -876,10 +956,45 @@ with tab_gen:
                 with st.spinner("正在写入 Word…"):
                     filler.fill_template(template_path, tasks, results, output_path)
 
+                report_path = ""
+                report = None
+                post_fill_checks = {}
+                visual_payload = {}
+                if enable_quality_report:
+                    with st.spinner("正在执行回填校验…"):
+                        post_fill_checks = verify_filled_document(template_path, output_path, tasks)
+                    if enable_visual_audit and config.VISUAL_AUDIT_ENABLED:
+                        with st.spinner("正在执行视觉审核…"):
+                            visual_payload = asdict(audit_document_visual(output_path))
+                    report = build_quality_report(
+                        template_name=selected,
+                        output_path=output_path,
+                        traces=traces,
+                        post_fill_checks=post_fill_checks,
+                        visual_audit=visual_payload,
+                    )
+                    report_path = save_quality_report(output_path, report)
+
                 st.session_state[SS_LAST_OUT_PATH] = output_path
                 st.session_state[SS_LAST_OUT_NAME] = output_name
 
                 st.success("初稿生成完成，可下载后继续人工复核。")
+                if report is not None:
+                    st.caption(quality_report_summary(report))
+                    if post_fill_checks.get("leftover_placeholders"):
+                        st.warning(
+                            "残留占位：" + "；".join(post_fill_checks["leftover_placeholders"][:3])
+                        )
+                    if post_fill_checks.get("protected_issues"):
+                        st.warning(
+                            "保护区检查：" + "；".join(post_fill_checks["protected_issues"][:3])
+                        )
+                    if visual_payload:
+                        st.info(
+                            "视觉审核："
+                            + str(visual_payload.get("score", 0))
+                            + "/100"
+                        )
                 with st.expander("预览全部段落", expanded=False):
                     for j, (t, txt) in enumerate(zip(tasks, results), start=1):
                         st.markdown(f"**{j}. {t.target_chapter}**")
@@ -895,3 +1010,12 @@ with tab_gen:
                         use_container_width=True,
                         key="dl_filled_after_gen",
                     )
+                if report_path and os.path.isfile(report_path):
+                    with open(report_path, "rb") as f:
+                        st.download_button(
+                            "下载质量报告 JSON",
+                            data=f.read(),
+                            file_name=os.path.basename(report_path),
+                            use_container_width=True,
+                            key="dl_quality_report",
+                        )

@@ -7,12 +7,36 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import config
+from core.dashscope_chat import prepare_raw_chat_body
 
-DEFAULT_BASE_URL = "https://aigw.fosunwealth.com/v1"
+
 PASS_THRESHOLD = 80
 
-VISION_MODELS = ["gpt-5.4", "gemini-3.5-flash"]
-TEXT_MODELS = ["gpt-5.4", "qwen3.7-max", "deepseek-v4-pro"]
+
+def _ordered_models(*models: str) -> list[str]:
+    out: list[str] = []
+    seen = set()
+    for model in models:
+        mid = (model or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append(mid)
+    return out
+
+
+VISION_MODELS = _ordered_models(
+    config.VISUAL_AUDIT_MODEL,
+    getattr(config, "VISUAL_AUDIT_FALLBACK_MODEL", ""),
+)
+
+TEXT_MODELS = _ordered_models(
+    config.AUDIT_LLM_MODEL,
+    getattr(config, "AUDIT_FALLBACK_1", ""),
+    getattr(config, "AUDIT_FALLBACK_2", ""),
+    getattr(config, "AUDIT_FALLBACK_3", ""),
+)
 
 
 def _read_deepseek_tui_key() -> str:
@@ -44,13 +68,15 @@ def _read_deepseek_tui_key() -> str:
 def _api_key() -> str:
     return (
         os.environ.get("EVAL_JUDGE_API_KEY")
-        or _read_deepseek_tui_key()
+        or os.environ.get("DASHSCOPE_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
+        or _read_deepseek_tui_key()
+        or getattr(config, "OPENAI_COMPAT_API_KEY", "")
     )
 
 
 def _base_url() -> str:
-    return os.environ.get("EVAL_JUDGE_BASE_URL") or DEFAULT_BASE_URL
+    return os.environ.get("EVAL_JUDGE_BASE_URL") or getattr(config, "OPENAI_BASE_URL", "")
 
 
 def _extract_content(data: dict[str, Any]) -> str:
@@ -60,10 +86,12 @@ def _extract_content(data: dict[str, Any]) -> str:
         return ""
 
 
-def _request_once(body: dict[str, Any], key: str, headers: dict[str, str]) -> tuple[str, str]:
+def _request_once(body: dict[str, Any], headers: dict[str, str]) -> tuple[str, str]:
+    base_url = _base_url().rstrip("/")
+    request_body = prepare_raw_chat_body(base_url, body)
     req = urllib.request.Request(
-        f"{_base_url().rstrip('/')}/chat/completions",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        f"{base_url}/chat/completions",
+        data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
         headers=headers,
         method="POST",
     )
@@ -103,7 +131,7 @@ def _call_model(model: str, prompt: str, image_path: Path | None = None) -> tupl
     ]
     errors = []
     for headers in auth_variants:
-        content, error = _request_once(body, key, headers)
+        content, error = _request_once(body, headers)
         if content or not error:
             return content, error
         errors.append(error)
