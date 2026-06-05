@@ -8,6 +8,7 @@ from core.slot_scanner import (
     scan_anchor_tasks,
     scan_placeholder_slots,
     build_decorative_hints_for_llm,
+    normalize_visible_text,
 )
 from core.template_slots import cell_needs_fill
 from core.template_vision import apply_chapter_hints_to_tasks, compact_profile_for_analyzer
@@ -211,6 +212,136 @@ class TemplateAnalyzer:
             self._normalize_single_table_cell_description(doc, slot)
             tasks.append(slot)
             existing.add(key)
+
+        for slot in self._scan_blank_table_cell_tasks(doc):
+            key = self._table_cell_key(slot)
+            if key is None or key in existing:
+                continue
+            self._normalize_single_table_cell_description(doc, slot)
+            tasks.append(slot)
+            existing.add(key)
+
+    def _scan_blank_table_cell_tasks(self, doc) -> List[FillTask]:
+        out: List[FillTask] = []
+        for table_index, table in enumerate(doc.raw_tables):
+            if self._skip_blank_cell_table(table_index, table):
+                continue
+            if len(table) < 2:
+                continue
+            chapter = self._chapter_for_table(doc, table_index)
+            for row_index, row in enumerate(table):
+                if row_index == 0:
+                    continue
+                blank_cols = [
+                    col_index
+                    for col_index, raw in enumerate(row)
+                    if self._is_pure_blank_cell(raw)
+                    and self._blank_cell_column_can_fill(table, row_index, col_index)
+                ]
+                for col_index in blank_cols:
+                    out.append(
+                        FillTask(
+                            task_id=str(uuid.uuid4()),
+                            target_chapter=chapter,
+                            task_type="table_cell",
+                            description="补充本格应填写的具体内容",
+                            location_hint={
+                                "table_index": table_index,
+                                "row": row_index,
+                                "col": col_index,
+                            },
+                            word_limit=80,
+                        )
+                    )
+        return out
+
+    def _blank_cell_column_can_fill(
+        self,
+        table: List[List[str]],
+        row: int,
+        col: int,
+    ) -> bool:
+        if self._is_teacher_scored_column(table, col):
+            return False
+        if not self._has_meaningful_column_header(table, row, col):
+            return False
+        header = self._table_column_header(table, row, col)
+        if self._compact_text(header) in self._empty_table_labels():
+            return False
+        return True
+
+    def _has_meaningful_column_header(
+        self,
+        table: List[List[str]],
+        row: int,
+        col: int,
+    ) -> bool:
+        for header_row in (0, 1):
+            if header_row >= len(table) or header_row == row:
+                continue
+            if col >= len(table[header_row]):
+                continue
+            label = self._clean_table_label(table[header_row][col])
+            if label and not cell_needs_fill(label):
+                return True
+        return False
+
+    @staticmethod
+    def _is_pure_blank_cell(raw: str) -> bool:
+        return normalize_visible_text(raw or "") == ""
+
+    def _skip_blank_cell_table(self, table_index: int, table: List[List[str]]) -> bool:
+        if not table:
+            return True
+        if self._is_screenshot_placeholder_table(table):
+            return True
+        if self._is_cover_table(table_index, table):
+            return True
+        if self._is_scoring_table(table):
+            return True
+        return False
+
+    def _is_cover_table(self, table_index: int, table: List[List[str]]) -> bool:
+        if table_index != 0:
+            return False
+        text = self._compact_table_text(table)
+        cover_markers = ("项目名称", "项目编号", "负责人", "申报人", "学院", "班级")
+        return any(marker in text for marker in cover_markers)
+
+    def _is_screenshot_placeholder_table(self, table: List[List[str]]) -> bool:
+        if len(table) != 1 or len(table[0]) != 1:
+            return False
+        text = self._compact_table_text(table)
+        return "截图" in text and ("粘贴" in text or "此处" in text)
+
+    def _is_scoring_table(self, table: List[List[str]]) -> bool:
+        text = self._compact_table_text(table)
+        if "评价维度" in text and "得分" not in text and "评分" not in text:
+            return False
+        scoring_markers = ("评分表", "评分标准", "评分项", "得分", "分值")
+        return any(marker in text for marker in scoring_markers)
+
+    def _is_teacher_scored_column(self, table: List[List[str]], col: int) -> bool:
+        labels = []
+        for row in table[:2]:
+            if col < len(row):
+                labels.append(self._compact_text(row[col]))
+        label = "".join(labels)
+        return any(marker in label for marker in ("得分", "评分", "分值", "教师评价", "老师评价"))
+
+    def _chapter_for_table(self, doc, table_index: int) -> str:
+        for sec in doc.sections:
+            if table_index in getattr(sec, "table_doc_indices", []):
+                return sec.title
+        return ""
+
+    @staticmethod
+    def _compact_table_text(table: List[List[str]]) -> str:
+        return re.sub(r"\s+", "", "\n".join("".join(row) for row in table))
+
+    @staticmethod
+    def _empty_table_labels() -> set:
+        return {"", "序号", "编号", "备注"}
 
     def _normalize_table_cell_descriptions(
         self,
