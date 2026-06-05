@@ -4,7 +4,12 @@ from typing import Any, Dict, List, Optional
 from core.dashscope_chat import chat_completions_create
 from core.parser import DocumentParser
 from core.fill_task import FillTask
-from core.slot_scanner import scan_anchor_tasks, build_decorative_hints_for_llm
+from core.slot_scanner import (
+    scan_anchor_tasks,
+    scan_placeholder_slots,
+    build_decorative_hints_for_llm,
+)
+from core.template_slots import cell_needs_fill
 from core.template_vision import apply_chapter_hints_to_tasks, compact_profile_for_analyzer
 import config
 import json
@@ -32,6 +37,9 @@ class TemplateAnalyzer:
     ) -> List[FillTask]:
         anchor_tasks = scan_anchor_tasks(template_path)
         if anchor_tasks:
+            doc = self._parser.parse(template_path)
+            self._supplement_table_cell_tasks(template_path, doc, anchor_tasks)
+            self._normalize_table_cell_descriptions(doc, anchor_tasks)
             if vision_profile:
                 apply_chapter_hints_to_tasks(anchor_tasks, vision_profile)
             return anchor_tasks
@@ -178,11 +186,142 @@ class TemplateAnalyzer:
                     word_limit=wl,
                 )
             )
+        self._supplement_table_cell_tasks(template_path, doc, tasks)
+        self._normalize_table_cell_descriptions(doc, tasks)
         self._supplement_section_paragraph_tasks(doc, tasks)
         if vision_profile:
             apply_chapter_hints_to_tasks(tasks, vision_profile)
         self._apply_replace_mode_heuristics(template_path, tasks)
         return tasks
+
+    def _supplement_table_cell_tasks(
+        self,
+        template_path: str,
+        doc,
+        tasks: List[FillTask],
+    ) -> None:
+        """用程序化表格扫槽补齐 LLM 漏掉的待填单元格。"""
+        existing = self._table_cell_keys(tasks)
+        for slot in scan_placeholder_slots(template_path):
+            if slot.task_type != "table_cell":
+                continue
+            key = self._table_cell_key(slot)
+            if key is None or key in existing:
+                continue
+            self._normalize_single_table_cell_description(doc, slot)
+            tasks.append(slot)
+            existing.add(key)
+
+    def _normalize_table_cell_descriptions(
+        self,
+        doc,
+        tasks: List[FillTask],
+    ) -> None:
+        for task in tasks:
+            if task.task_type == "table_cell":
+                self._normalize_single_table_cell_description(doc, task)
+
+    def _normalize_single_table_cell_description(self, doc, task: FillTask) -> None:
+        key = self._table_cell_key(task)
+        if key is None:
+            return
+        table_index, row, col = key
+        lh = dict(task.location_hint or {})
+        lh.update({"table_index": table_index, "row": row, "col": col})
+        task.location_hint = lh
+
+        if table_index < 0 or table_index >= len(doc.raw_tables):
+            return
+        table = doc.raw_tables[table_index]
+        if row < 0 or row >= len(table):
+            return
+
+        header = self._table_column_header(table, row, col)
+        row_hint = self._table_row_hint(table, row, col)
+        cell_text = table[row][col].strip() if col < len(table[row]) else ""
+        purpose = self._table_cell_purpose(cell_text, task.description)
+
+        subject = f"第{row}行「{header}」列"
+        if row_hint:
+            subject = f"{subject}（{row_hint}）"
+        task.description = self._trim_description(f"{subject}：{purpose}", subject)
+        task.word_limit = min(max(int(task.word_limit or 80), 1), 120)
+
+    def _table_cell_keys(self, tasks: List[FillTask]) -> set:
+        keys = set()
+        for task in tasks:
+            if task.task_type != "table_cell":
+                continue
+            key = self._table_cell_key(task)
+            if key is not None:
+                keys.add(key)
+        return keys
+
+    @staticmethod
+    def _table_cell_key(task: FillTask) -> Optional[tuple]:
+        lh = task.location_hint or {}
+        try:
+            return (
+                int(lh.get("table_index")),
+                int(lh.get("row")),
+                int(lh.get("col")),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _table_column_header(
+        self,
+        table: List[List[str]],
+        row: int,
+        col: int,
+    ) -> str:
+        candidates: List[str] = []
+        for hr in (0, 1):
+            if hr >= len(table) or hr == row or col >= len(table[hr]):
+                continue
+            text = self._clean_table_label(table[hr][col])
+            if text and not cell_needs_fill(text):
+                candidates.append(text)
+        if candidates:
+            return " / ".join(dict.fromkeys(candidates))[:28]
+        return f"第{col}列"
+
+    def _table_row_hint(self, table: List[List[str]], row: int, col: int) -> str:
+        if row >= len(table):
+            return ""
+        for c, raw in enumerate(table[row]):
+            if c == col:
+                continue
+            text = self._clean_table_label(raw)
+            if not text or cell_needs_fill(text):
+                continue
+            if c == 0 or len(text) <= 24:
+                return text[:24]
+        return ""
+
+    @staticmethod
+    def _clean_table_label(text: str) -> str:
+        return re.sub(r"\s+", " ", text or "").strip(" ：:；;，,。")
+
+    def _table_cell_purpose(self, cell_text: str, existing_desc: str) -> str:
+        text = self._clean_table_label(cell_text)
+        desc = self._clean_table_label(existing_desc)
+        if text and cell_needs_fill(text):
+            return f"替换占位提示“{text[:24]}”"
+        if desc:
+            desc = re.sub(r"^第\d+行[^：:]{0,50}[：:]", "", desc).strip()
+            if desc:
+                return desc[:36]
+        return "补充本格应填写的具体内容"
+
+    @staticmethod
+    def _trim_description(text: str, protected_prefix: str) -> str:
+        if len(text) <= 80:
+            return text
+        suffix_len = max(0, 79 - len(protected_prefix) - 1)
+        if suffix_len <= 0:
+            return protected_prefix[:80]
+        return f"{protected_prefix}：{text[-suffix_len:]}"[:80]
 
     def _supplement_section_paragraph_tasks(self, doc, tasks: List[FillTask]) -> None:
         """补齐章节正文段落任务，避免只有表格任务导致小节正文为空。"""
