@@ -869,12 +869,31 @@ class WordFiller:
             WordFiller._set_cell_text_keep_style(cell, text)
 
     @staticmethod
+    def _sample_cell_rPr(cell):
+        """采样单元格中第一个有内容的 run 的 rPr，用于保留原始字体/字号。"""
+        for para in cell.paragraphs:
+            for run in para.runs:
+                if (run.text or "").strip() and run._r.rPr is not None:
+                    return deepcopy(run._r.rPr)
+        # 无内容 run 时尝试任意 run
+        for para in cell.paragraphs:
+            for run in para.runs:
+                if run._r.rPr is not None:
+                    return deepcopy(run._r.rPr)
+        return None
+
+    @staticmethod
     def _set_cell_text_keep_style(cell, text: str) -> None:
-        """清空单元格正文但保留 tcPr，写入单段并应用正文宋体小四。"""
+        """清空单元格正文但保留 tcPr，写入单段并优先保留原始字体/字号。"""
+        # 先采样原始格式
+        preserved_rPr = WordFiller._sample_cell_rPr(cell)
         WordFiller._clear_cell_body_keep_tcPr(cell)
         p = cell.add_paragraph()
         run = p.add_run(text or "")
-        apply_rPr_to_run(run, build_body_rPr())
+        if preserved_rPr is not None:
+            apply_rPr_to_run(run, preserved_rPr)
+        else:
+            apply_rPr_to_run(run, build_body_rPr())
 
     @staticmethod
     def _replace_once_in_paragraph(para: Paragraph, anchor: str, content: str):

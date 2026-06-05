@@ -23,6 +23,22 @@ _FONT_ASCII = "SimSun"
 _FONT_EAST_ASIA = "宋体"
 
 _KEYWORD_PREFIXES = ("关键词", "Key words", "Keywords", "关键字")
+_COVER_STYLE_NAMES = {"CoverTitle"}
+_COVER_KEYWORDS = (
+    "作品名称",
+    "应用平台",
+    "信息技术学院",
+    "学院",
+    "专业",
+    "班级",
+    "学号",
+    "姓名",
+    "任课教师",
+    "日期",
+    "结课报告",
+    "课程报告",
+    "实验报告",
+)
 
 
 def body_first_line_indent_pt() -> float:
@@ -88,6 +104,34 @@ def heading_level_from_style(style_name: str) -> Optional[int]:
     return None
 
 
+def is_cover_paragraph(para: Paragraph) -> bool:
+    style_name = para.style.name if para.style else ""
+    if style_name in _COVER_STYLE_NAMES:
+        return True
+    t = (para.text or "").strip()
+    return bool(t) and any(kw in t for kw in _COVER_KEYWORDS)
+
+
+def _paragraph_original_rPr(para: Paragraph) -> Optional[OxmlElement]:
+    pPr = para._p.find(qn("w:pPr"))
+    if pPr is not None:
+        direct = pPr.find(qn("w:rPr"))
+        if direct is not None:
+            return deepcopy(direct)
+    for run in para.runs:
+        if (run.text or "").strip() and run._r.rPr is not None:
+            return deepcopy(run._r.rPr)
+    for run in para.runs:
+        if run._r.rPr is not None:
+            return deepcopy(run._r.rPr)
+    style = para.style if para.style else None
+    style_el = getattr(style, "element", None)
+    style_rpr = getattr(style_el, "rPr", None)
+    if style_rpr is not None:
+        return deepcopy(style_rpr)
+    return None
+
+
 def _make_rPr(sz_half: int, *, bold: bool = False) -> OxmlElement:
     rpr = OxmlElement("w:rPr")
     rfonts = OxmlElement("w:rFonts")
@@ -112,6 +156,10 @@ def _make_rPr(sz_half: int, *, bold: bool = False) -> OxmlElement:
 def build_rPr_for_paragraph(para: Paragraph) -> OxmlElement:
     """按段落样式返回统一 rPr（正文/表格默认小四宋体）。"""
     style_name = para.style.name if para.style else ""
+    if style_name in _COVER_STYLE_NAMES:
+        original_rpr = _paragraph_original_rPr(para)
+        if original_rpr is not None:
+            return original_rpr
     lvl = heading_level_from_style(style_name or "")
     if lvl is None:
         t = (para.text or "").strip()
@@ -138,25 +186,37 @@ def apply_rPr_to_run(run, rpr: OxmlElement) -> None:
     el.insert(0, clone)
 
 
-def apply_typography_to_paragraph(para: Paragraph) -> None:
+def apply_typography_to_paragraph(
+    para: Paragraph, *, preserve_explicit_run_rpr: bool = False
+) -> None:
     rpr = build_rPr_for_paragraph(para)
     for run in para.runs:
+        if preserve_explicit_run_rpr and run._r.rPr is not None:
+            continue
         apply_rPr_to_run(run, rpr)
 
 
 def apply_document_typography(doc: Document) -> None:
     """全文档段落与表格单元格 run 统一宋体字号。"""
+    from core.filler import WordFiller
+
     for para in doc.paragraphs:
         if not para.runs and not (para.text or "").strip():
             continue
+        if is_cover_paragraph(para):
+            continue
         apply_typography_to_paragraph(para)
     for table in doc.tables:
+        if WordFiller._is_cover_table(table) or WordFiller._is_rating_table(table):
+            continue
         for row in table.rows:
             for cell in row.cells:
                 for para in cell.paragraphs:
                     if not para.runs and not (para.text or "").strip():
                         continue
-                    apply_typography_to_paragraph(para)
+                    apply_typography_to_paragraph(
+                        para, preserve_explicit_run_rpr=True
+                    )
     apply_body_first_line_indent(doc)
 
 
@@ -168,6 +228,8 @@ def apply_body_first_line_indent(doc: Document) -> None:
     for para in doc.paragraphs:
         style_name = para.style.name if para.style else ""
         if heading_level_from_style(style_name or "") is not None:
+            continue
+        if is_cover_paragraph(para):
             continue
         t = (para.text or "").strip()
         if re.match(r"^摘\s*要\s*$", t):
