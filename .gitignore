@@ -13,6 +13,7 @@ __pycache__/
 .idea/workspace.xml
 
 # Generated runtime data and evaluation artifacts
+artifacts/
 data/.cache/
 data/kb_sources/
 data/outputs/
@@ -23,6 +24,13 @@ api_eval_result.json
 ui_eval_result.json
 model_health_report.json
 model_health_report.md
+API功能评测报告.md
+UI功能评测报告.md
+本轮改动说明.md
+自动评测报告.md
+自动评测方案.md
+训练闭环报告.md
+回归基线说明.md
 
 # Local screenshots and browser debug captures
 debug.png
@@ -34,3 +42,7 @@ git_log.html
 # Local dev/runtime logs
 backend-*.log
 frontend-*.log
+
+# One-off local validation files
+discipline_check.txt
+data/templates/not_a_docx.txt

@@ -7,11 +7,10 @@ from fastapi.testclient import TestClient
 
 import config
 from eval_judge import judge_payload
+from eval_paths import API_RESULT
 from server import app
 
 
-ROOT = Path(__file__).resolve().parent
-RESULT_PATH = ROOT / "api_eval_result.json"
 PASS_THRESHOLD = 80
 
 
@@ -88,6 +87,54 @@ def test_api_ai_scenarios():
     assert "page-gen" in res.text
     scenarios.append({"name": "GET /", "ok": True, "contains_spa_pages": True})
 
+    res = client.post(
+        "/api/template/analyze",
+        files={
+            "file": (
+                "empty.docx",
+                b"",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is False
+    assert "error" in data
+    scenarios.append({"name": "POST /api/template/analyze (empty file)", "ok": True, "error": data["error"]})
+
+    res = client.post(
+        "/api/template/analyze",
+        files={
+            "file": (
+                "not_a_docx.txt",
+                b"This is plain text, not a docx file.",
+                "text/plain",
+            )
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is False
+    assert "error" in data
+    scenarios.append({"name": "POST /api/template/analyze (non-docx)", "ok": True, "error": data["error"]})
+
+    res = client.post(
+        "/api/template/analyze",
+        files={
+            "file": (
+                "corrupted.docx",
+                b"PK\x03\x04" + b"\x00" * 100,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is False
+    assert "error" in data
+    scenarios.append({"name": "POST /api/template/analyze (corrupted docx)", "ok": True, "error": data["error"]})
+
     result = {
         "target": "api",
         "pass_threshold": PASS_THRESHOLD,
@@ -99,5 +146,5 @@ def test_api_ai_scenarios():
         },
     }
     result["judge"] = judge_payload(result, target="api")
-    RESULT_PATH.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    assert RESULT_PATH.exists()
+    API_RESULT.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert API_RESULT.exists()

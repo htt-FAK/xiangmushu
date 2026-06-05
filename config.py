@@ -40,25 +40,25 @@ _chat_client_singleton = None
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
 
 # 场景 LLM / 视觉（复星网关 ID；对齐 leaderboard v2026.05.21 fosun 主榜，均可 env 覆盖）
-# 视觉/联网/大段：qwen3.6-plus；强 RAG/表格快批：kimi-k2.6（复星网关 glm-5.1 chat 常空回复）
+# 视觉/联网/大段：qwen3.7-plus；小模型/RAG/表格快批：qwen3.7-flash
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
-VISION_WEB_MODEL = _vw or "qwen3.6-flash"
-VISION_WEB_FALLBACK_MODEL = os.getenv("VISION_WEB_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
-TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.6-plus-2026-04-02"
+VISION_WEB_MODEL = _vw or "qwen3.7-flash"
+VISION_WEB_FALLBACK_MODEL = os.getenv("VISION_WEB_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
+TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.7-plus"
 TEMPLATE_VISION_FALLBACK_MODEL = os.getenv("TEMPLATE_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
-VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.6-plus-2026-04-02"
+VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.7-plus"
 VISION_EXTRACT_FALLBACK_MODEL = os.getenv("VISION_EXTRACT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
-TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.6-plus-2026-04-02"
+TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.7-plus"
 TABLE_CELL_VISION_FALLBACK_MODEL = os.getenv("TABLE_CELL_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
-TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-flash").strip()
-SMALL_LLM_FALLBACK_MODEL = os.getenv("SMALL_LLM_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
+TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.7-flash").strip()
+SMALL_LLM_FALLBACK_MODEL = os.getenv("SMALL_LLM_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 # 结构分析：复星网关上 glm-5.1 chat 易空回复或长时间无响应，默认 qwen3.5-plus
-TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-flash"
+TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.7-flash"
 TEMPLATE_ANALYZE_FALLBACK_MODEL = (
-    os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.6-35b-a3b"
+    os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 )
 # 结构分析专用超时（秒），避免沿用 OPENAI_TIMEOUT=300 时界面长时间无反馈
 TEMPLATE_ANALYZE_TIMEOUT = float(os.getenv("TEMPLATE_ANALYZE_TIMEOUT", "180"))
@@ -141,7 +141,7 @@ TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")
 _BTF = os.getenv("BATCH_TABLE_FAST", "1").strip().lower()
 BATCH_TABLE_FAST = _BTF not in ("0", "false", "no", "off")
 BATCH_TABLE_FAST_MODEL = (
-    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.6-flash"
+    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.7-flash"
 )
 
 # 复星网关上 chat 不可靠的模型：直接走百炼 compatible-mode，避免空回复再等一轮
@@ -185,7 +185,7 @@ _VISUAL_AUDIT = os.getenv("VISUAL_AUDIT_ENABLED", "1").strip().lower()
 VISUAL_AUDIT_ENABLED = _VISUAL_AUDIT not in ("0", "false", "no", "off")
 VISUAL_AUDIT_MAX_ROUNDS = int(os.getenv("VISUAL_AUDIT_MAX_ROUNDS", "3"))
 VISUAL_AUDIT_PASS_SCORE = int(os.getenv("VISUAL_AUDIT_PASS_SCORE", "85"))
-VISUAL_AUDIT_MODEL = os.getenv("VISUAL_AUDIT_MODEL", "qwen3.6-plus-2026-04-02").strip()
+VISUAL_AUDIT_MODEL = os.getenv("VISUAL_AUDIT_MODEL", "qwen3.7-plus").strip()
 VISUAL_AUDIT_FALLBACK_MODEL = os.getenv("VISUAL_AUDIT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
 
 # 内容充实度配置
