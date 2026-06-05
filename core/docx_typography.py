@@ -205,6 +205,10 @@ def apply_document_typography(doc: Document) -> None:
             continue
         if is_cover_paragraph(para):
             continue
+        # 保留 Heading 样式的原始字体（黑体），不强制覆盖为宋体
+        style_name = para.style.name if para.style else ""
+        if heading_level_from_style(style_name or "") is not None:
+            continue
         apply_typography_to_paragraph(para)
     for table in doc.tables:
         if WordFiller._is_cover_table(table) or WordFiller._is_rating_table(table):

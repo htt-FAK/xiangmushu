@@ -870,16 +870,52 @@ class WordFiller:
 
     @staticmethod
     def _sample_cell_rPr(cell):
-        """采样单元格中第一个有内容的 run 的 rPr，用于保留原始字体/字号。"""
+        """采样单元格中第一个有内容的 run 的 rPr，用于保留原始字体/字号。
+        如果 rPr 缺少 ascii/hAnsi 字体，从 run 的实际解析值或样式中补全。"""
+        from docx.oxml.ns import qn
+
+        def _enrich_rPr(rpr, run):
+            """补全 rPr 中缺失的字体字段。"""
+            rf = rpr.find(qn("w:rFonts"))
+            if rf is None:
+                rf = OxmlElement("w:rFonts")
+                rpr.insert(0, rf)
+            # 补全 ascii/hAnsi
+            for attr in ["w:ascii", "w:hAnsi"]:
+                if rf.get(qn(attr)) is None:
+                    val = run.font.name
+                    if val:
+                        rf.set(qn(attr), val)
+            # 补全 eastAsia
+            if rf.get(qn("w:eastAsia")) is None:
+                try:
+                    style_el = getattr(run.style, "element", None) if run.style else None
+                    if style_el is not None:
+                        srpr = style_el.find(qn("w:rPr"))
+                        if srpr is not None:
+                            srf = srpr.find(qn("w:rFonts"))
+                            if srf is not None:
+                                ea = srf.get(qn("w:eastAsia"))
+                                if ea:
+                                    rf.set(qn("w:eastAsia"), ea)
+                except Exception:
+                    pass
+            return rpr
+
         for para in cell.paragraphs:
             for run in para.runs:
                 if (run.text or "").strip() and run._r.rPr is not None:
-                    return deepcopy(run._r.rPr)
-        # 无内容 run 时尝试任意 run
+                    return _enrich_rPr(deepcopy(run._r.rPr), run)
         for para in cell.paragraphs:
             for run in para.runs:
                 if run._r.rPr is not None:
-                    return deepcopy(run._r.rPr)
+                    return _enrich_rPr(deepcopy(run._r.rPr), run)
+        # 无 rPr 时尝试从样式获取
+        for para in cell.paragraphs:
+            for run in para.runs:
+                if run.font.name or run.font.size:
+                    rpr = build_body_rPr()
+                    return _enrich_rPr(rpr, run)
         return None
 
     @staticmethod
