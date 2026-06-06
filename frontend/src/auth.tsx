@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -41,6 +42,38 @@ export function buildAuthHeaders(): HeadersInit {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState(() => getStoredToken());
+  const [validating, setValidating] = useState(true);
+
+  // Validate token on mount — if invalid, clear it
+  useEffect(() => {
+    if (!token) {
+      setValidating(false);
+      return;
+    }
+    let cancelled = false;
+    fetch(apiUrl("/api/auth/me"), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          window.localStorage.removeItem(TOKEN_KEY);
+          setTokenState("");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          window.localStorage.removeItem(TOKEN_KEY);
+          setTokenState("");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setValidating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setToken = useCallback((value: string) => {
     window.localStorage.setItem(TOKEN_KEY, value);
@@ -55,11 +88,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(
     () => ({
       token,
-      isAuthenticated: Boolean(token),
+      isAuthenticated: !validating && Boolean(token),
       setToken,
       logout,
     }),
-    [logout, setToken, token],
+    [logout, setToken, token, validating],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
