@@ -15,6 +15,7 @@ __pycache__/
 # Generated runtime data and evaluation artifacts
 artifacts/
 data/.cache/
+data/*.sqlite3
 data/kb_sources/
 data/outputs/
 data/templates/*.docx
