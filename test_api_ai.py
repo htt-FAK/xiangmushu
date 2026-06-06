@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import uuid
 from pathlib import Path
 
 from docx import Document
@@ -17,10 +18,11 @@ PASS_THRESHOLD = 80
 
 def _get_test_token(client: TestClient) -> str:
     """Create a test user and return a valid JWT token."""
-    email = "test@example.com"
+    email = f"test-{uuid.uuid4().hex}@example.com"
+    password = "test-password"
     # Use default DB path (same as server.py reads from config)
-    vc = create_verification_code(email, code="123456")
-    user = consume_verification_code(email, "123456")
+    create_verification_code(email, password=password, code="123456")
+    user = consume_verification_code(email, "123456", password)
     return create_access_token(user)
 
 

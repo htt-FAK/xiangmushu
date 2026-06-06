@@ -94,10 +94,13 @@ export function Button({
   );
 }
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className="min-h-10 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70"
+      className={clsx(
+        "min-h-10 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70",
+        className,
+      )}
       {...props}
     />
   );

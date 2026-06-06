@@ -2,6 +2,7 @@ import {
   Database,
   FileSearch,
   Home,
+  Languages,
   LogOut,
   PanelLeft,
   Sparkles,
@@ -17,6 +18,7 @@ import {
 import type { ReactElement } from "react";
 import { useAuth } from "./auth";
 import { Button } from "./components/ui";
+import { useI18n } from "./i18n";
 import GeneratePage from "./pages/GeneratePage";
 import HomePage from "./pages/HomePage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
@@ -25,10 +27,10 @@ import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
 import { clsx } from "./utils";
 
 const nav = [
-  { to: "/", label: "Home", icon: Home },
-  { to: "/template", label: "Templates", icon: FileSearch },
-  { to: "/generate", label: "Generate", icon: Sparkles },
-  { to: "/knowledge", label: "Knowledge", icon: Database },
+  { to: "/", labelKey: "nav.home", icon: Home },
+  { to: "/template", labelKey: "nav.template", icon: FileSearch },
+  { to: "/generate", labelKey: "nav.generate", icon: Sparkles },
+  { to: "/knowledge", labelKey: "nav.knowledge", icon: Database },
 ];
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
@@ -43,11 +45,16 @@ function ProtectedRoute({ children }: { children: ReactElement }) {
 
 function Shell() {
   const auth = useAuth();
+  const { language, setLanguage, t } = useI18n();
   const navigate = useNavigate();
 
   function handleLogout() {
     auth.logout();
     navigate("/login", { replace: true });
+  }
+
+  function toggleLanguage() {
+    setLanguage(language === "zh" ? "en" : "zh");
   }
 
   return (
@@ -63,9 +70,9 @@ function Shell() {
           </div>
           <div>
             <p className="font-display text-lg font-semibold leading-tight text-white">
-              Xiangmushu
+              {t("app.name")}
             </p>
-            <p className="text-xs text-slate-500">Word template agent</p>
+            <p className="text-xs text-slate-500">{t("app.subtitle")}</p>
           </div>
         </div>
 
@@ -87,7 +94,7 @@ function Shell() {
                 }
               >
                 <Icon size={18} />
-                {item.label}
+                {t(item.labelKey)}
               </NavLink>
             );
           })}
@@ -96,15 +103,19 @@ function Shell() {
         <div className="absolute bottom-6 left-5 right-5 space-y-3">
           <div className="border border-white/10 bg-night-950/70 p-4">
             <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-lime">
-              API
+              {t("app.api")}
             </p>
             <p className="mt-2 break-all text-xs leading-5 text-slate-500">
               FastAPI localhost:8502
             </p>
           </div>
+          <Button className="w-full" variant="ghost" onClick={toggleLanguage} title={t("lang.switch")}>
+            <Languages size={17} />
+            {language === "zh" ? "English" : "中文"}
+          </Button>
           <Button className="w-full" variant="ghost" onClick={handleLogout}>
             <LogOut size={17} />
-            Sign Out
+            {t("nav.signOut")}
           </Button>
         </div>
       </aside>
@@ -129,14 +140,22 @@ function Shell() {
                   }
                 >
                   <Icon size={15} />
-                  {item.label}
+                  {t(item.labelKey)}
                 </NavLink>
               );
             })}
             <button
               className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400"
+              onClick={toggleLanguage}
+              title={t("lang.switch")}
+              type="button"
+            >
+              <Languages size={16} />
+            </button>
+            <button
+              className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400"
               onClick={handleLogout}
-              title="Sign out"
+              title={t("nav.signOut")}
               type="button"
             >
               <LogOut size={16} />

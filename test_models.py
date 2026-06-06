@@ -4,7 +4,7 @@ import config
 from core.dashscope_chat import chat_completions_create
 
 
-def test_model(client, model, name):
+def check_model(client, model, name):
     print(f"\n{'=' * 50}")
     print(f"Testing {name} (model={model})")
     print("=" * 50)
@@ -33,9 +33,9 @@ print("Testing DashScope")
 print("=" * 50)
 dashscope_client = config.dashscope_backup_chat_client()
 if dashscope_client:
-    test_model(dashscope_client, config.LARGE_LLM_MODEL, f"DashScope {config.LARGE_LLM_MODEL}")
-    test_model(dashscope_client, config.SMALL_LLM_MODEL, f"DashScope {config.SMALL_LLM_MODEL}")
-    test_model(dashscope_client, config.VISUAL_AUDIT_MODEL, f"DashScope {config.VISUAL_AUDIT_MODEL}")
+    check_model(dashscope_client, config.LARGE_LLM_MODEL, f"DashScope {config.LARGE_LLM_MODEL}")
+    check_model(dashscope_client, config.SMALL_LLM_MODEL, f"DashScope {config.SMALL_LLM_MODEL}")
+    check_model(dashscope_client, config.VISUAL_AUDIT_MODEL, f"DashScope {config.VISUAL_AUDIT_MODEL}")
 else:
     print("FAIL: DashScope client not configured")
 
@@ -45,9 +45,9 @@ print("Testing Primary Chat Client")
 print("=" * 50)
 primary_client = config.openai_client_for_chat()
 if primary_client:
-    test_model(primary_client, config.LARGE_LLM_MODEL, f"Primary {config.LARGE_LLM_MODEL}")
-    test_model(primary_client, config.SMALL_LLM_MODEL, f"Primary {config.SMALL_LLM_MODEL}")
-    test_model(primary_client, config.VISION_WEB_MODEL, f"Primary {config.VISION_WEB_MODEL}")
+    check_model(primary_client, config.LARGE_LLM_MODEL, f"Primary {config.LARGE_LLM_MODEL}")
+    check_model(primary_client, config.SMALL_LLM_MODEL, f"Primary {config.SMALL_LLM_MODEL}")
+    check_model(primary_client, config.VISION_WEB_MODEL, f"Primary {config.VISION_WEB_MODEL}")
 else:
     print("FAIL: primary client not configured")
 

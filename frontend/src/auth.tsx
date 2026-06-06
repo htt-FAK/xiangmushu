@@ -86,13 +86,17 @@ async function authRequest<T>(path: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function requestLoginCode(email: string) {
+export async function requestLoginCode(email: string, password?: string) {
   return authRequest<{ ok: boolean; email: string; expires_at: string }>(
     "/api/auth/request-code",
-    { email },
+    { email, password },
   );
 }
 
-export async function verifyLoginCode(email: string, code: string) {
-  return authRequest<VerifyCodeResponse>("/api/auth/verify-code", { email, code });
+export async function verifyLoginCode(email: string, password: string, code: string) {
+  return authRequest<VerifyCodeResponse>("/api/auth/verify-code", { email, password, code });
+}
+
+export async function loginWithPassword(email: string, password: string) {
+  return authRequest<VerifyCodeResponse>("/api/auth/login", { email, password });
 }

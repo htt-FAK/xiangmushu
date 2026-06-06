@@ -21,15 +21,32 @@ from core.auth import (
     AuthError,
     InvalidCodeError,
     InvalidEmailError,
+    InvalidPasswordError,
     InvalidTokenError,
     User,
     consume_verification_code,
     create_access_token,
     create_verification_code,
+    get_or_create_user,
     init_db,
     send_verification_email,
     user_from_token,
+    verify_password,
 )
+
+
+def _get_password_hash(email: str) -> str:
+    """Look up password hash from DB for login verification."""
+    import sqlite3
+    db_path = config.AUTH_DB_PATH
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT password_hash FROM users WHERE email = ?",
+            (email.lower().strip(),),
+        ).fetchone()
+    if not row or not row[0]:
+        return ""
+    return row[0]
 from core.chunker import Chunker
 from core.content_auditor import (
     ContentAuditor,
@@ -59,11 +76,18 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 class EmailRequest(BaseModel):
     email: str
+    password: str | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
 class VerifyCodeRequest(BaseModel):
     email: str
     code: str
+    password: str
 
 
 def get_current_user(
@@ -135,10 +159,10 @@ async def index():
 @app.post("/api/auth/request-code")
 async def auth_request_code(payload: EmailRequest):
     try:
-        verification = create_verification_code(payload.email)
+        verification = create_verification_code(payload.email, password=payload.password)
         send_verification_email(verification.email, verification.code)
         return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
-    except InvalidEmailError as exc:
+    except (InvalidEmailError, InvalidPasswordError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except AuthError as exc:
         logger.exception("Failed to request verification code")
@@ -148,15 +172,35 @@ async def auth_request_code(payload: EmailRequest):
 @app.post("/api/auth/verify-code")
 async def auth_verify_code(payload: VerifyCodeRequest):
     try:
-        user = consume_verification_code(payload.email, payload.code)
+        user = consume_verification_code(payload.email, payload.code, payload.password)
         token = create_access_token(user)
         return {
             "access_token": token,
             "token_type": "bearer",
             "user": {"id": user.id, "email": user.email},
         }
-    except (InvalidEmailError, InvalidCodeError) as exc:
+    except (InvalidEmailError, InvalidCodeError, InvalidPasswordError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/login")
+async def auth_login(payload: LoginRequest):
+    """Login with email + password only (no verification code needed)."""
+    try:
+        user = get_or_create_user(payload.email)
+        if not verify_password(payload.password, _get_password_hash(user.email)):
+            raise InvalidPasswordError("Email or password is incorrect")
+        token = create_access_token(user)
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {"id": user.id, "email": user.email},
+        }
+    except InvalidPasswordError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except AuthError as exc:
+        logger.exception("Login failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @app.get("/api/auth/me")

@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import random
 import re
 import smtplib
@@ -37,6 +38,10 @@ class InvalidCodeError(AuthError):
 
 class InvalidTokenError(AuthError):
     """Raised when a JWT token is invalid or expired."""
+
+
+class InvalidPasswordError(AuthError):
+    """Raised when a password is missing or does not match."""
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,39 @@ def _code_hash(email: str, code: str, secret: str | None = None) -> str:
     return hmac.new(_secret_bytes(secret), payload, hashlib.sha256).hexdigest()
 
 
+def set_password(password: str) -> str:
+    value = password or ""
+    if not value:
+        raise InvalidPasswordError("Password is required")
+    iterations = 260_000
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), salt, iterations)
+    return "$".join(
+        [
+            "pbkdf2_sha256",
+            str(iterations),
+            _b64url(salt),
+            _b64url(digest),
+        ]
+    )
+
+
+def verify_password(password: str, password_hash: str | None) -> bool:
+    if not password or not password_hash:
+        return False
+    try:
+        algorithm, iterations_raw, salt_raw, digest_raw = password_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_raw)
+        salt = _b64url_decode(salt_raw)
+        expected = _b64url_decode(digest_raw)
+    except (ValueError, TypeError):
+        return False
+    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return hmac.compare_digest(expected, actual)
+
+
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
@@ -112,6 +150,7 @@ def init_db(db_path: str | None = None) -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE,
+                password_hash TEXT,
                 created_at TEXT NOT NULL,
                 last_login_at TEXT
             )
@@ -123,12 +162,24 @@ def init_db(db_path: str | None = None) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL,
                 code_hash TEXT NOT NULL,
+                password_hash TEXT,
                 expires_at TEXT NOT NULL,
                 consumed_at TEXT,
                 created_at TEXT NOT NULL
             )
             """
         )
+        user_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_hash" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        code_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(email_verification_codes)").fetchall()
+        }
+        if "password_hash" not in code_columns:
+            conn.execute("ALTER TABLE email_verification_codes ADD COLUMN password_hash TEXT")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_email_verification_codes_email_created
@@ -186,9 +237,32 @@ def get_or_create_user(email: str, db_path: str | None = None) -> User:
     return _row_to_user(row)
 
 
+def _create_user_with_password(
+    email: str,
+    password_hash: str,
+    db_path: str | None = None,
+) -> User:
+    normalized = normalize_email(email)
+    now = iso(utc_now())
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO users(email, password_hash, created_at, last_login_at)
+            VALUES(?, ?, ?, ?)
+            """,
+            (normalized, password_hash, now, now),
+        )
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
+        conn.commit()
+    if row is None:
+        raise AuthError("Failed to load authenticated user")
+    return _row_to_user(row)
+
+
 def create_verification_code(
     email: str,
     *,
+    password: str | None = None,
     code: str | None = None,
     ttl_minutes: int | None = None,
     db_path: str | None = None,
@@ -197,23 +271,36 @@ def create_verification_code(
     code_value = code or generate_code()
     if not CODE_RE.match(code_value):
         raise InvalidCodeError("Verification code must be six digits")
+    pending_password_hash = set_password(password) if password is not None else None
     expires_at = utc_now() + timedelta(minutes=ttl_minutes or config.AUTH_CODE_TTL_MINUTES)
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO email_verification_codes(email, code_hash, expires_at, created_at)
-            VALUES(?, ?, ?, ?)
+            INSERT INTO email_verification_codes(email, code_hash, password_hash, expires_at, created_at)
+            VALUES(?, ?, ?, ?, ?)
             """,
-            (normalized, _code_hash(normalized, code_value), iso(expires_at), iso(utc_now())),
+            (
+                normalized,
+                _code_hash(normalized, code_value),
+                pending_password_hash,
+                iso(expires_at),
+                iso(utc_now()),
+            ),
         )
         conn.commit()
     return VerificationCode(email=normalized, code=code_value, expires_at=iso(expires_at))
 
 
-def consume_verification_code(email: str, code: str, db_path: str | None = None) -> User:
+def consume_verification_code(
+    email: str,
+    code: str,
+    password: str | None = None,
+    db_path: str | None = None,
+) -> User:
     normalized = normalize_email(email)
     if not CODE_RE.match(code or ""):
         raise InvalidCodeError("Invalid verification code")
+    pending_password_hash: str | None = None
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -232,12 +319,32 @@ def consume_verification_code(email: str, code: str, db_path: str | None = None)
         actual = _code_hash(normalized, code)
         if not hmac.compare_digest(expected, actual):
             raise InvalidCodeError("Invalid verification code")
+        pending_password_hash = row["password_hash"]
         conn.execute(
             "UPDATE email_verification_codes SET consumed_at = ? WHERE id = ?",
             (iso(utc_now()), row["id"]),
         )
         conn.commit()
-    return get_or_create_user(normalized, db_path)
+
+    with _connect(db_path) as conn:
+        user_row = conn.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
+        if user_row is not None:
+            stored_password_hash = user_row["password_hash"]
+            if not verify_password(password or "", stored_password_hash):
+                raise InvalidPasswordError("Invalid email, password, or verification code")
+            conn.execute(
+                "UPDATE users SET last_login_at = ? WHERE id = ?",
+                (iso(utc_now()), user_row["id"]),
+            )
+            updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_row["id"],)).fetchone()
+            conn.commit()
+            if updated is None:
+                raise AuthError("Failed to load authenticated user")
+            return _row_to_user(updated)
+
+    if not pending_password_hash or not verify_password(password or "", pending_password_hash):
+        raise InvalidPasswordError("Invalid email, password, or verification code")
+    return _create_user_with_password(normalized, pending_password_hash, db_path)
 
 
 def create_access_token(

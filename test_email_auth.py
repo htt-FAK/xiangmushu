@@ -8,12 +8,15 @@ from fastapi.testclient import TestClient
 import config
 from core.auth import (
     InvalidCodeError,
+    InvalidPasswordError,
     consume_verification_code,
     create_access_token,
     create_verification_code,
     get_or_create_user,
     init_db,
+    set_password,
     user_from_token,
+    verify_password,
 )
 
 generator_stub = types.ModuleType("core.generator")
@@ -57,27 +60,51 @@ def count_users(db_path) -> int:
         return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
 
 
+def password_hash_for(db_path, email: str) -> str | None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT password_hash FROM users WHERE email = ?", (email,)).fetchone()
+    return row[0] if row else None
+
+
+def test_password_hash_round_trip():
+    password_hash = set_password("correct horse battery staple")
+
+    assert password_hash.startswith("pbkdf2_sha256$")
+    assert verify_password("correct horse battery staple", password_hash)
+    assert not verify_password("wrong password", password_hash)
+
+
 def test_verified_email_creates_one_case_insensitive_user(auth_db):
-    create_verification_code("User@Example.com", code="123456", db_path=str(auth_db))
-    first = consume_verification_code(" user@example.com ", "123456", db_path=str(auth_db))
+    create_verification_code("User@Example.com", password="secret-1", code="123456", db_path=str(auth_db))
+    first = consume_verification_code(" user@example.com ", "123456", "secret-1", db_path=str(auth_db))
 
     create_verification_code("USER@example.com", code="654321", db_path=str(auth_db))
-    second = consume_verification_code("user@example.com", "654321", db_path=str(auth_db))
+    second = consume_verification_code("user@example.com", "654321", "secret-1", db_path=str(auth_db))
 
     assert first.id == second.id
     assert first.email == "user@example.com"
     assert count_users(auth_db) == 1
+    assert verify_password("secret-1", password_hash_for(auth_db, "user@example.com"))
 
 
 def test_latest_code_supersedes_older_code(auth_db):
-    create_verification_code("user@example.com", code="111111", db_path=str(auth_db))
-    create_verification_code("user@example.com", code="222222", db_path=str(auth_db))
+    create_verification_code("user@example.com", password="secret-1", code="111111", db_path=str(auth_db))
+    create_verification_code("user@example.com", password="secret-1", code="222222", db_path=str(auth_db))
 
     with pytest.raises(InvalidCodeError):
-        consume_verification_code("user@example.com", "111111", db_path=str(auth_db))
+        consume_verification_code("user@example.com", "111111", "secret-1", db_path=str(auth_db))
 
-    user = consume_verification_code("user@example.com", "222222", db_path=str(auth_db))
+    user = consume_verification_code("user@example.com", "222222", "secret-1", db_path=str(auth_db))
     assert user.email == "user@example.com"
+
+
+def test_password_must_match_for_login(auth_db):
+    create_verification_code("user@example.com", password="secret-1", code="123456", db_path=str(auth_db))
+    consume_verification_code("user@example.com", "123456", "secret-1", db_path=str(auth_db))
+
+    create_verification_code("user@example.com", code="654321", db_path=str(auth_db))
+    with pytest.raises(InvalidPasswordError):
+        consume_verification_code("user@example.com", "654321", "wrong-password", db_path=str(auth_db))
 
 
 def test_jwt_round_trip_loads_user(auth_db):
@@ -91,12 +118,12 @@ def test_jwt_round_trip_loads_user(auth_db):
 
 
 def test_auth_api_issues_token_and_me_returns_user(auth_db):
-    create_verification_code("user@example.com", code="123456", db_path=str(auth_db))
+    create_verification_code("user@example.com", password="secret-1", code="123456", db_path=str(auth_db))
 
     with TestClient(server.app) as client:
         response = client.post(
             "/api/auth/verify-code",
-            json={"email": "user@example.com", "code": "123456"},
+            json={"email": "user@example.com", "password": "secret-1", "code": "123456"},
         )
         assert response.status_code == 200
         token = response.json()["access_token"]
