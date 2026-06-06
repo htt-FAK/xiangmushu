@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Database,
   FileSearch,
   Home,
@@ -23,6 +24,7 @@ import GeneratePage from "./pages/GeneratePage";
 import HomePage from "./pages/HomePage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LoginPage from "./pages/LoginPage";
+import AdminPage from "./pages/AdminPage";
 import SettingsPage from "./pages/SettingsPage";
 import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
 import { clsx } from "./utils";
@@ -103,6 +105,22 @@ function Shell() {
               </NavLink>
             );
           })}
+          {auth.userEmail === "3406847927@qq.com" && (
+            <NavLink
+              to="/admin"
+              className={({ isActive }) =>
+                clsx(
+                  "flex min-h-12 items-center gap-3 border px-4 text-sm font-semibold transition",
+                  isActive
+                    ? "border-signal-lime/60 bg-signal-lime/12 text-signal-lime"
+                    : "border-white/5 bg-white/[0.025] text-slate-400 hover:border-white/20 hover:text-white",
+                )
+              }
+            >
+              <BarChart3 size={18} />
+              {t("nav.admin")}
+            </NavLink>
+          )}
         </nav>
 
         <div className="absolute bottom-6 left-5 right-5 space-y-3">
@@ -162,6 +180,7 @@ function Shell() {
             <Route path="/generate" element={<GeneratePage />} />
             <Route path="/knowledge" element={<KnowledgeBasePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

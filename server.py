@@ -131,6 +131,15 @@ def get_current_user(
         ) from exc
 
 
+ADMIN_EMAILS = {"3406847927@qq.com"}
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.email not in ADMIN_EMAILS:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return current_user
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -614,6 +623,42 @@ async def download(
         media_type=media_type
         or "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(admin: User = Depends(require_admin)):
+    import sqlite3 as _sqlite3
+    db = config.AUTH_DB_PATH
+    with _sqlite3.connect(db) as conn:
+        total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        total_generations = conn.execute("SELECT COUNT(*) FROM billing_records").fetchone()[0]
+        total_cost = conn.execute("SELECT COALESCE(SUM(cost_cny), 0) FROM billing_records").fetchone()[0]
+        total_input = conn.execute("SELECT COALESCE(SUM(input_tokens), 0) FROM billing_records").fetchone()[0]
+        total_output = conn.execute("SELECT COALESCE(SUM(output_tokens), 0) FROM billing_records").fetchone()[0]
+        # Last 7 days daily stats
+        daily = conn.execute(
+            "SELECT DATE(created_at) as day, COUNT(*) as gens, SUM(cost_cny) as cost, "
+            "SUM(input_tokens) as inp, SUM(output_tokens) as outp "
+            "FROM billing_records WHERE created_at >= DATE('now', '-7 days') "
+            "GROUP BY day ORDER BY day"
+        ).fetchall()
+        # Top models
+        models = conn.execute(
+            "SELECT model, COUNT(*) as cnt, SUM(cost_cny) as cost "
+            "FROM billing_records GROUP BY model ORDER BY cnt DESC LIMIT 5"
+        ).fetchall()
+        # Users with API keys
+        users_with_key = conn.execute("SELECT COUNT(*) FROM user_api_keys").fetchone()[0]
+    return {
+        "total_users": total_users,
+        "total_generations": total_generations,
+        "total_cost_cny": round(total_cost, 4),
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
+        "users_with_api_key": users_with_key,
+        "daily": [{"day": r[0], "generations": r[1], "cost": round(r[2] or 0, 4), "input_tokens": r[3], "output_tokens": r[4]} for r in daily],
+        "top_models": [{"model": r[0], "count": r[1], "cost": round(r[2] or 0, 4)} for r in models],
+    }
 
 
 @app.get("/{full_path:path}")
