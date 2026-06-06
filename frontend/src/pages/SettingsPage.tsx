@@ -211,7 +211,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-5 space-y-3 text-sm leading-7 text-slate-200">
-              {[1, 2, 3, 4, 5].map((item) => (
+              {[1, 2, 3, 4, 5, 6].map((item) => (
                 <p key={item}>
                   {item}. {t(`settings.noticePoint${item}`)}
                 </p>
