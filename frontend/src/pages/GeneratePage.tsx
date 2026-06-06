@@ -111,6 +111,7 @@ export default function GeneratePage() {
   const [runBilling, setRunBilling] = useState<GenerationBilling | null>(null);
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -168,7 +169,13 @@ export default function GeneratePage() {
     setRunning(false);
   }
 
+  function requestStart() {
+    if (!template || !slug) return;
+    setConfirmOpen(true);
+  }
+
   async function start() {
+    setConfirmOpen(false);
     if (!template || !slug) return;
 
     const controller = new AbortController();
@@ -379,7 +386,7 @@ export default function GeneratePage() {
             </div>
 
             <div className="flex gap-3">
-              <Button className="flex-1" onClick={start} disabled={!template || !slug || running}>
+              <Button className="flex-1" onClick={requestStart} disabled={!template || !slug || running}>
                 {running ? <Loader2 className="animate-spin" size={17} /> : <Play size={17} />}
                 {running ? t("generate.running") : t("generate.start")}
               </Button>
@@ -545,6 +552,24 @@ export default function GeneratePage() {
           )}
         </Panel>
       </div>
+
+      {confirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-night-950/90 px-4 backdrop-blur">
+          <div className="max-w-md border border-white/10 bg-night-900 p-6 shadow-panel">
+            <h3 className="font-display text-xl font-semibold text-white">{t("generate.confirmTitle")}</h3>
+            <p className="mt-3 text-sm leading-7 text-slate-300">{t("generate.confirmBody")}</p>
+            <div className="mt-5 flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+                {t("generate.cancel")}
+              </Button>
+              <Button onClick={start}>
+                <Play size={17} />
+                {t("generate.confirmStart")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

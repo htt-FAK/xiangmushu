@@ -129,6 +129,10 @@ const dict: Record<Language, Record<string, string>> = {
     "generate.missing": "章节缺失：",
     "generate.noApiKeyHint": "你还没有配置 API Key，生成功能需要使用你自己的阿里云百炼 API Key。",
     "generate.goSettings": "去设置",
+    "generate.confirmTitle": "确认开始生成",
+    "generate.confirmBody": "本次生成将调用 AI 模型，会消耗你的 API 额度并产生费用。确认继续吗？",
+    "generate.cancel": "取消",
+    "generate.confirmStart": "确认生成",
 
     "knowledge.eyebrow": "知识库",
     "knowledge.title": "管理你的参考资料",
@@ -304,6 +308,10 @@ const dict: Record<Language, Record<string, string>> = {
     "generate.missing": "Missing chapter: ",
     "generate.noApiKeyHint": "You haven't configured an API Key yet. Generation requires your own Aliyun Bailian API Key.",
     "generate.goSettings": "Go to Settings",
+    "generate.confirmTitle": "Confirm Generation",
+    "generate.confirmBody": "This generation will call AI models and consume your API quota, incurring costs. Continue?",
+    "generate.cancel": "Cancel",
+    "generate.confirmStart": "Confirm",
 
     "knowledge.eyebrow": "Knowledge Dock",
     "knowledge.title": "Manage Your Reference Materials",

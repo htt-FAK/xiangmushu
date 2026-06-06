@@ -10,6 +10,8 @@ import mimetypes
 import os
 from dataclasses import asdict
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -122,9 +124,13 @@ def get_current_user(
         ) from exc
 
 
-@app.on_event("startup")
-async def startup_auth_db() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
+    yield
+
+
+app.router.lifespan_context = lifespan
 
 # ---------------------------------------------------------------------------
 # 缓存实例（模拟 st.cache_resource）
