@@ -44,6 +44,8 @@ const dict: Record<Language, Record<string, string>> = {
     "login.loginHint": "使用邮箱和密码登录，无需验证码。",
     "login.sendError": "验证码发送失败",
     "login.verifyError": "邮箱、密码或验证码不正确",
+    "login.passwordRule": "密码至少8位，且必须包含字母和数字",
+    "login.passwordStrong": "密码强度符合要求",
 
     "home.eyebrow": "智能计划书助手",
     "home.title": "让 AI 帮你写项目书",
@@ -210,6 +212,9 @@ const dict: Record<Language, Record<string, string>> = {
     "settings.apiKeyPlaceholder": "请输入阿里云百炼 API Key",
     "settings.confirm": "确认",
     "settings.cancel": "取消",
+    "notFound.title": "404",
+    "notFound.description": "页面不存在",
+    "notFound.backHome": "返回首页",
   },
   en: {
     "app.name": "Xiangmushu",
@@ -247,6 +252,8 @@ const dict: Record<Language, Record<string, string>> = {
     "login.loginHint": "Sign in with your email and password. No verification code needed.",
     "login.sendError": "Failed to send verification code",
     "login.verifyError": "Email, password, or code is incorrect",
+    "login.passwordRule": "Use at least 8 characters with letters and numbers",
+    "login.passwordStrong": "Password strength looks good",
 
     "home.eyebrow": "Smart Document Assistant",
     "home.title": "Let AI Write Your Project Documents",
@@ -413,6 +420,9 @@ const dict: Record<Language, Record<string, string>> = {
     "settings.apiKeyPlaceholder": "Enter Aliyun Bailian API Key",
     "settings.confirm": "Confirm",
     "settings.cancel": "Cancel",
+    "notFound.title": "404",
+    "notFound.description": "Page not found",
+    "notFound.backHome": "Back home",
   },
 };
 

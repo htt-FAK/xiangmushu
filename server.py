@@ -8,11 +8,12 @@ import json
 import logging
 import mimetypes
 import os
+import time
 from dataclasses import asdict
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -82,6 +83,44 @@ from core.reporting import (
 from core.template_analyzer import TemplateAnalyzer
 from core.vector_store import VectorStore
 from core.visual_auditor import audit_document_visual
+
+
+class SimpleRateLimiter:
+    def __init__(self) -> None:
+        self._events: dict[str, list[float]] = {}
+
+    def allow(self, key: str, limits: list[tuple[int, int]]) -> bool:
+        now = time.monotonic()
+        max_window = max(window for _, window in limits)
+        events = [stamp for stamp in self._events.get(key, []) if stamp > now - max_window]
+
+        for limit, window in limits:
+            if sum(1 for stamp in events if stamp > now - window) >= limit:
+                self._events[key] = events
+                return False
+
+        events.append(now)
+        self._events[key] = events
+        return True
+
+
+rate_limiter = SimpleRateLimiter()
+RATE_LIMIT_MESSAGE = "操作过于频繁，请稍后再试"
+
+
+def validate_password(password: str) -> tuple[bool, str]:
+    if len(password) < 8:
+        return False, "密码至少需要8位，并且必须包含字母和数字"
+    if not any(char.isalpha() for char in password):
+        return False, "密码必须包含字母和数字"
+    if not any(char.isdigit() for char in password):
+        return False, "密码必须包含字母和数字"
+    return True, ""
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
 
 app = FastAPI(title="智能计划书生成器")
 logger = logging.getLogger(__name__)
@@ -197,6 +236,9 @@ async def index():
 # ---------------------------------------------------------------------------
 @app.post("/api/auth/request-code")
 async def auth_request_code(payload: EmailRequest):
+    email_key = payload.email.lower().strip()
+    if not rate_limiter.allow(f"request-code:{email_key}", [(1, 60), (5, 3600)]):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
     try:
         verification = create_verification_code(payload.email, password=payload.password)
         send_verification_email(verification.email, verification.code)
@@ -210,6 +252,9 @@ async def auth_request_code(payload: EmailRequest):
 
 @app.post("/api/auth/verify-code")
 async def auth_verify_code(payload: VerifyCodeRequest):
+    password_ok, password_message = validate_password(payload.password)
+    if not password_ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_message)
     try:
         user = consume_verification_code(payload.email, payload.code, payload.password)
         token = create_access_token(user)
@@ -223,8 +268,10 @@ async def auth_verify_code(payload: VerifyCodeRequest):
 
 
 @app.post("/api/auth/login")
-async def auth_login(payload: LoginRequest):
+async def auth_login(payload: LoginRequest, request: Request):
     """Login with email + password only (no verification code needed)."""
+    if not rate_limiter.allow(f"login:{_client_ip(request)}", [(10, 60)]):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
     try:
         user = get_or_create_user(payload.email)
         if not verify_password(payload.password, _get_password_hash(user.email)):

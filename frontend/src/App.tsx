@@ -24,6 +24,7 @@ import GeneratePage from "./pages/GeneratePage";
 import HomePage from "./pages/HomePage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LoginPage from "./pages/LoginPage";
+import NotFoundPage from "./pages/NotFoundPage";
 import AdminPage from "./pages/AdminPage";
 import SettingsPage from "./pages/SettingsPage";
 import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
@@ -181,7 +182,7 @@ function Shell() {
             <Route path="/knowledge" element={<KnowledgeBasePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/admin" element={<AdminPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
       </div>

@@ -51,6 +51,7 @@ def auth_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "AUTH_CODE_TTL_MINUTES", 10)
     monkeypatch.setattr(config, "AUTH_JWT_EXPIRE_MINUTES", 30)
     monkeypatch.setattr(server, "send_verification_email", lambda email, code: None)
+    monkeypatch.setattr(server, "rate_limiter", server.SimpleRateLimiter())
     init_db(str(db_path))
     return db_path
 
@@ -131,6 +132,35 @@ def test_auth_api_issues_token_and_me_returns_user(auth_db):
         me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
         assert me.json()["email"] == "user@example.com"
+
+
+def test_verify_code_rejects_weak_password(auth_db):
+    create_verification_code("user@example.com", password="short1", code="123456", db_path=str(auth_db))
+
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/auth/verify-code",
+            json={"email": "user@example.com", "password": "short1", "code": "123456"},
+        )
+
+        assert response.status_code == 400
+        assert "密码" in response.json()["detail"]
+
+
+def test_request_code_rate_limits_same_email(auth_db):
+    with TestClient(server.app) as client:
+        first = client.post(
+            "/api/auth/request-code",
+            json={"email": "user@example.com", "password": "secret-1"},
+        )
+        second = client.post(
+            "/api/auth/request-code",
+            json={"email": "USER@example.com", "password": "secret-1"},
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+        assert second.json()["detail"] == server.RATE_LIMIT_MESSAGE
 
 
 def test_request_code_rejects_invalid_email_and_protected_api_requires_token(auth_db):

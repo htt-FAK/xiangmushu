@@ -1,4 +1,4 @@
-import { AtSign, KeyRound, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
+import { AtSign, CheckCircle2, KeyRound, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { loginWithPassword, requestLoginCode, useAuth, verifyLoginCode } from "../auth";
@@ -23,6 +23,7 @@ export default function LoginPage() {
 
   const params = new URLSearchParams(location.search);
   const next = params.get("next") || "/";
+  const isRegisterPasswordValid = password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
 
   function switchMode(nextMode: AuthMode) {
     setMode(nextMode);
@@ -150,6 +151,17 @@ export default function LoginPage() {
                     required
                   />
                 </div>
+                {mode === "register" && (
+                  <p
+                    className={clsx(
+                      "mt-2 flex items-center gap-2 text-xs font-semibold",
+                      isRegisterPasswordValid ? "text-signal-lime" : "text-signal-rose",
+                    )}
+                  >
+                    {isRegisterPasswordValid && <CheckCircle2 size={14} />}
+                    {isRegisterPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}
+                  </p>
+                )}
               </Field>
 
               {mode === "register" && sent && (
@@ -171,7 +183,14 @@ export default function LoginPage() {
               )}
 
               <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <Button type="submit" disabled={loading || (mode === "register" && sent && code.length !== 6)}>
+                <Button
+                  type="submit"
+                  disabled={
+                    loading ||
+                    (mode === "register" && !sent && !isRegisterPasswordValid) ||
+                    (mode === "register" && sent && code.length !== 6)
+                  }
+                >
                   {mode === "login" ? (
                     <LockKeyhole size={17} />
                   ) : sent ? (
