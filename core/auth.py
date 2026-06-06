@@ -44,6 +44,10 @@ class InvalidPasswordError(AuthError):
     """Raised when a password is missing or does not match."""
 
 
+class InvalidLanguageError(AuthError):
+    """Raised when a language preference is invalid."""
+
+
 @dataclass(frozen=True)
 class User:
     id: int
@@ -151,6 +155,7 @@ def init_db(db_path: str | None = None) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT,
+                preferred_language TEXT DEFAULT 'zh',
                 created_at TEXT NOT NULL,
                 last_login_at TEXT
             )
@@ -174,6 +179,8 @@ def init_db(db_path: str | None = None) -> None:
         }
         if "password_hash" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        if "preferred_language" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'zh'")
         code_columns = {
             str(row[1])
             for row in conn.execute("PRAGMA table_info(email_verification_codes)").fetchall()
@@ -208,11 +215,49 @@ def _row_to_user(row: sqlite3.Row) -> User:
     )
 
 
+def _normalize_language(language: str) -> str:
+    value = (language or "").strip().lower()
+    if value not in {"zh", "en"}:
+        raise InvalidLanguageError("Language must be 'zh' or 'en'")
+    return value
+
+
 def get_user_by_email(email: str, db_path: str | None = None) -> User | None:
     normalized = normalize_email(email)
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
     return _row_to_user(row) if row else None
+
+
+def get_user_preferences(user_id: int, db_path: str | None = None) -> dict[str, str]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT preferred_language FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    if row is None:
+        raise AuthError("User not found")
+    language = str(row["preferred_language"] or "zh")
+    if language not in {"zh", "en"}:
+        language = "zh"
+    return {"language": language}
+
+
+def update_user_preferences(
+    user_id: int,
+    language: str,
+    db_path: str | None = None,
+) -> dict[str, str]:
+    normalized = _normalize_language(language)
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE users SET preferred_language = ? WHERE id = ?",
+            (normalized, user_id),
+        )
+        if cursor.rowcount == 0:
+            raise AuthError("User not found")
+        conn.commit()
+    return {"language": normalized}
 
 
 def get_user_by_id(user_id: int, db_path: str | None = None) -> User | None:

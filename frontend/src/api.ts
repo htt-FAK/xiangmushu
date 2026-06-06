@@ -8,6 +8,7 @@ import type {
   KnowledgeSourceStats,
   TemplateItem,
   UploadResult,
+  UserPreferences,
 } from "./types";
 import { apiUrl } from "./apiBase";
 import { buildAuthHeaders } from "./auth";
@@ -108,6 +109,18 @@ export async function saveApiKey(apiKey: string): Promise<ApiKeyStatus & { ok: b
 export async function deleteApiKey(): Promise<ApiKeyStatus & { ok: boolean }> {
   return requestJson<ApiKeyStatus & { ok: boolean }>("/api/user/apikey", {
     method: "DELETE",
+  });
+}
+
+export async function fetchUserPreferences(): Promise<UserPreferences> {
+  return requestJson<UserPreferences>("/api/user/preferences");
+}
+
+export async function saveUserPreferences(language: UserPreferences["language"]): Promise<UserPreferences> {
+  return requestJson<UserPreferences>("/api/user/preferences", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ language }),
   });
 }
 

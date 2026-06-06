@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 
 from core.auth import create_access_token, get_or_create_user
@@ -24,7 +25,7 @@ def test_ui_ai_scenarios(auto_start_server):
         )
         page.goto(APP_URL, wait_until="networkidle", timeout=30000)
 
-        expect(page.get_by_role("heading", name="AI 驱动的项目书自动生成工作台")).to_be_visible()
+        expect(page.get_by_role("heading", name="让 AI 帮你写项目书")).to_be_visible()
         expect(page.get_by_role("link", name="知识库")).to_be_visible()
         scenarios.append({"name": "authenticated home page render", "ok": True})
 
@@ -37,6 +38,14 @@ def test_ui_ai_scenarios(auto_start_server):
         expect(page.get_by_role("heading", name="选择知识库和模板，启动文档生成")).to_be_visible()
         expect(page.get_by_text("视觉评分")).to_be_visible()
         scenarios.append({"name": "switch to generate page", "ok": True})
+
+        page.get_by_role("link", name="设置", exact=True).click()
+        expect(page.get_by_role("heading", name="设置")).to_be_visible()
+        expect(page.get_by_text("生成语言")).to_be_visible()
+        page.get_by_role("button", name=re.compile("English")).click()
+        expect(page.get_by_role("heading", name="Settings")).to_be_visible()
+        expect(page.get_by_role("link", name="Home")).to_be_visible()
+        scenarios.append({"name": "language preference switches interface", "ok": True})
 
         page.screenshot(path=str(SCREENSHOT), full_page=True)
         browser.close()

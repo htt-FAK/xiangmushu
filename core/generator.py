@@ -63,6 +63,20 @@ SYSTEM_PROMPT_WEB_CREATIVE = """你是项目申报文档撰写专家（联网创
 3. 直接输出正文，不加「以下是…」前缀。
 4. 知识库与联网结果冲突时以知识库为准；无确切依据时不得编造机构全称、ISIN、费率、合同编号、精确日期等。"""
 
+SYSTEM_PROMPT_EN = """You are an expert writer for project application documents. Strict rules:
+1. All factual claims must come from [Reference Materials]. Do not fabricate unsupported facts; briefly state "not specified in the materials" when evidence is missing.
+2. Do not use Markdown (#, *, or list markers). Use plain paragraphs and standard English punctuation; use clear paragraphing for multi-level content.
+3. Output the document body directly. Do not add prefixes such as "The following is...".
+4. If the knowledge base conflicts with web information, rely on the knowledge base.
+5. Write all generated project document content in English."""
+
+SYSTEM_PROMPT_WEB_CREATIVE_EN = """You are an expert writer for project application documents in web-assisted creative mode. Built-in web search is enabled for this request.
+1. Use [Reference Materials] together with public information retrieved through web search to complete the body text and meet the approximate word target. Do not use filler phrases such as "not specified in the materials", "not provided", or similar placeholders.
+2. Do not use Markdown (#, *, or list markers). Use plain paragraphs and standard English punctuation.
+3. Output the document body directly. Do not add prefixes such as "The following is...".
+4. If the knowledge base conflicts with web results, rely on the knowledge base. Without reliable evidence, do not fabricate organization names, ISINs, fees, contract numbers, exact dates, or similar precise facts.
+5. Write all generated project document content in English."""
+
 PARA_CLOSING_CALM = (
     "请完成本节正文。所有具体事实须来源于上述参考资料，无依据的要点请注明「资料未载明」，不得臆造。"
 )
@@ -112,14 +126,22 @@ def _normalize_web_writing_mode(mode: Optional[str]) -> str:
     return "creative" if str(raw or "").strip().lower() == "creative" else "calm"
 
 
+def _normalize_language(language: Optional[str]) -> str:
+    return "en" if str(language or "").strip().lower() == "en" else "zh"
+
+
 def _web_gen_prompt_parts(
-    use_plus: bool, web_writing_mode: Optional[str], has_kb_hit: bool
+    use_plus: bool,
+    web_writing_mode: Optional[str],
+    has_kb_hit: bool,
+    language: Optional[str] = None,
 ) -> Tuple[bool, str, str, str, str]:
     """返回 (web_creative_prompt, system_text, kb_note, para_closing, table_closing)。"""
     wm = _normalize_web_writing_mode(web_writing_mode)
     creative = bool(use_plus and wm == "creative")
+    lang = _normalize_language(language)
     if creative:
-        sys_t = SYSTEM_PROMPT_WEB_CREATIVE
+        sys_t = SYSTEM_PROMPT_WEB_CREATIVE_EN if lang == "en" else SYSTEM_PROMPT_WEB_CREATIVE
         if has_kb_hit:
             kb = (
                 "\n【已提供知识库检索片段；可同时使用内置联网检索补充。"
@@ -136,7 +158,8 @@ def _web_gen_prompt_parts(
         if has_kb_hit
         else "\n【无有效知识库命中，禁止编造机构名/ISIN/费率/日期/评级等具体数字。】"
     )
-    return False, SYSTEM_PROMPT, kb, PARA_CLOSING_CALM, TABLE_CLOSING_CALM
+    sys_t = SYSTEM_PROMPT_EN if lang == "en" else SYSTEM_PROMPT
+    return False, sys_t, kb, PARA_CLOSING_CALM, TABLE_CLOSING_CALM
 
 
 def format_template_vision_block(task: FillTask) -> str:
@@ -256,6 +279,7 @@ class ContentGenerator:
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
         fast_mode: bool = False,
+        language: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], str, float, Dict[str, Any], Dict[str, Any], str]:
         query = expand_query(task.target_chapter, task.description, task.task_type)
         max_d = (
@@ -315,7 +339,7 @@ class ContentGenerator:
         if fast_mode:
             use_plus = False
         web_creative, system_prompt, kb_note, para_closing, table_closing = (
-            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit)
+            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit, language)
         )
 
         hint_block = (
@@ -442,6 +466,7 @@ class ContentGenerator:
             "use_small_llm_for_rag": bool(use_small_rag),
             "gen_max_output_tokens": gen_max_out,
             "web_writing_mode": _normalize_web_writing_mode(web_writing_mode),
+            "language": _normalize_language(language),
             "web_creative_prompt": web_creative,
             "table_cell_multimodal": bool(table_cell_mm),
             "table_vision_n_images": len(table_cell_vision_pngs or []),
@@ -464,6 +489,7 @@ class ContentGenerator:
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
         fast_mode: bool = False,
+        language: Optional[str] = None,
     ) -> GenerationBundle:
         """使用预检索的 Evidence 构建 GenerationBundle，避免重复向量检索。"""
         from core.evidence_planner import compress_evidence, Evidence
@@ -502,7 +528,7 @@ class ContentGenerator:
         )
 
         web_creative, system_prompt, kb_note, para_closing, table_closing = (
-            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit)
+            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit, language)
         )
         hint_block = (
             ("\n上轮审核意见：" + correction_hint.strip())
@@ -606,6 +632,7 @@ class ContentGenerator:
             "gen_max_output_tokens": gen_max_out,
             "from_shared_evidence": True,
             "web_writing_mode": _normalize_web_writing_mode(web_writing_mode),
+            "language": _normalize_language(language),
             "web_creative_prompt": web_creative,
             "table_cell_multimodal": bool(table_cell_mm),
             "table_vision_n_images": len(table_cell_vision_pngs or []),
@@ -635,6 +662,7 @@ class ContentGenerator:
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
         fast_mode: bool = False,
+        language: Optional[str] = None,
     ) -> GenerationBundle:
         messages, model, temperature, extra_body, route_meta, ref_texts = (
             self._build_chat_request(
@@ -647,6 +675,7 @@ class ContentGenerator:
                 web_writing_mode=web_writing_mode,
                 table_cell_vision_pngs=table_cell_vision_pngs,
                 fast_mode=fast_mode,
+                language=language,
             )
         )
         return GenerationBundle(
@@ -725,6 +754,7 @@ class ContentGenerator:
         correction_hint: Optional[str] = None,
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
+        language: Optional[str] = None,
     ) -> Iterator[str]:
         bundle = self.prepare_generation_bundle(
             task,
@@ -735,6 +765,7 @@ class ContentGenerator:
             correction_hint=correction_hint,
             web_writing_mode=web_writing_mode,
             table_cell_vision_pngs=table_cell_vision_pngs,
+            language=language,
         )
         yield from self.stream_from_bundle(bundle, route_hook=route_hook)
 
@@ -816,6 +847,7 @@ class ContentGenerator:
         correction_hint: Optional[str] = None,
         web_writing_mode: Optional[str] = None,
         table_cell_vision_pngs: Optional[List[bytes]] = None,
+        language: Optional[str] = None,
     ) -> str:
         if route_hook is not None:
             return "".join(
@@ -829,6 +861,7 @@ class ContentGenerator:
                     correction_hint=correction_hint,
                     web_writing_mode=web_writing_mode,
                     table_cell_vision_pngs=table_cell_vision_pngs,
+                    language=language,
                 )
             ).strip()
         bundle = self.prepare_generation_bundle(
@@ -840,6 +873,7 @@ class ContentGenerator:
             correction_hint=correction_hint,
             web_writing_mode=web_writing_mode,
             table_cell_vision_pngs=table_cell_vision_pngs,
+            language=language,
         )
         return self.generate_from_bundle(bundle, route_hook=None)
 

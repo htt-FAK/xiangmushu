@@ -1,4 +1,4 @@
-import { AtSign, KeyRound, Languages, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
+import { AtSign, KeyRound, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { loginWithPassword, requestLoginCode, useAuth, verifyLoginCode } from "../auth";
@@ -17,7 +17,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const auth = useAuth();
-  const { language, setLanguage, t } = useI18n();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -75,16 +75,6 @@ export default function LoginPage() {
       <div className="fixed inset-0 -z-10 opacity-45 grid-mask" />
       <div className="pointer-events-none fixed -left-24 top-20 h-72 w-72 rounded-full bg-signal-cyan/10 blur-3xl animate-pulse" />
       <div className="pointer-events-none fixed -right-24 bottom-10 h-80 w-80 rounded-full bg-signal-rose/10 blur-3xl animate-pulse" />
-
-      <button
-        className="fixed right-5 top-5 z-10 inline-flex h-10 items-center gap-2 border border-white/10 bg-night-900/80 px-3 text-xs font-semibold text-slate-300 backdrop-blur transition hover:border-signal-cyan/50 hover:text-signal-cyan"
-        onClick={() => setLanguage(language === "zh" ? "en" : "zh")}
-        title={t("lang.switch")}
-        type="button"
-      >
-        <Languages size={15} />
-        {language === "zh" ? "English" : "中文"}
-      </button>
 
       <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-4 py-12">
         <div className="grid w-full gap-8 lg:grid-cols-[0.92fr_1.08fr] lg:items-center">

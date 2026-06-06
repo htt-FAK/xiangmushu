@@ -81,6 +81,10 @@ export type ApiKeyStatus = {
   updated_at?: string | null;
 };
 
+export type UserPreferences = {
+  language: "zh" | "en";
+};
+
 export type GenerateEvent =
   | { type: "task"; index: number; total: number; chapter: string }
   | {

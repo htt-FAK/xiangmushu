@@ -2,7 +2,6 @@ import {
   Database,
   FileSearch,
   Home,
-  Languages,
   LogOut,
   PanelLeft,
   Settings,
@@ -55,16 +54,12 @@ function ProtectedRoute({ children }: { children: ReactElement }) {
 
 function Shell() {
   const auth = useAuth();
-  const { language, setLanguage, t } = useI18n();
+  const { t } = useI18n();
   const navigate = useNavigate();
 
   function handleLogout() {
     auth.logout();
     navigate("/login", { replace: true });
-  }
-
-  function toggleLanguage() {
-    setLanguage(language === "zh" ? "en" : "zh");
   }
 
   return (
@@ -119,10 +114,6 @@ function Shell() {
               {auth.userEmail || "-"}
             </p>
           </div>
-          <Button className="w-full" variant="ghost" onClick={toggleLanguage} title={t("lang.switch")}>
-            <Languages size={17} />
-            {language === "zh" ? "English" : "中文"}
-          </Button>
           <Button className="w-full" variant="ghost" onClick={handleLogout}>
             <LogOut size={17} />
             {t("nav.signOut")}
@@ -156,14 +147,6 @@ function Shell() {
             })}
             <button
               className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400"
-              onClick={toggleLanguage}
-              title={t("lang.switch")}
-              type="button"
-            >
-              <Languages size={16} />
-            </button>
-            <button
-              className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400"
               onClick={handleLogout}
               title={t("nav.signOut")}
               type="button"

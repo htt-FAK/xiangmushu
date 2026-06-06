@@ -23,15 +23,18 @@ from core.auth import (
     AuthError,
     InvalidCodeError,
     InvalidEmailError,
+    InvalidLanguageError,
     InvalidPasswordError,
     InvalidTokenError,
     User,
     consume_verification_code,
     create_access_token,
     create_verification_code,
+    get_user_preferences,
     get_or_create_user,
     init_db,
     send_verification_email,
+    update_user_preferences,
     user_from_token,
     verify_password,
 )
@@ -103,6 +106,10 @@ class VerifyCodeRequest(BaseModel):
 
 class ApiKeyRequest(BaseModel):
     api_key: str
+
+
+class UserPreferencesRequest(BaseModel):
+    language: str
 
 
 def get_current_user(
@@ -229,6 +236,22 @@ async def auth_login(payload: LoginRequest):
 @app.get("/api/auth/me")
 async def auth_me(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "email": current_user.email}
+
+
+@app.get("/api/user/preferences")
+async def user_preferences(current_user: User = Depends(get_current_user)):
+    return get_user_preferences(current_user.id)
+
+
+@app.put("/api/user/preferences")
+async def user_preferences_update(
+    payload: UserPreferencesRequest,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return update_user_preferences(current_user.id, payload.language)
+    except InvalidLanguageError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 @app.get("/api/user/apikey")
@@ -417,6 +440,7 @@ async def generate(
         )
     generator = ContentGenerator(vs, api_key=user_api_key)
     auditor = ContentAuditor() if enable_audit else None
+    language = get_user_preferences(current_user.id)["language"]
 
     def event_stream():
         results: list[str] = []
@@ -434,6 +458,7 @@ async def generate(
                     top_k=top_k,
                     enable_web=enable_web,
                     retrieval_max_distance=max_distance,
+                    language=language,
                 )
                 yield _sse(
                     {

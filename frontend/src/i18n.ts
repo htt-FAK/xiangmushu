@@ -2,15 +2,10 @@ import {
   createContext,
   createElement,
   type ReactNode,
-  useCallback,
   useContext,
   useMemo,
-  useState,
 } from "react";
-
-export type Language = "zh" | "en";
-
-const LANGUAGE_KEY = "xiangmushu.language";
+import { useAuth, type Language } from "./auth";
 
 const dict: Record<Language, Record<string, string>> = {
   zh: {
@@ -164,6 +159,12 @@ const dict: Record<Language, Record<string, string>> = {
     "settings.eyebrow": "账号设置",
     "settings.title": "设置",
     "settings.description": "管理自定义阿里云百炼 API Key 与生成费用相关设置。",
+    "settings.languageCardTitle": "生成语言",
+    "settings.languageCardBody": "界面语言和 AI 生成内容会自动跟随此偏好。",
+    "settings.language.zh.title": "中文",
+    "settings.language.zh.body": "使用中文界面，并生成中文项目书内容。",
+    "settings.language.en.title": "English",
+    "settings.language.en.body": "Use the English interface and generate project documents in English.",
     "settings.apiKeyCardTitle": "自定义 API Key",
     "settings.apiKeyCardBody": "保存后，后续内容生成会优先使用您的阿里云百炼 API Key；未保存时继续使用平台默认 Key。",
     "settings.keySaved": "已保存自定义 API Key",
@@ -343,6 +344,12 @@ const dict: Record<Language, Record<string, string>> = {
     "settings.eyebrow": "Account Settings",
     "settings.title": "Settings",
     "settings.description": "Manage your custom Aliyun Bailian API Key and generation cost settings.",
+    "settings.languageCardTitle": "Generation Language",
+    "settings.languageCardBody": "The interface and AI-generated content follow this preference automatically.",
+    "settings.language.zh.title": "中文",
+    "settings.language.zh.body": "Use the Chinese interface and generate project documents in Chinese.",
+    "settings.language.en.title": "English",
+    "settings.language.en.body": "Use the English interface and generate project documents in English.",
     "settings.apiKeyCardTitle": "Custom API Key",
     "settings.apiKeyCardBody": "After saving, future content generation will prefer your Aliyun Bailian API Key. Without one, the platform default key remains in use.",
     "settings.keySaved": "Custom API Key saved",
@@ -375,27 +382,17 @@ const dict: Record<Language, Record<string, string>> = {
 
 type I18nContextValue = {
   language: Language;
-  setLanguage: (language: Language) => void;
+  setLanguage: (language: Language) => Promise<void>;
   t: (key: string) => string;
 };
 
 const I18nContext = createContext<I18nContextValue | null>(null);
 
-function initialLanguage(): Language {
-  if (typeof window === "undefined") return "zh";
-  return window.localStorage.getItem(LANGUAGE_KEY) === "en" ? "en" : "zh";
-}
-
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(() => initialLanguage());
+  const { language, setLanguage } = useAuth();
 
-  const setLanguage = useCallback((value: Language) => {
-    window.localStorage.setItem(LANGUAGE_KEY, value);
-    setLanguageState(value);
-  }, []);
-
-  const t = useCallback(
-    (key: string) => dict[language][key] ?? dict.zh[key] ?? key,
+  const t = useMemo(
+    () => (key: string) => dict[language][key] ?? dict.zh[key] ?? key,
     [language],
   );
 

@@ -1,6 +1,7 @@
-import { KeyRound, Loader2, Trash2, X } from "lucide-react";
+import { Check, KeyRound, Languages, Loader2, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { deleteApiKey, fetchApiKeyStatus, saveApiKey } from "../api";
+import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
 import { useI18n } from "../i18n";
 import type { ApiKeyStatus } from "../types";
@@ -9,6 +10,7 @@ const BAILIAN_KEY_URL = "https://bailian.console.aliyun.com/#/key";
 
 export default function SettingsPage() {
   const { t } = useI18n();
+  const { language, setLanguage } = useAuth();
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [agreeChecked, setAgreeChecked] = useState(false);
@@ -16,6 +18,7 @@ export default function SettingsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [languageSaving, setLanguageSaving] = useState(false);
   const [error, setError] = useState("");
 
   const canConfirm = agreeChecked && agreeText === t("settings.consentExact") && apiKey.trim().length > 0;
@@ -69,6 +72,19 @@ export default function SettingsPage() {
     }
   }
 
+  async function chooseLanguage(nextLanguage: Language) {
+    if (nextLanguage === language || languageSaving) return;
+    setLanguageSaving(true);
+    setError("");
+    try {
+      await setLanguage(nextLanguage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLanguageSaving(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -77,6 +93,54 @@ export default function SettingsPage() {
         description={t("settings.description")}
       />
       <ErrorBanner message={error} />
+
+      <Panel className="mb-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime">
+                <Languages size={20} />
+              </div>
+              <div>
+                <h2 className="font-display text-2xl font-semibold text-white">
+                  {t("settings.languageCardTitle")}
+                </h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  {t("settings.languageCardBody")}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:w-[440px]">
+            {(["zh", "en"] as const).map((item) => {
+              const active = language === item;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => void chooseLanguage(item)}
+                  disabled={languageSaving}
+                  className={`min-h-24 border p-4 text-left transition ${
+                    active
+                      ? "border-signal-lime/70 bg-signal-lime/12 text-white"
+                      : "border-white/10 bg-white/[0.035] text-slate-300 hover:border-white/25 hover:text-white"
+                  }`}
+                >
+                  <span className="flex items-center justify-between gap-3">
+                    <span className="font-display text-xl font-semibold">
+                      {t(`settings.language.${item}.title`)}
+                    </span>
+                    {active ? <Check size={19} className="text-signal-lime" /> : null}
+                  </span>
+                  <span className="mt-2 block text-sm leading-6 text-slate-400">
+                    {t(`settings.language.${item}.body`)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </Panel>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
         <Panel>
