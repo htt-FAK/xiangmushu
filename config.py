@@ -195,7 +195,16 @@ AUTH_DB_PATH = os.getenv(
     "AUTH_DB_PATH",
     os.path.join(os.path.dirname(__file__), "data", "auth.sqlite3"),
 ).strip()
-AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", "dev-change-me-auth-secret").strip()
+_DEFAULT_JWT_SECRET = "dev-change-me-auth-secret"
+AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", _DEFAULT_JWT_SECRET).strip()
+if AUTH_JWT_SECRET == _DEFAULT_JWT_SECRET:
+    import sys
+    print(
+        "\n⚠️  WARNING: AUTH_JWT_SECRET is using the default value.\n"
+        "   Set a strong secret in .env for production use.\n"
+        "   Example: AUTH_JWT_SECRET=<random-64-char-string>\n",
+        file=sys.stderr,
+    )
 AUTH_JWT_EXPIRE_MINUTES = int(os.getenv("AUTH_JWT_EXPIRE_MINUTES", "1440"))
 AUTH_CODE_TTL_MINUTES = int(os.getenv("AUTH_CODE_TTL_MINUTES", "10"))
 AUTH_SMTP_HOST = os.getenv("AUTH_SMTP_HOST", "").strip()

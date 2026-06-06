@@ -160,7 +160,11 @@ def _spa_index_path() -> str:
     frontend_index = os.path.join(FRONTEND_DIST_DIR, "index.html")
     if os.path.isfile(frontend_index):
         return frontend_index
-    return os.path.join(STATIC_DIR, "index.html")
+    # Fallback: serve a minimal safe page instead of the legacy static/index.html
+    # which contains unescaped innerHTML and XSS risks.
+    raise FileNotFoundError(
+        "Frontend not built. Run 'cd frontend && npm run build' first."
+    )
 
 
 if os.path.isdir(FRONTEND_ASSETS_DIR):
@@ -569,7 +573,13 @@ async def download(
     filename: str,
     current_user: User = Depends(get_current_user),
 ):
-    path = os.path.join(config.OUTPUT_DIR, filename)
+    # Path traversal protection
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return JSONResponse({"error": "非法文件名"}, status_code=400)
+    path = os.path.normpath(os.path.join(config.OUTPUT_DIR, filename))
+    output_dir = os.path.normpath(config.OUTPUT_DIR)
+    if not path.startswith(output_dir + os.sep) and path != output_dir:
+        return JSONResponse({"error": "非法文件路径"}, status_code=400)
     if not os.path.isfile(path):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
     media_type, _ = mimetypes.guess_type(path)
