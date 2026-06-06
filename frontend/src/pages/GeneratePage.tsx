@@ -1,6 +1,7 @@
 import { Download, FileText, Loader2, Play, ShieldCheck, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { downloadUrl, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, streamGenerate } from "../api";
+import { Link } from "react-router-dom";
+import { downloadUrl, fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, streamGenerate } from "../api";
 import { Button, EmptyState, ErrorBanner, Field, PageHeader, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type { BillingSummary, GenerateEvent, GenerationBilling, KnowledgeBase, PostFillChecks, TemplateItem } from "../types";
@@ -109,6 +110,7 @@ export default function GeneratePage() {
   const [visualScore, setVisualScore] = useState<number | null>(null);
   const [runBilling, setRunBilling] = useState<GenerationBilling | null>(null);
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -123,6 +125,9 @@ export default function GeneratePage() {
     fetchBillingSummary()
       .then(setBillingSummary)
       .catch(() => undefined);
+    fetchApiKeyStatus()
+      .then((s) => setHasApiKey(s.has_key))
+      .catch(() => setHasApiKey(null));
   }, []);
 
   const percent = useMemo(() => {
@@ -295,6 +300,21 @@ export default function GeneratePage() {
         description={t("generate.description")}
       />
       <ErrorBanner message={error} />
+
+      {hasApiKey === false && (
+        <div className="mb-6 flex items-center justify-between border border-signal-amber/40 bg-signal-amber/10 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <span className="text-xl">⚠️</span>
+            <p className="text-sm font-semibold text-amber-100">{t("generate.noApiKeyHint")}</p>
+          </div>
+          <Link
+            to="/settings"
+            className="inline-flex min-h-9 items-center border border-signal-amber bg-signal-amber px-4 text-xs font-bold text-night-950 transition hover:bg-white"
+          >
+            {t("generate.goSettings")}
+          </Link>
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
         <Panel>

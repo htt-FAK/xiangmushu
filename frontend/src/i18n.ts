@@ -127,6 +127,8 @@ const dict: Record<Language, Record<string, string>> = {
     "generate.revised": "，已触发修订",
     "generate.leftover": "残留占位：",
     "generate.missing": "章节缺失：",
+    "generate.noApiKeyHint": "你还没有配置 API Key，生成功能需要使用你自己的阿里云百炼 API Key。",
+    "generate.goSettings": "去设置",
 
     "knowledge.eyebrow": "知识库",
     "knowledge.title": "管理你的参考资料",
@@ -300,6 +302,8 @@ const dict: Record<Language, Record<string, string>> = {
     "generate.revised": ", revision triggered",
     "generate.leftover": "Leftover placeholder: ",
     "generate.missing": "Missing chapter: ",
+    "generate.noApiKeyHint": "You haven't configured an API Key yet. Generation requires your own Aliyun Bailian API Key.",
+    "generate.goSettings": "Go to Settings",
 
     "knowledge.eyebrow": "Knowledge Dock",
     "knowledge.title": "Manage Your Reference Materials",
