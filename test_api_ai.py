@@ -82,10 +82,11 @@ def test_api_ai_scenarios():
 
     res = client.get("/")
     assert res.status_code == 200
-    assert "page-kb" in res.text
-    assert "page-tpl" in res.text
-    assert "page-gen" in res.text
-    scenarios.append({"name": "GET /", "ok": True, "contains_spa_pages": True})
+    html = res.text
+    # New React SPA: check for root mount point and bundled assets
+    assert '<div id="root">' in html or '<div id="app">' in html
+    assert ".js" in html  # bundled JS entry present
+    scenarios.append({"name": "GET /", "ok": True, "contains_spa_root": True})
 
     res = client.post(
         "/api/template/analyze",
