@@ -461,10 +461,26 @@ def send_verification_email(email: str, code: str) -> None:
         return
 
     message = EmailMessage()
-    message["Subject"] = "Your verification code"
+    message["Subject"] = f"【项目书智能体】验证码 {code}"
     message["From"] = config.AUTH_SMTP_FROM or config.AUTH_SMTP_USERNAME
     message["To"] = email
-    message.set_content(f"Your verification code is {code}. It expires in {config.AUTH_CODE_TTL_MINUTES} minutes.")
+
+    html_body = f"""\
+<div style="font-family: -apple-system, 'Microsoft YaHei', sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb;">
+  <div style="text-align: center; margin-bottom: 24px;">
+    <h1 style="margin: 0; font-size: 20px; color: #111827;">项目书智能体</h1>
+    <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280;">AI 驱动的项目文档生成平台</p>
+  </div>
+  <div style="background: #f9fafb; border-radius: 8px; padding: 24px; text-align: center; margin-bottom: 24px;">
+    <p style="margin: 0 0 8px; font-size: 14px; color: #374151;">您的验证码是</p>
+    <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #111827; font-family: 'Courier New', monospace;">{code}</div>
+    <p style="margin: 12px 0 0; font-size: 13px; color: #6b7280;">有效期 {config.AUTH_CODE_TTL_MINUTES} 分钟，请勿泄露给他人</p>
+  </div>
+  <p style="margin: 0; font-size: 12px; color: #9ca3af; text-align: center;">如非本人操作，请忽略此邮件。</p>
+</div>"""
+
+    message.set_content(f"您的验证码是 {code}，有效期 {config.AUTH_CODE_TTL_MINUTES} 分钟。")
+    message.add_alternative(html_body, subtype="html")
 
     with smtplib.SMTP(config.AUTH_SMTP_HOST, config.AUTH_SMTP_PORT, timeout=15) as smtp:
         if config.AUTH_SMTP_USE_TLS:
