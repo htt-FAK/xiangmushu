@@ -15,7 +15,7 @@ const LANGUAGE_KEY = "xiangmushu.language";
 const dict: Record<Language, Record<string, string>> = {
   zh: {
     "app.name": "项目书智能体",
-    "app.subtitle": "RAG + 多模型协同 · AI 文档生成引擎",
+    "app.subtitle": "AI 智能写作 · 一键生成项目书",
     "app.api": "接口",
     "app.account": "当前账号",
     "nav.home": "首页",
@@ -48,9 +48,9 @@ const dict: Record<Language, Record<string, string>> = {
     "login.sendError": "验证码发送失败",
     "login.verifyError": "邮箱、密码或验证码不正确",
 
-    "home.eyebrow": "智能计划书生成平台",
-    "home.title": "AI 驱动的项目书自动生成工作台",
-    "home.description": "上传 Word 模板自动识别填写任务，导入知识库资料作为生成依据，AI 逐段生成符合模板结构的项目书内容。支持多模型调度、内容审计、视觉验收和流式输出，让项目书编写从手工填写变为智能协作。",
+    "home.eyebrow": "智能计划书助手",
+    "home.title": "让 AI 帮你写项目书",
+    "home.description": "上传你的 Word 模板，导入参考资料，AI 会自动理解模板结构并逐段生成内容。告别手动填写，几分钟就能拿到一份完整的项目书初稿。",
     "home.start": "开始生成",
     "home.templateCount": "模板数量",
     "home.knowledgeCount": "知识库数量",
@@ -154,7 +154,7 @@ const dict: Record<Language, Record<string, string>> = {
   },
   en: {
     "app.name": "Xiangmushu",
-    "app.subtitle": "RAG + Multi-Model · AI Doc Generation Engine",
+    "app.subtitle": "AI Writing · One-click Document Generation",
     "app.api": "API",
     "app.account": "Account",
     "nav.home": "Home",
@@ -187,9 +187,9 @@ const dict: Record<Language, Record<string, string>> = {
     "login.sendError": "Failed to send verification code",
     "login.verifyError": "Email, password, or code is incorrect",
 
-    "home.eyebrow": "Intelligent Project Document Platform",
-    "home.title": "AI-Powered Project Document Generation Workspace",
-    "home.description": "Upload Word templates to auto-detect fill tasks, import knowledge base materials as generation evidence, and let AI generate project document content section by section. Supports multi-model routing, content auditing, visual acceptance, and streaming output.",
+    "home.eyebrow": "Smart Document Assistant",
+    "home.title": "Let AI Write Your Project Documents",
+    "home.description": "Upload your Word template, add reference materials, and AI will automatically understand the structure and generate content section by section. Get a complete first draft in minutes.",
     "home.start": "Start generation",
     "home.templateCount": "Templates",
     "home.knowledgeCount": "Knowledge bases",
