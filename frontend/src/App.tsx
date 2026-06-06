@@ -1,26 +1,55 @@
 import {
-  BookOpen,
   Database,
   FileSearch,
   Home,
+  LogOut,
   PanelLeft,
   Sparkles,
 } from "lucide-react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import HomePage from "./pages/HomePage";
-import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
+import {
+  Navigate,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import type { ReactElement } from "react";
+import { useAuth } from "./auth";
+import { Button } from "./components/ui";
 import GeneratePage from "./pages/GeneratePage";
+import HomePage from "./pages/HomePage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
+import LoginPage from "./pages/LoginPage";
+import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
 import { clsx } from "./utils";
 
 const nav = [
-  { to: "/", label: "首页", icon: Home },
-  { to: "/template", label: "模板分析", icon: FileSearch },
-  { to: "/generate", label: "生成舱", icon: Sparkles },
-  { to: "/knowledge", label: "知识库", icon: Database },
+  { to: "/", label: "Home", icon: Home },
+  { to: "/template", label: "Templates", icon: FileSearch },
+  { to: "/generate", label: "Generate", icon: Sparkles },
+  { to: "/knowledge", label: "Knowledge", icon: Database },
 ];
 
+function ProtectedRoute({ children }: { children: ReactElement }) {
+  const auth = useAuth();
+  const location = useLocation();
+  if (!auth.isAuthenticated) {
+    const next = `${location.pathname}${location.search}`;
+    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
+  }
+  return children;
+}
+
 function Shell() {
+  const auth = useAuth();
+  const navigate = useNavigate();
+
+  function handleLogout() {
+    auth.logout();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <div className="min-h-screen bg-night-950 text-slate-100">
       <div className="fixed inset-0 -z-10 bg-[linear-gradient(115deg,#05060a_0%,#09111d_44%,#111019_100%)]" />
@@ -34,7 +63,7 @@ function Shell() {
           </div>
           <div>
             <p className="font-display text-lg font-semibold leading-tight text-white">
-              项目书生成舱
+              Xiangmushu
             </p>
             <p className="text-xs text-slate-500">Word template agent</p>
           </div>
@@ -64,19 +93,25 @@ function Shell() {
           })}
         </nav>
 
-        <div className="absolute bottom-6 left-5 right-5 border border-white/10 bg-night-950/70 p-4">
-          <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-lime">
-            API
-          </p>
-          <p className="mt-2 break-all text-xs leading-5 text-slate-500">
-            Vite 代理到 localhost:8502
-          </p>
+        <div className="absolute bottom-6 left-5 right-5 space-y-3">
+          <div className="border border-white/10 bg-night-950/70 p-4">
+            <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-lime">
+              API
+            </p>
+            <p className="mt-2 break-all text-xs leading-5 text-slate-500">
+              FastAPI localhost:8502
+            </p>
+          </div>
+          <Button className="w-full" variant="ghost" onClick={handleLogout}>
+            <LogOut size={17} />
+            Sign Out
+          </Button>
         </div>
       </aside>
 
       <div className="lg:pl-72">
         <header className="sticky top-0 z-10 border-b border-white/10 bg-night-950/82 px-4 py-3 backdrop-blur lg:hidden">
-          <div className="flex gap-2 overflow-x-auto">
+          <div className="flex items-center gap-2 overflow-x-auto">
             {nav.map((item) => {
               const Icon = item.icon;
               return (
@@ -98,6 +133,14 @@ function Shell() {
                 </NavLink>
               );
             })}
+            <button
+              className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400"
+              onClick={handleLogout}
+              title="Sign out"
+              type="button"
+            >
+              <LogOut size={16} />
+            </button>
           </div>
         </header>
         <main className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-10">
@@ -115,5 +158,17 @@ function Shell() {
 }
 
 export default function App() {
-  return <Shell />;
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute>
+            <Shell />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
 }

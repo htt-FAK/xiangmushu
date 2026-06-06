@@ -1,17 +1,27 @@
 import io
 import json
+import os
 from pathlib import Path
 
 from docx import Document
 from fastapi.testclient import TestClient
 
 import config
+from core.auth import create_verification_code, consume_verification_code, create_access_token
 from eval_judge import judge_payload
 from eval_paths import API_RESULT
 from server import app
 
 
 PASS_THRESHOLD = 80
+
+def _get_test_token(client: TestClient) -> str:
+    """Create a test user and return a valid JWT token."""
+    email = "test@example.com"
+    # Use default DB path (same as server.py reads from config)
+    vc = create_verification_code(email, code="123456")
+    user = consume_verification_code(email, "123456")
+    return create_access_token(user)
 
 
 def _sample_docx_bytes() -> bytes:
@@ -25,9 +35,11 @@ def _sample_docx_bytes() -> bytes:
 
 def test_api_ai_scenarios():
     client = TestClient(app)
+    token = _get_test_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
     scenarios = []
 
-    res = client.get("/api/template/list")
+    res = client.get("/api/template/list", headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert isinstance(data.get("templates"), list)
@@ -42,6 +54,7 @@ def test_api_ai_scenarios():
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         },
+        headers=headers,
     )
     assert res.status_code == 200
     data = res.json()
@@ -58,14 +71,14 @@ def test_api_ai_scenarios():
         }
     )
 
-    res = client.get("/api/kb/list")
+    res = client.get("/api/kb/list", headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert isinstance(data, list)
     assert all("slug" in item and "label" in item for item in data)
     scenarios.append({"name": "GET /api/kb/list", "ok": True, "count": len(data)})
 
-    res = client.get("/api/kb/sources", params={"slug": "kb1"})
+    res = client.get("/api/kb/sources", params={"slug": "kb1"}, headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert isinstance(data.get("sources"), list)
@@ -97,6 +110,7 @@ def test_api_ai_scenarios():
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         },
+        headers=headers,
     )
     assert res.status_code == 200
     data = res.json()
@@ -113,6 +127,7 @@ def test_api_ai_scenarios():
                 "text/plain",
             )
         },
+        headers=headers,
     )
     assert res.status_code == 200
     data = res.json()
@@ -129,6 +144,7 @@ def test_api_ai_scenarios():
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         },
+        headers=headers,
     )
     assert res.status_code == 200
     data = res.json()

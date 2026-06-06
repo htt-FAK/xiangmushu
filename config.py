@@ -174,6 +174,24 @@ HISTORICAL_DIR = os.path.join(os.path.dirname(__file__), "data", "historical")
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "data", "templates")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "data", "outputs")
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
+AUTH_DB_PATH = os.getenv(
+    "AUTH_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "data", "auth.sqlite3"),
+).strip()
+AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", "dev-change-me-auth-secret").strip()
+AUTH_JWT_EXPIRE_MINUTES = int(os.getenv("AUTH_JWT_EXPIRE_MINUTES", "1440"))
+AUTH_CODE_TTL_MINUTES = int(os.getenv("AUTH_CODE_TTL_MINUTES", "10"))
+AUTH_SMTP_HOST = os.getenv("AUTH_SMTP_HOST", "").strip()
+AUTH_SMTP_PORT = int(os.getenv("AUTH_SMTP_PORT", "587"))
+AUTH_SMTP_USERNAME = os.getenv("AUTH_SMTP_USERNAME", "").strip()
+AUTH_SMTP_PASSWORD = os.getenv("AUTH_SMTP_PASSWORD", "").strip()
+AUTH_SMTP_FROM = os.getenv("AUTH_SMTP_FROM", AUTH_SMTP_USERNAME).strip()
+AUTH_SMTP_USE_TLS = os.getenv("AUTH_SMTP_USE_TLS", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 
 # 确保目录存在
 for d in [HISTORICAL_DIR, TEMPLATE_DIR, OUTPUT_DIR]:

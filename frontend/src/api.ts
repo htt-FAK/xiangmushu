@@ -7,16 +7,17 @@ import type {
   TemplateItem,
   UploadResult,
 } from "./types";
-
-const configuredApiBase = import.meta.env.VITE_API_BASE?.trim().replace(/\/+$/, "");
-export const API_BASE = configuredApiBase || "";
-
-function apiUrl(path: string) {
-  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
-}
+import { apiUrl } from "./apiBase";
+import { buildAuthHeaders } from "./auth";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiUrl(path), init);
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    headers: {
+      ...buildAuthHeaders(),
+      ...(init?.headers ?? {}),
+    },
+  });
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || `HTTP ${response.status}`);
@@ -112,6 +113,7 @@ export async function streamGenerate(
 
   const response = await fetch(apiUrl("/api/generate"), {
     method: "POST",
+    headers: buildAuthHeaders(),
     body: form,
     signal,
   });

@@ -5,15 +5,31 @@ FastAPI 后端 — 为 HTML 前端提供 REST + SSE 接口
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 from dataclasses import asdict
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import config
+from core.auth import (
+    AuthError,
+    InvalidCodeError,
+    InvalidEmailError,
+    InvalidTokenError,
+    User,
+    consume_verification_code,
+    create_access_token,
+    create_verification_code,
+    init_db,
+    send_verification_email,
+    user_from_token,
+)
 from core.chunker import Chunker
 from core.content_auditor import (
     ContentAuditor,
@@ -37,6 +53,41 @@ from core.vector_store import VectorStore
 from core.visual_auditor import audit_document_visual
 
 app = FastAPI(title="智能计划书生成器")
+logger = logging.getLogger(__name__)
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+class EmailRequest(BaseModel):
+    email: str
+
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> User:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return user_from_token(credentials.credentials)
+    except InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+@app.on_event("startup")
+async def startup_auth_db() -> None:
+    init_db()
 
 # ---------------------------------------------------------------------------
 # 缓存实例（模拟 st.cache_resource）
@@ -81,13 +132,49 @@ async def index():
 # ---------------------------------------------------------------------------
 # 知识库 API
 # ---------------------------------------------------------------------------
+@app.post("/api/auth/request-code")
+async def auth_request_code(payload: EmailRequest):
+    try:
+        verification = create_verification_code(payload.email)
+        send_verification_email(verification.email, verification.code)
+        return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
+    except InvalidEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except AuthError as exc:
+        logger.exception("Failed to request verification code")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/verify-code")
+async def auth_verify_code(payload: VerifyCodeRequest):
+    try:
+        user = consume_verification_code(payload.email, payload.code)
+        token = create_access_token(user)
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {"id": user.id, "email": user.email},
+        }
+    except (InvalidEmailError, InvalidCodeError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@app.get("/api/auth/me")
+async def auth_me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email}
+
+
 @app.get("/api/kb/list")
-async def kb_list():
+async def kb_list(current_user: User = Depends(get_current_user)):
     return load_registry()
 
 
 @app.post("/api/kb/create")
-async def kb_create(label: str = Form(...), slug: str = Form("")):
+async def kb_create(
+    label: str = Form(...),
+    slug: str = Form(""),
+    current_user: User = Depends(get_current_user),
+):
     try:
         created = add_kb(label.strip(), slug.strip() or None)
         return {"ok": True, "slug": created}
@@ -96,7 +183,10 @@ async def kb_create(label: str = Form(...), slug: str = Form("")):
 
 
 @app.post("/api/kb/delete")
-async def kb_delete(slug: str = Form(...)):
+async def kb_delete(
+    slug: str = Form(...),
+    current_user: User = Depends(get_current_user),
+):
     try:
         remove_kb(slug)
         vs = VectorStore(kb_slug=slug)
@@ -108,7 +198,10 @@ async def kb_delete(slug: str = Form(...)):
 
 
 @app.get("/api/kb/sources")
-async def kb_sources(slug: str = "kb1"):
+async def kb_sources(
+    slug: str = "kb1",
+    current_user: User = Depends(get_current_user),
+):
     vs = _get_vs(slug)
     sources = vs.list_sources()
     count = vs.get_collection_count()
@@ -116,7 +209,11 @@ async def kb_sources(slug: str = "kb1"):
 
 
 @app.post("/api/kb/upload")
-async def kb_upload(slug: str = Form(...), files: list[UploadFile] = File(...)):
+async def kb_upload(
+    slug: str = Form(...),
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+):
     vs = _get_vs(slug)
     results = []
     for f in files:
@@ -136,7 +233,11 @@ async def kb_upload(slug: str = Form(...), files: list[UploadFile] = File(...)):
 
 
 @app.post("/api/kb/remove-source")
-async def kb_remove_source(slug: str = Form(...), source: str = Form(...)):
+async def kb_remove_source(
+    slug: str = Form(...),
+    source: str = Form(...),
+    current_user: User = Depends(get_current_user),
+):
     vs = _get_vs(slug)
     vs.delete_by_source(source)
     return {"ok": True}
@@ -146,7 +247,7 @@ async def kb_remove_source(slug: str = Form(...), source: str = Form(...)):
 # 模板 API
 # ---------------------------------------------------------------------------
 @app.get("/api/template/list")
-async def template_list():
+async def template_list(current_user: User = Depends(get_current_user)):
     if not os.path.exists(config.TEMPLATE_DIR):
         return {"templates": []}
     files = [f for f in os.listdir(config.TEMPLATE_DIR) if f.endswith(".docx")]
@@ -163,7 +264,10 @@ async def template_list():
 
 
 @app.post("/api/template/analyze")
-async def template_analyze(file: UploadFile = File(...)):
+async def template_analyze(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     fname = file.filename or getattr(file, "name", "unknown")
     save_path = os.path.join(config.TEMPLATE_DIR, fname)
     content = await file.read()
@@ -193,6 +297,7 @@ async def generate(
     use_stream: bool = Form(True),
     enable_audit: bool = Form(False),
     enable_visual_audit: bool = Form(True),
+    current_user: User = Depends(get_current_user),
 ):
     vs = _get_vs(slug)
     template_path = os.path.join(config.TEMPLATE_DIR, template)
@@ -344,7 +449,10 @@ def _sse(data: dict) -> str:
 # 下载
 # ---------------------------------------------------------------------------
 @app.get("/api/download/{filename}")
-async def download(filename: str):
+async def download(
+    filename: str,
+    current_user: User = Depends(get_current_user),
+):
     path = os.path.join(config.OUTPUT_DIR, filename)
     if not os.path.isfile(path):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
