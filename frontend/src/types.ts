@@ -52,6 +52,35 @@ export type PostFillChecks = {
   output_tables?: number;
 };
 
+export type BillingRecord = {
+  id?: number;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_cny: number;
+  created_at?: string;
+};
+
+export type BillingSummary = {
+  input_tokens: number;
+  output_tokens: number;
+  cost_cny: number;
+  generation_count: number;
+};
+
+export type GenerationBilling = {
+  records: BillingRecord[];
+  input_tokens: number;
+  output_tokens: number;
+  cost_cny: number;
+};
+
+export type ApiKeyStatus = {
+  has_key: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type GenerateEvent =
   | { type: "task"; index: number; total: number; chapter: string }
   | {
@@ -70,6 +99,7 @@ export type GenerateEvent =
       issues: string[];
       revised: boolean;
     }
+  | { type: "billing"; index: number; billing: BillingRecord }
   | { type: "progress"; index: number; total: number }
   | {
       type: "done";
@@ -79,6 +109,8 @@ export type GenerateEvent =
       report_summary?: string;
       post_fill_checks?: PostFillChecks;
       visual_score?: number | null;
+      billing?: GenerationBilling;
+      billing_summary?: BillingSummary;
     }
   | { type: "error"; index?: number; error: string };
 

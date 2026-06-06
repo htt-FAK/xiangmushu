@@ -1,9 +1,9 @@
 import { Download, FileText, Loader2, Play, ShieldCheck, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { downloadUrl, fetchKnowledgeBases, fetchTemplates, streamGenerate } from "../api";
+import { downloadUrl, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, streamGenerate } from "../api";
 import { Button, EmptyState, ErrorBanner, Field, PageHeader, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
-import type { GenerateEvent, KnowledgeBase, PostFillChecks, TemplateItem } from "../types";
+import type { BillingSummary, GenerateEvent, GenerationBilling, KnowledgeBase, PostFillChecks, TemplateItem } from "../types";
 
 type OutputBlock = {
   chapter: string;
@@ -16,6 +16,11 @@ type OutputBlock = {
   auditIssues?: string[];
   revised?: boolean;
 };
+
+function formatCny(value?: number | null) {
+  if (typeof value !== "number") return "-";
+  return `¥${value.toFixed(4)}`;
+}
 
 function ToggleRow({
   label,
@@ -102,6 +107,8 @@ export default function GeneratePage() {
   const [reportSummary, setReportSummary] = useState("");
   const [postFillChecks, setPostFillChecks] = useState<PostFillChecks | null>(null);
   const [visualScore, setVisualScore] = useState<number | null>(null);
+  const [runBilling, setRunBilling] = useState<GenerationBilling | null>(null);
+  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -113,6 +120,9 @@ export default function GeneratePage() {
         setSlug((current) => current || kbList[0]?.slug || "");
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    fetchBillingSummary()
+      .then(setBillingSummary)
+      .catch(() => undefined);
   }, []);
 
   const percent = useMemo(() => {
@@ -166,6 +176,7 @@ export default function GeneratePage() {
     setReportSummary("");
     setPostFillChecks(null);
     setVisualScore(null);
+    setRunBilling(null);
     setCurrentTask("");
     setProgress({ done: 0, total: 0 });
 
@@ -228,6 +239,16 @@ export default function GeneratePage() {
             return;
           }
 
+          if (event.type === "billing") {
+            setRunBilling((prev) => ({
+              records: [...(prev?.records ?? []), event.billing],
+              input_tokens: (prev?.input_tokens ?? 0) + event.billing.input_tokens,
+              output_tokens: (prev?.output_tokens ?? 0) + event.billing.output_tokens,
+              cost_cny: Number(((prev?.cost_cny ?? 0) + event.billing.cost_cny).toFixed(8)),
+            }));
+            return;
+          }
+
           if (event.type === "progress") {
             setProgress({ done: event.index + 1, total: event.total });
             return;
@@ -239,6 +260,13 @@ export default function GeneratePage() {
             setReportSummary(event.report_summary ?? "");
             setPostFillChecks(event.post_fill_checks ?? null);
             setVisualScore(event.visual_score ?? null);
+            setRunBilling(event.billing ?? null);
+            if (event.billing_summary) {
+              setBillingSummary(event.billing_summary);
+            }
+            fetchBillingSummary()
+              .then(setBillingSummary)
+              .catch(() => undefined);
             setCurrentTask(t("generate.pass"));
             return;
           }
@@ -343,7 +371,7 @@ export default function GeneratePage() {
         </Panel>
 
         <Panel>
-          <div className="mb-5 grid gap-3 md:grid-cols-4">
+          <div className="mb-5 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <Stat label={t("generate.progress")} value={`${percent}%`} />
             <Stat label={t("generate.doneTasks")} value={`${progress.done}/${progress.total || "-"}`} tone="lime" />
             <Stat label={t("generate.currentTask")} value={currentTask || "-"} tone="amber" />
@@ -352,6 +380,8 @@ export default function GeneratePage() {
               value={visualScore === null ? "-" : visualScore}
               tone={visualScore !== null && visualScore < 70 ? "rose" : "cyan"}
             />
+            <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
+            <Stat label={t("generate.totalCost")} value={formatCny(billingSummary?.cost_cny)} tone="amber" />
           </div>
 
           <div className="mb-5 h-2 border border-white/10 bg-night-950">

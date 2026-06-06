@@ -170,13 +170,33 @@ class GenerationBundle:
 class ContentGenerator:
     """RAG generation with route-aware model fallback chains."""
 
-    def __init__(self, vector_store: VectorStore):
+    def __init__(self, vector_store: VectorStore, api_key: str | None = None):
         self._vs = vector_store
-        self._client = config.openai_client_for_chat()
+        self._client = self._client_for_api_key(api_key) if api_key else config.openai_client_for_chat()
+        self.last_usage: Any = None
+        self.last_model: str = ""
+
+    @staticmethod
+    def _client_for_api_key(api_key: str) -> Any:
+        from openai import OpenAI
+
+        return OpenAI(
+            api_key=api_key,
+            base_url=config.DASHSCOPE_COMPAT_BASE,
+            timeout=config.OPENAI_TIMEOUT,
+            max_retries=config.OPENAI_MAX_RETRIES,
+        )
 
     def _get_client(self) -> Any:
         """Return the active chat client."""
         return self._client
+
+    def pop_last_usage(self) -> tuple[str, Any]:
+        usage = self.last_usage
+        model = self.last_model
+        self.last_usage = None
+        self.last_model = ""
+        return model, usage
 
     def _candidate_models(
         self,
@@ -651,6 +671,8 @@ class ContentGenerator:
         last_error: Optional[Exception] = None
         for model in model_chain:
             acc_len = 0
+            self.last_usage = None
+            self.last_model = ""
             try:
                 stream = chat_completions_create(
                     client,
@@ -662,6 +684,10 @@ class ContentGenerator:
                     max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
                 )
                 for chunk in stream:
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        self.last_usage = usage
+                        self.last_model = str(getattr(chunk, "model", None) or model)
                     ch = chunk.choices[0] if chunk.choices else None
                     if not ch or not ch.delta:
                         continue
@@ -670,6 +696,7 @@ class ContentGenerator:
                         acc_len += len(piece)
                         yield piece
                 if acc_len > 0:
+                    self.last_model = self.last_model or model
                     _ensure_gen_logger()
                     _LOG.info(
                         "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
@@ -739,6 +766,8 @@ class ContentGenerator:
         last_error: Optional[Exception] = None
         for model in self._candidate_models(bundle.model, bundle.route_meta):
             try:
+                self.last_usage = None
+                self.last_model = ""
                 resp = chat_completions_create(
                     client,
                     model=model,
@@ -756,6 +785,8 @@ class ContentGenerator:
                 if self._is_error_content(text):
                     _LOG.warning("content_gen_nonstream_error_text model=%s text=%s", model, text[:200])
                     continue
+                self.last_usage = getattr(resp, "usage", None)
+                self.last_model = str(getattr(resp, "model", None) or model)
                 _ensure_gen_logger()
                 _LOG.info(
                     "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",

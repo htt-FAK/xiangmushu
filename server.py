@@ -33,6 +33,15 @@ from core.auth import (
     user_from_token,
     verify_password,
 )
+from core.billing import (
+    billing_summary,
+    delete_user_api_key,
+    get_user_api_key_status,
+    load_user_api_key,
+    normalize_usage,
+    record_billing,
+    save_user_api_key,
+)
 
 
 def _get_password_hash(email: str) -> str:
@@ -88,6 +97,10 @@ class VerifyCodeRequest(BaseModel):
     email: str
     code: str
     password: str
+
+
+class ApiKeyRequest(BaseModel):
+    api_key: str
 
 
 def get_current_user(
@@ -206,6 +219,34 @@ async def auth_login(payload: LoginRequest):
 @app.get("/api/auth/me")
 async def auth_me(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "email": current_user.email}
+
+
+@app.get("/api/user/apikey")
+async def user_apikey_status(current_user: User = Depends(get_current_user)):
+    return get_user_api_key_status(current_user.id)
+
+
+@app.post("/api/user/apikey")
+async def user_apikey_save(
+    payload: ApiKeyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        save_user_api_key(current_user.id, payload.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"ok": True, **get_user_api_key_status(current_user.id)}
+
+
+@app.delete("/api/user/apikey")
+async def user_apikey_delete(current_user: User = Depends(get_current_user)):
+    delete_user_api_key(current_user.id)
+    return {"ok": True, **get_user_api_key_status(current_user.id)}
+
+
+@app.get("/api/billing/summary")
+async def api_billing_summary(current_user: User = Depends(get_current_user)):
+    return billing_summary(current_user.id)
 
 
 @app.get("/api/kb/list")
@@ -356,12 +397,21 @@ async def generate(
     if not tasks:
         return JSONResponse({"ok": False, "error": "未找到待填位置"}, status_code=400)
 
-    generator = ContentGenerator(vs)
+    try:
+        user_api_key = load_user_api_key(current_user.id)
+    except Exception as exc:
+        logger.exception("Failed to decrypt user API key")
+        return JSONResponse(
+            {"ok": False, "error": f"Failed to load saved API Key: {exc}"},
+            status_code=500,
+        )
+    generator = ContentGenerator(vs, api_key=user_api_key)
     auditor = ContentAuditor() if enable_audit else None
 
     def event_stream():
         results: list[str] = []
         traces = []
+        billing_records = []
         for i, task in enumerate(tasks):
             if task.word_limit <= 0:
                 task.word_limit = word_limit
@@ -394,6 +444,15 @@ async def generate(
                 else:
                     content = generator.generate_from_bundle(gen_bundle, route_hook=None)
                     yield _sse({"type": "chunk", "index": i, "text": content})
+                billed_model, raw_usage = generator.pop_last_usage()
+                billing_record = record_billing(
+                    current_user.id,
+                    billed_model or gen_bundle.model,
+                    normalize_usage(raw_usage),
+                )
+                if billing_record is not None:
+                    billing_records.append(billing_record)
+                    yield _sse({"type": "billing", "index": i, "billing": billing_record})
             except Exception as e:
                 content = f"（生成失败：{e}）"
                 yield _sse({"type": "error", "index": i, "error": str(e)})
@@ -477,6 +536,13 @@ async def generate(
                     "report_summary": quality_report_summary(report),
                     "post_fill_checks": post_fill_checks,
                     "visual_score": visual_payload.get("score"),
+                    "billing": {
+                        "records": billing_records,
+                        "input_tokens": sum(int(item.get("input_tokens") or 0) for item in billing_records),
+                        "output_tokens": sum(int(item.get("output_tokens") or 0) for item in billing_records),
+                        "cost_cny": round(sum(float(item.get("cost_cny") or 0) for item in billing_records), 8),
+                    },
+                    "billing_summary": billing_summary(current_user.id),
                 }
             )
         except Exception as e:

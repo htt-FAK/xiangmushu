@@ -118,6 +118,23 @@ GEN_MAX_TOKENS_WORD_FACTOR = int(os.getenv("GEN_MAX_TOKENS_WORD_FACTOR", "5"))
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "180"))
 OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "4"))
 
+# AI billing: yuan per 1K tokens.
+AI_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "qwen-plus": {"input": 0.0008, "output": 0.002},
+    "qwen-turbo": {"input": 0.0003, "output": 0.0006},
+    "qwen3.7-flash": {"input": 0.0003, "output": 0.0006},
+    "qwen3.7-plus": {"input": 0.0008, "output": 0.002},
+    "qwen3.7-max": {"input": 0.002, "output": 0.006},
+    "qwen3.7-max-preview": {"input": 0.002, "output": 0.006},
+    "qwen3.7-max-2026-05-17": {"input": 0.002, "output": 0.006},
+    "qwen3.7-max-2026-05-20": {"input": 0.002, "output": 0.006},
+}
+
+USER_API_KEY_ENCRYPTION_KEY = os.getenv(
+    "USER_API_KEY_ENCRYPTION_KEY",
+    os.getenv("AUTH_JWT_SECRET", "dev-change-me-auth-secret"),
+).strip()
+
 # 单次入库写入 Chroma 的最大 chunk 数（减小单次 embedding 体积，降低超时概率）
 EMBED_ADD_BATCH_SIZE = int(os.getenv("EMBED_ADD_BATCH_SIZE", "12"))
 

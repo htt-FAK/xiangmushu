@@ -5,6 +5,7 @@ import {
   Languages,
   LogOut,
   PanelLeft,
+  Settings,
   Sparkles,
 } from "lucide-react";
 import {
@@ -23,6 +24,7 @@ import GeneratePage from "./pages/GeneratePage";
 import HomePage from "./pages/HomePage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LoginPage from "./pages/LoginPage";
+import SettingsPage from "./pages/SettingsPage";
 import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
 import { clsx } from "./utils";
 
@@ -31,6 +33,7 @@ const nav = [
   { to: "/template", labelKey: "nav.template", icon: FileSearch },
   { to: "/generate", labelKey: "nav.generate", icon: Sparkles },
   { to: "/knowledge", labelKey: "nav.knowledge", icon: Database },
+  { to: "/settings", labelKey: "nav.settings", icon: Settings },
 ];
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
@@ -175,6 +178,7 @@ function Shell() {
             <Route path="/template" element={<TemplateAnalysisPage />} />
             <Route path="/generate" element={<GeneratePage />} />
             <Route path="/knowledge" element={<KnowledgeBasePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

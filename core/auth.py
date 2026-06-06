@@ -187,6 +187,9 @@ def init_db(db_path: str | None = None) -> None:
             """
         )
         conn.commit()
+    from core.billing import init_billing_db
+
+    init_billing_db(str(path))
 
 
 def _connect(db_path: str | None = None) -> sqlite3.Connection:

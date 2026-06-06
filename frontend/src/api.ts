@@ -1,5 +1,7 @@
 import type {
   AnalyzeResult,
+  ApiKeyStatus,
+  BillingSummary,
   GenerateEvent,
   GenerateParams,
   KnowledgeBase,
@@ -89,6 +91,28 @@ export async function removeKnowledgeSource(slug: string, source: string) {
     method: "POST",
     body: form,
   });
+}
+
+export async function fetchApiKeyStatus(): Promise<ApiKeyStatus> {
+  return requestJson<ApiKeyStatus>("/api/user/apikey");
+}
+
+export async function saveApiKey(apiKey: string): Promise<ApiKeyStatus & { ok: boolean }> {
+  return requestJson<ApiKeyStatus & { ok: boolean }>("/api/user/apikey", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+}
+
+export async function deleteApiKey(): Promise<ApiKeyStatus & { ok: boolean }> {
+  return requestJson<ApiKeyStatus & { ok: boolean }>("/api/user/apikey", {
+    method: "DELETE",
+  });
+}
+
+export async function fetchBillingSummary(): Promise<BillingSummary> {
+  return requestJson<BillingSummary>("/api/billing/summary");
 }
 
 export function downloadUrl(path: string) {
