@@ -36,6 +36,13 @@ const nav = [
 function ProtectedRoute({ children }: { children: ReactElement }) {
   const auth = useAuth();
   const location = useLocation();
+  if (auth.validating) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-night-950 text-slate-400">
+        <div className="text-sm font-semibold tracking-widest uppercase">Loading...</div>
+      </div>
+    );
+  }
   if (!auth.isAuthenticated) {
     const next = `${location.pathname}${location.search}`;
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
@@ -103,10 +110,10 @@ function Shell() {
         <div className="absolute bottom-6 left-5 right-5 space-y-3">
           <div className="border border-white/10 bg-night-950/70 p-4">
             <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-lime">
-              {t("app.api")}
+              {t("app.account")}
             </p>
-            <p className="mt-2 break-all text-xs leading-5 text-slate-500">
-              FastAPI localhost:8502
+            <p className="mt-2 break-all text-xs leading-5 text-slate-300">
+              {auth.userEmail || "-"}
             </p>
           </div>
           <Button className="w-full" variant="ghost" onClick={toggleLanguage} title={t("lang.switch")}>

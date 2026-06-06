@@ -25,6 +25,8 @@ type VerifyCodeResponse = {
 type AuthContextValue = {
   token: string;
   isAuthenticated: boolean;
+  validating: boolean;
+  userEmail: string;
   setToken: (token: string) => void;
   logout: () => void;
 };
@@ -43,6 +45,7 @@ export function buildAuthHeaders(): HeadersInit {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState(() => getStoredToken());
   const [validating, setValidating] = useState(true);
+  const [userEmail, setUserEmail] = useState("");
 
   // Validate token on mount — if invalid, clear it
   useEffect(() => {
@@ -54,11 +57,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetch(apiUrl("/api/auth/me"), {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
+      .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) {
           window.localStorage.removeItem(TOKEN_KEY);
           setTokenState("");
+        } else {
+          const data = await res.json();
+          setUserEmail(data.email ?? "");
         }
       })
       .catch(() => {
@@ -89,10 +95,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       token,
       isAuthenticated: !validating && Boolean(token),
+      validating,
+      userEmail,
       setToken,
       logout,
     }),
-    [logout, setToken, token, validating],
+    [logout, setToken, token, validating, userEmail],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

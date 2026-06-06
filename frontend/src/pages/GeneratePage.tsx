@@ -87,8 +87,7 @@ export default function GeneratePage() {
   const [template, setTemplate] = useState("");
   const [slug, setSlug] = useState("");
   const [wordLimit, setWordLimit] = useState(300);
-  const [topK, setTopK] = useState(4);
-  const [maxDistance, setMaxDistance] = useState(1.25);
+  const [recallMode, setRecallMode] = useState<"precise" | "standard" | "broad">("standard");
   const [enableWeb, setEnableWeb] = useState(false);
   const [useStream, setUseStream] = useState(true);
   const [enableAudit, setEnableAudit] = useState(false);
@@ -178,8 +177,8 @@ export default function GeneratePage() {
           slug,
           template,
           wordLimit,
-          topK,
-          maxDistance,
+          topK: recallMode === "precise" ? 2 : recallMode === "broad" ? 8 : 4,
+          maxDistance: recallMode === "precise" ? 0.6 : recallMode === "broad" ? 1.8 : 1.25,
           enableWeb,
           useStream,
           enableAudit,
@@ -296,20 +295,29 @@ export default function GeneratePage() {
               <NumberInput value={wordLimit} onChange={setWordLimit} min={80} max={3000} />
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Top K">
-                <NumberInput value={topK} onChange={setTopK} min={1} max={20} />
-              </Field>
-              <Field label={t("generate.distance")}>
-                <NumberInput
-                  value={maxDistance}
-                  onChange={setMaxDistance}
-                  min={0.1}
-                  max={3}
-                  step={0.05}
-                />
-              </Field>
-            </div>
+            <Field label={t("generate.recallMode")}>
+              <div className="grid grid-cols-3 gap-2">
+                {(["precise", "standard", "broad"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setRecallMode(mode)}
+                    className={`min-h-12 border px-2 text-xs font-semibold transition ${
+                      recallMode === mode
+                        ? "border-signal-cyan bg-signal-cyan/15 text-signal-cyan shadow-glow"
+                        : "border-white/10 bg-night-950/70 text-slate-400 hover:border-white/25 hover:text-white"
+                    }`}
+                  >
+                    <p>{t(`generate.recall${mode.charAt(0).toUpperCase() + mode.slice(1)}`)}</p>
+                    <p className={`mt-0.5 text-[10px] font-normal ${
+                      recallMode === mode ? "text-signal-cyan/70" : "text-slate-600"
+                    }`}>
+                      {t(`generate.recall${mode.charAt(0).toUpperCase() + mode.slice(1)}Desc`)}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </Field>
 
             <div className="grid gap-3">
               <ToggleRow label={t("generate.enableWeb")} checked={enableWeb} onChange={setEnableWeb} />
