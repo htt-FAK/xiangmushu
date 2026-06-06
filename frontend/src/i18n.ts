@@ -15,7 +15,7 @@ const LANGUAGE_KEY = "xiangmushu.language";
 const dict: Record<Language, Record<string, string>> = {
   zh: {
     "app.name": "项目书智能体",
-    "app.subtitle": "Word 模板生成工作台",
+    "app.subtitle": "RAG + 多模型协同 · AI 文档生成引擎",
     "app.api": "接口",
     "nav.home": "首页",
     "nav.template": "模板分析",
@@ -147,7 +147,7 @@ const dict: Record<Language, Record<string, string>> = {
   },
   en: {
     "app.name": "Xiangmushu",
-    "app.subtitle": "Word template agent",
+    "app.subtitle": "RAG + Multi-Model · AI Doc Generation Engine",
     "app.api": "API",
     "nav.home": "Home",
     "nav.template": "Template Analysis",
