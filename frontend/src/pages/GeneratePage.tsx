@@ -381,7 +381,8 @@ export default function GeneratePage() {
               tone={visualScore !== null && visualScore < 70 ? "rose" : "cyan"}
             />
             <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
-            <Stat label={t("generate.totalCost")} value={formatCny(billingSummary?.cost_cny)} tone="amber" />
+            {/* 累计费用暂时关闭 */}
+            {/* <Stat label={t("generate.totalCost")} value={formatCny(billingSummary?.cost_cny)} tone="amber" /> */}
           </div>
 
           <div className="mb-5 h-2 border border-white/10 bg-night-950">
