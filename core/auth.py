@@ -195,7 +195,9 @@ def init_db(db_path: str | None = None) -> None:
         )
         conn.commit()
     from core.billing import init_billing_db
+    from core.audit_log import init_audit_db
 
+    init_audit_db(str(path))
     init_billing_db(str(path))
 
 
@@ -362,7 +364,7 @@ def consume_verification_code(
         if row is None or row["consumed_at"] is not None:
             raise InvalidCodeError("Invalid verification code")
         if parse_iso(str(row["expires_at"])) <= utc_now():
-            raise InvalidCodeError("Verification code has expired")
+            raise InvalidCodeError("Invalid verification code")
         expected = str(row["code_hash"])
         actual = _code_hash(normalized, code)
         if not hmac.compare_digest(expected, actual):
@@ -379,7 +381,7 @@ def consume_verification_code(
         if user_row is not None:
             stored_password_hash = user_row["password_hash"]
             if not verify_password(password or "", stored_password_hash):
-                raise InvalidPasswordError("Invalid email, password, or verification code")
+                raise InvalidCodeError("Invalid verification code")
             conn.execute(
                 "UPDATE users SET last_login_at = ? WHERE id = ?",
                 (iso(utc_now()), user_row["id"]),
@@ -391,8 +393,61 @@ def consume_verification_code(
             return _row_to_user(updated)
 
     if not pending_password_hash or not verify_password(password or "", pending_password_hash):
-        raise InvalidPasswordError("Invalid email, password, or verification code")
+        raise InvalidCodeError("Invalid verification code")
     return _create_user_with_password(normalized, pending_password_hash, db_path)
+
+
+def reset_password_with_code(
+    email: str,
+    code: str,
+    new_password: str,
+    db_path: str | None = None,
+) -> User:
+    normalized = normalize_email(email)
+    if not CODE_RE.match(code or ""):
+        raise InvalidCodeError("Invalid verification code")
+
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM email_verification_codes
+            WHERE email = ? AND consumed_at IS NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            raise InvalidCodeError("Invalid verification code")
+        if parse_iso(str(row["expires_at"])) <= utc_now():
+            raise InvalidCodeError("Invalid verification code")
+        expected = str(row["code_hash"])
+        actual = _code_hash(normalized, code)
+        if not hmac.compare_digest(expected, actual):
+            raise InvalidCodeError("Invalid verification code")
+
+        user_row = conn.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
+        if user_row is None:
+            raise InvalidCodeError("Invalid verification code")
+
+        conn.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, last_login_at = ?
+            WHERE id = ?
+            """,
+            (set_password(new_password), iso(utc_now()), user_row["id"]),
+        )
+        conn.execute(
+            "UPDATE email_verification_codes SET consumed_at = ? WHERE id = ?",
+            (iso(utc_now()), row["id"]),
+        )
+        updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_row["id"],)).fetchone()
+        conn.commit()
+
+    if updated is None:
+        raise AuthError("Failed to load authenticated user")
+    return _row_to_user(updated)
 
 
 def create_access_token(
@@ -451,7 +506,7 @@ def user_from_token(token: str, db_path: str | None = None) -> User:
     return user
 
 
-def send_verification_email(email: str, code: str) -> None:
+def send_verification_email(email: str, code: str, purpose: str = "register") -> None:
     if not config.AUTH_SMTP_HOST:
         logger.warning(
             "AUTH_SMTP_HOST is not configured; verification code for %s is %s",
@@ -461,7 +516,8 @@ def send_verification_email(email: str, code: str) -> None:
         return
 
     message = EmailMessage()
-    message["Subject"] = f"【项目书智能体】验证码 {code}"
+    subject_prefix = "重置密码验证码" if purpose == "reset_password" else "注册验证码"
+    message["Subject"] = f"【项目书智能体】{subject_prefix} {code}"
     message["From"] = config.AUTH_SMTP_FROM or config.AUTH_SMTP_USERNAME
     message["To"] = email
 

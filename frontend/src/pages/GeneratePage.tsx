@@ -1,88 +1,175 @@
-import { Download, FileText, Loader2, Play, ShieldCheck, Square } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  BookOpen,
+  CheckCircle2,
+  Cpu,
+  Download,
+  FileCheck2,
+  FileText,
+  Gauge,
+  Layers3,
+  Loader2,
+  MessageSquareText,
+  Play,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Square,
+} from "lucide-react";
+import { lazy, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { downloadUrl, fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, streamGenerate } from "../api";
-import { Button, EmptyState, ErrorBanner, Field, PageHeader, Panel, Stat } from "../components/ui";
+import { Button, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type { BillingSummary, GenerateEvent, GenerationBilling, KnowledgeBase, PostFillChecks, TemplateItem } from "../types";
+import { clsx } from "../utils";
+import type { OutputBlockData } from "../components/OutputBlock";
 
-type OutputBlock = {
-  chapter: string;
-  text: string;
-  model?: string;
-  tier?: string;
-  kbHits?: number;
-  evidenceRefs?: string[];
-  auditVerdict?: string;
-  auditIssues?: string[];
-  revised?: boolean;
-};
+const LazyOutputBlock = lazy(() => import("../components/OutputBlock").then((m) => ({ default: m.OutputBlock })));
+
+type OutputBlock = OutputBlockData;
 
 function formatCny(value?: number | null) {
   if (typeof value !== "number") return "-";
   return `¥${value.toFixed(4)}`;
 }
 
-function ToggleRow({
-  label,
-  checked,
-  onChange,
+function SectionTitle({
+  icon,
+  title,
+  hint,
+  action,
 }: {
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
+  icon: ReactNode;
+  title: string;
+  hint?: string;
+  action?: ReactNode;
 }) {
   return (
-    <label className="flex min-h-11 items-center justify-between border border-white/10 bg-night-950/70 px-3 text-sm text-slate-300">
-      <span>{label}</span>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-    </label>
+    <div className="mb-3 flex items-start justify-between gap-3">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-signal-cyan/25 bg-signal-cyan/10 text-signal-cyan">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="break-words font-display text-lg font-semibold leading-tight text-white">{title}</p>
+          {hint && <p className="mt-1 break-words text-xs leading-5 text-slate-500">{hint}</p>}
+        </div>
+      </div>
+      {action}
+    </div>
   );
 }
 
-function Select({
+function OptionRail({
+  items,
   value,
   onChange,
-  children,
+  empty,
+  emptyLink,
+  tone = "cyan",
+  compact = false,
+}: {
+  items: Array<{ value: string; title: string; meta?: string }>;
+  value: string;
+  onChange: (value: string) => void;
+  empty: string;
+  emptyLink?: { to: string; label: string };
+  tone?: "cyan" | "lime";
+  compact?: boolean;
+}) {
+  if (items.length === 0) {
+    return (
+      <div className="flex flex-col gap-2 border border-dashed border-white/15 bg-night-950/60 px-3 py-3">
+        <span className="text-sm text-slate-500">{empty}</span>
+        {emptyLink && (
+          <Link
+            to={emptyLink.to}
+            className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-signal-cyan hover:underline"
+          >
+            {emptyLink.label} →
+          </Link>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={clsx("grid overflow-y-auto pr-1", compact ? "max-h-52 gap-1.5" : "max-h-64 gap-2")}>
+      {items.map((item) => {
+        const active = item.value === value;
+        return (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onChange(item.value)}
+            className={clsx(
+              "group flex items-center justify-between gap-3 border px-3 text-left transition active:scale-[0.98] active:brightness-90",
+              compact ? "min-h-[54px] py-2" : "min-h-[64px] py-2.5",
+              active
+                ? tone === "lime"
+                  ? "border-signal-lime/60 bg-signal-lime/10 text-signal-lime"
+                  : "border-signal-cyan/60 bg-signal-cyan/10 text-signal-cyan"
+                : "border-white/10 bg-night-950/70 text-slate-300 hover:border-white/25 hover:text-white",
+            )}
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold">{item.title}</span>
+              {item.meta && <span className="mt-1 block truncate text-xs text-slate-500">{item.meta}</span>}
+            </span>
+            {active && <CheckCircle2 className="shrink-0" size={17} />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TextArea({
+  value,
+  onChange,
+  placeholder,
+  compact = false,
 }: {
   value: string;
   onChange: (value: string) => void;
-  children: React.ReactNode;
+  placeholder: string;
+  compact?: boolean;
 }) {
   return (
-    <select
-      className="min-h-10 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none focus:border-signal-cyan/70"
+    <textarea
+      className={clsx(
+        "w-full resize-y scroll-mb-32 border border-white/10 bg-night-950/70 px-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:scroll-mt-4",
+        compact ? "min-h-28 py-2.5" : "min-h-32 py-3",
+      )}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-    >
-      {children}
-    </select>
+      placeholder={placeholder}
+      maxLength={1200}
+    />
   );
 }
 
-function NumberInput({
-  value,
-  onChange,
-  min,
-  max,
-  step,
+function SetupField({
+  label,
+  children,
+  compact = false,
 }: {
-  value: number;
-  onChange: (value: number) => void;
-  min: number;
-  max: number;
-  step?: number;
+  label: string;
+  children: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <input
-      className="min-h-10 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none focus:border-signal-cyan/70"
-      type="number"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      onChange={(event) => onChange(Number(event.target.value))}
-    />
+    <div className="block">
+      <span
+        className={clsx(
+          "block text-xs uppercase text-slate-500",
+          compact ? "mb-1.5 font-medium tracking-[0.1em]" : "mb-2 font-semibold tracking-[0.16em]",
+        )}
+      >
+        {label}
+      </span>
+      {children}
+    </div>
   );
 }
 
@@ -92,12 +179,15 @@ export default function GeneratePage() {
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
   const [template, setTemplate] = useState("");
   const [slug, setSlug] = useState("");
-  const [wordLimit, setWordLimit] = useState(300);
-  const [recallMode, setRecallMode] = useState<"precise" | "standard" | "broad">("standard");
-  const [enableWeb, setEnableWeb] = useState(false);
-  const [useStream, setUseStream] = useState(true);
-  const [enableAudit, setEnableAudit] = useState(false);
-  const [enableVisualAudit, setEnableVisualAudit] = useState(true);
+  const [generationBrief, setGenerationBrief] = useState("");
+  const [wordLimit] = useState(300);
+  const [topK] = useState(4);
+  const [maxDistance] = useState(1.25);
+  const [visualTarget] = useState(80);
+  const [enableWeb] = useState(false);
+  const [useStream] = useState(true);
+  const [enableAudit] = useState(false);
+  const [enableVisualAudit] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [currentTask, setCurrentTask] = useState("");
@@ -115,14 +205,21 @@ export default function GeneratePage() {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    Promise.all([fetchTemplates(), fetchKnowledgeBases()])
-      .then(([templateList, kbList]) => {
-        setTemplates(templateList);
-        setKbs(kbList);
-        setTemplate((current) => current || templateList[0]?.name || "");
-        setSlug((current) => current || kbList[0]?.slug || "");
-      })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    Promise.allSettled([fetchTemplates(), fetchKnowledgeBases()])
+      .then(([tmplResult, kbResult]) => {
+        if (tmplResult.status === "fulfilled") {
+          setTemplates(tmplResult.value);
+          setTemplate((current) => current || tmplResult.value[0]?.name || "");
+        }
+        if (kbResult.status === "fulfilled") {
+          setKbs(kbResult.value);
+          setSlug((current) => current || kbResult.value[0]?.slug || "");
+        }
+        const failures: string[] = [];
+        if (tmplResult.status === "rejected") failures.push(`Templates: ${tmplResult.reason}`);
+        if (kbResult.status === "rejected") failures.push(`Knowledge bases: ${kbResult.reason}`);
+        if (failures.length > 0) setError(failures.join("; "));
+      });
     fetchBillingSummary()
       .then(setBillingSummary)
       .catch(() => undefined);
@@ -135,6 +232,8 @@ export default function GeneratePage() {
     if (!progress.total) return 0;
     return Math.round((progress.done / progress.total) * 100);
   }, [progress]);
+
+  const hasAuditIssues = outputs.some((block) => (block.auditIssues?.length ?? 0) > 0);
 
   const checkHighlights = useMemo(() => {
     if (!postFillChecks) return [];
@@ -199,9 +298,10 @@ export default function GeneratePage() {
         {
           slug,
           template,
+          customInstructions: generationBrief.trim(),
           wordLimit,
-          topK: recallMode === "precise" ? 2 : recallMode === "broad" ? 8 : 4,
-          maxDistance: recallMode === "precise" ? 0.6 : recallMode === "broad" ? 1.8 : 1.25,
+          topK,
+          maxDistance,
           enableWeb,
           useStream,
           enableAudit,
@@ -306,263 +406,298 @@ export default function GeneratePage() {
         title={t("generate.title")}
         description={t("generate.description")}
       />
+
       <ErrorBanner message={error} />
 
       {hasApiKey === false && (
-        <div className="mb-6 flex items-center justify-between border border-signal-amber/40 bg-signal-amber/10 px-5 py-4">
-          <div className="flex items-center gap-3">
-            <span className="text-xl">⚠️</span>
-            <p className="text-sm font-semibold text-amber-100">{t("generate.noApiKeyHint")}</p>
+        <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <ShieldCheck className="shrink-0 text-signal-amber" size={20} />
+            <p className="min-w-0 break-words text-sm font-semibold text-amber-100">{t("generate.noApiKeyHint")}</p>
           </div>
           <Link
             to="/settings"
-            className="inline-flex min-h-9 items-center border border-signal-amber bg-signal-amber px-4 text-xs font-bold text-night-950 transition hover:bg-white"
+            className="inline-flex min-h-11 items-center justify-center border border-signal-amber bg-signal-amber px-4 text-xs font-bold text-night-950 transition hover:bg-white sm:w-auto"
           >
             {t("generate.goSettings")}
           </Link>
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
-        <Panel>
-          <div className="space-y-4">
-            <Field label={t("generate.knowledge")}>
-              <Select value={slug} onChange={setSlug}>
-                {kbs.map((kb) => (
-                  <option key={kb.slug} value={kb.slug}>
-                    {kb.label || kb.name || kb.slug}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+      <div className="grid gap-6 xl:grid-cols-[430px_minmax(0,1fr)]">
+        <div className="space-y-5">
+          <Panel className="min-w-0">
+            <SectionTitle
+              icon={<Sparkles size={18} />}
+              title={t("generate.setupTitle")}
+              hint={t("generate.setupHint")}
+            />
 
-            <Field label={t("generate.template")}>
-              <Select value={template} onChange={setTemplate}>
-                {templates.map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            <div className="space-y-3 transition-all duration-200">
+              <SetupField label={t("generate.knowledge")} compact={true}>
+                <OptionRail
+                  value={slug}
+                  onChange={setSlug}
+                  empty={t("generate.noKnowledge")}
+                  emptyLink={{ to: "/knowledge", label: t("generate.goKnowledge") }}
+                  compact={true}
+                  items={kbs.map((kb) => ({
+                    value: kb.slug,
+                    title: kb.label || kb.name || kb.slug,
+                    meta: kb.slug,
+                  }))}
+                />
+              </SetupField>
 
-            <Field label={t("generate.wordLimit")}>
-              <NumberInput value={wordLimit} onChange={setWordLimit} min={80} max={3000} />
-            </Field>
+              <SetupField label={t("generate.template")} compact={true}>
+                <OptionRail
+                  value={template}
+                  onChange={setTemplate}
+                  empty={t("generate.noTemplates")}
+                  emptyLink={{ to: "/template", label: t("generate.goTemplate") }}
+                  tone="lime"
+                  compact={true}
+                  items={templates.map((item) => ({
+                    value: item.name,
+                    title: item.name,
+                    meta: "DOCX",
+                  }))}
+                />
+              </SetupField>
 
-            <Field label={t("generate.recallMode")}>
-              <div className="grid grid-cols-3 gap-2">
-                {(["precise", "standard", "broad"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setRecallMode(mode)}
-                    className={`min-h-12 border px-2 text-xs font-semibold transition ${
-                      recallMode === mode
-                        ? "border-signal-cyan bg-signal-cyan/15 text-signal-cyan shadow-glow"
-                        : "border-white/10 bg-night-950/70 text-slate-400 hover:border-white/25 hover:text-white"
-                    }`}
-                  >
-                    <p>{t(`generate.recall${mode.charAt(0).toUpperCase() + mode.slice(1)}`)}</p>
-                    <p className={`mt-0.5 text-[10px] font-normal ${
-                      recallMode === mode ? "text-signal-cyan/70" : "text-slate-600"
-                    }`}>
-                      {t(`generate.recall${mode.charAt(0).toUpperCase() + mode.slice(1)}Desc`)}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </Field>
-
-            <div className="grid gap-3">
-              <ToggleRow label={t("generate.enableWeb")} checked={enableWeb} onChange={setEnableWeb} />
-              <ToggleRow label={t("generate.useStream")} checked={useStream} onChange={setUseStream} />
-              <ToggleRow label={t("generate.enableAudit")} checked={enableAudit} onChange={setEnableAudit} />
-              <ToggleRow
-                label={t("generate.enableVisualAudit")}
-                checked={enableVisualAudit}
-                onChange={setEnableVisualAudit}
-              />
+              <SetupField label={t("generate.instructions")} compact={true}>
+                <TextArea
+                  value={generationBrief}
+                  onChange={setGenerationBrief}
+                  placeholder={t("generate.instructionsPlaceholder")}
+                  compact={true}
+                />
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <MessageSquareText className="shrink-0 text-signal-cyan" size={15} />
+                    <span className="break-words">{t("generate.instructionsHint")}</span>
+                  </span>
+                  <span className="shrink-0">{generationBrief.length}/1200</span>
+                </div>
+              </SetupField>
             </div>
 
-            <div className="flex gap-3">
-              <Button className="flex-1" onClick={requestStart} disabled={!template || !slug || running}>
-                {running ? <Loader2 className="animate-spin" size={17} /> : <Play size={17} />}
+            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+              <Button
+                className="min-h-14 w-full text-base font-bold shadow-glow"
+                onClick={requestStart}
+                disabled={!template || !slug || running}
+              >
+                {running ? <Loader2 className="animate-spin" size={19} /> : <Play size={19} />}
                 {running ? t("generate.running") : t("generate.start")}
               </Button>
-              <Button variant="ghost" onClick={stop} disabled={!running} aria-label={t("generate.stop")}>
+              <Button
+                className="min-h-14 w-full font-bold sm:w-12 sm:px-0"
+                variant="ghost"
+                onClick={stop}
+                disabled={!running}
+                aria-label={t("generate.stop")}
+              >
                 <Square size={17} />
               </Button>
             </div>
-          </div>
-        </Panel>
+          </Panel>
+        </div>
 
-        <Panel>
-          <div className="mb-5 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <Stat label={t("generate.progress")} value={`${percent}%`} />
-            <Stat label={t("generate.doneTasks")} value={`${progress.done}/${progress.total || "-"}`} tone="lime" />
-            <Stat label={t("generate.currentTask")} value={currentTask || "-"} tone="amber" />
-            <Stat
-              label={t("generate.visualScore")}
-              value={visualScore === null ? "-" : visualScore}
-              tone={visualScore !== null && visualScore < 70 ? "rose" : "cyan"}
+        <div className="min-w-0 space-y-5">
+          <Panel className="min-w-0">
+            <SectionTitle
+              icon={<Gauge size={18} />}
+              title={t("generate.runOverview")}
+              hint={t("generate.runOverviewHint")}
+              action={
+                <span className={clsx("shrink-0 border px-2.5 py-1 text-xs font-semibold", running ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime" : "border-white/10 bg-white/[0.035] text-slate-500")}>
+                  {running ? t("generate.running") : t("generate.idle")}
+                </span>
+              }
             />
-            <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
-            {/* 累计费用暂时关闭 */}
-            {/* <Stat label={t("generate.totalCost")} value={formatCny(billingSummary?.cost_cny)} tone="amber" /> */}
-          </div>
 
-          <div className="mb-5 h-2 border border-white/10 bg-night-950">
-            <div
-              className="h-full bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
-
-          {(downloadPath || reportPath) && (
-            <div className="mb-5 flex flex-wrap gap-3">
-              {downloadPath && (
-                <a
-                  className="inline-flex min-h-10 items-center gap-2 border border-signal-lime bg-signal-lime px-4 text-sm font-semibold text-night-950"
-                  href={downloadUrl(downloadPath)}
-                >
-                  <Download size={17} />
-                  {t("generate.downloadDoc")}
-                </a>
-              )}
-              {reportPath && (
-                <a
-                  className="inline-flex min-h-10 items-center gap-2 border border-white/10 bg-white/[0.055] px-4 text-sm font-semibold text-slate-100"
-                  href={downloadUrl(reportPath)}
-                >
-                  <FileText size={17} />
-                  {t("generate.downloadReport")}
-                </a>
-              )}
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+              <Stat label={t("generate.progress")} value={`${percent}%`} />
+              <Stat label={t("generate.doneTasks")} value={`${progress.done}/${progress.total || "-"}`} tone="lime" />
+              <Stat className="col-span-2 md:col-span-1" label={t("generate.currentTask")} value={currentTask || "-"} tone="amber" />
+              <Stat
+                label={t("generate.visualScore")}
+                value={visualScore === null ? "-" : visualScore}
+                tone={visualScore !== null && visualScore < visualTarget ? "rose" : "cyan"}
+              />
+              <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
             </div>
-          )}
 
-          {(reportSummary || postFillChecks) && (
-            <section className="mb-5 border border-white/10 bg-night-950/60 p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-signal-cyan">
-                <ShieldCheck size={16} />
-                <span>{t("generate.acceptance")}</span>
+            <div className="mt-5 border border-white/10 bg-night-950 p-1">
+              <div
+                className="h-2 bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+          </Panel>
+
+          <Panel className="min-w-0">
+            <SectionTitle
+              icon={<BookOpen size={18} />}
+              title={t("generate.outputTitle")}
+              hint={t("generate.outputHint")}
+            />
+            {outputs.length === 0 ? (
+              <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
+            ) : (
+              <div className="space-y-4">
+                {outputs.map((block, index) => (
+                  <Suspense key={`${block.chapter}-${index}`} fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}>
+                    <LazyOutputBlock
+                      block={block}
+                      fallbackName={taskName(index)}
+                      waitingText={t("generate.waitingModel")}
+                      auditResultLabel={t("generate.auditResult")}
+                      revisedLabel={t("generate.revised")}
+                    />
+                  </Suspense>
+                ))}
               </div>
-              {reportSummary && <p className="mt-3 text-sm text-slate-300">{reportSummary}</p>}
+            )}
+          </Panel>
+
+          {(downloadPath || reportPath || reportSummary || postFillChecks) && (
+            <Panel className="min-w-0">
+              <SectionTitle
+                icon={<FileCheck2 size={18} />}
+                title={t("generate.acceptance")}
+                hint={t("generate.acceptanceHint")}
+              />
+
+              {(downloadPath || reportPath) && (
+                <div className="mb-5 flex flex-wrap gap-3">
+                  {downloadPath && (
+                    <a
+                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-signal-lime bg-signal-lime px-4 text-sm font-bold text-night-950 sm:min-h-11 sm:w-auto sm:font-semibold"
+                      href={downloadUrl(downloadPath)}
+                    >
+                      <Download size={17} />
+                      {t("generate.downloadDoc")}
+                    </a>
+                  )}
+                  {reportPath && (
+                    <a
+                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-white/10 bg-white/[0.055] px-4 text-sm font-bold text-slate-100 sm:min-h-11 sm:w-auto sm:font-semibold"
+                      href={downloadUrl(reportPath)}
+                    >
+                      <FileText size={17} />
+                      {t("generate.downloadReport")}
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {reportSummary && <p className="mb-4 break-words text-sm leading-7 text-slate-300">{reportSummary}</p>}
+
               {postFillChecks && (
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <div className="border border-white/10 bg-night-900/70 p-3 text-sm text-slate-300">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="min-w-0 border border-white/10 bg-night-900/70 p-3 text-sm text-slate-300">
                     <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("generate.checkResult")}</p>
                     <p className="mt-2 text-white">{postFillChecks.ok ? t("generate.pass") : t("generate.review")}</p>
-                    <p className="mt-2 text-xs text-slate-400">
+                    <p className="mt-2 break-words text-xs text-slate-400">
                       template words {postFillChecks.template_words ?? "-"} / output words{" "}
                       {postFillChecks.output_words ?? "-"}
                     </p>
                   </div>
-                  <div className="border border-white/10 bg-night-900/70 p-3 text-sm text-slate-300">
+                  <div className="min-w-0 border border-white/10 bg-night-900/70 p-3 text-sm text-slate-300">
                     <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("generate.structure")}</p>
-                    <p className="mt-2 text-white">
+                    <p className="mt-2 break-words text-white">
                       template tables {postFillChecks.template_tables ?? "-"} / output tables{" "}
                       {postFillChecks.output_tables ?? "-"}
                     </p>
-                    <p className="mt-2 text-xs text-slate-400">
+                    <p className="mt-2 break-words text-xs text-slate-400">
                       cover {postFillChecks.cover_modified ? t("generate.review") : t("generate.pass")}, rating table{" "}
                       {postFillChecks.rating_table_modified ? t("generate.review") : t("generate.pass")}
                     </p>
                   </div>
                 </div>
               )}
+            </Panel>
+          )}
+
+          {(hasAuditIssues || checkHighlights.length > 0 || visualScore !== null) && (
+            <Panel className="min-w-0">
+              <SectionTitle
+                icon={<Search size={18} />}
+                title={t("generate.auditPanelTitle")}
+                hint={t("generate.auditPanelHint")}
+              />
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="border border-white/10 bg-night-950/70 p-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.visualTarget")}</p>
+                  <p className="mt-2 font-display text-2xl font-semibold text-signal-cyan">{visualTarget}</p>
+                </div>
+                <div className="border border-white/10 bg-night-950/70 p-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.auditIssues")}</p>
+                  <p className={clsx("mt-2 font-display text-2xl font-semibold", hasAuditIssues || checkHighlights.length ? "text-signal-amber" : "text-signal-lime")}>
+                    {outputs.reduce((sum, block) => sum + (block.auditIssues?.length ?? 0), 0) + checkHighlights.length}
+                  </p>
+                </div>
+                <div className="border border-white/10 bg-night-950/70 p-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.retrievalProfile")}</p>
+                  <p className="mt-2 font-display text-2xl font-semibold text-signal-lime">
+                    {topK}/{maxDistance}
+                  </p>
+                </div>
+              </div>
               {checkHighlights.length > 0 && (
                 <div className="mt-3 space-y-2">
                   {checkHighlights.map((item) => (
                     <div
                       key={item}
-                      className="border border-signal-amber/30 bg-signal-amber/10 px-3 py-2 text-sm text-amber-100"
+                      className="break-words border border-signal-amber/30 bg-signal-amber/10 px-3 py-2 text-sm text-amber-100"
                     >
                       {item}
                     </div>
                   ))}
                 </div>
               )}
-            </section>
+            </Panel>
           )}
 
-          {outputs.length === 0 ? (
-            <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
-          ) : (
-            <div className="space-y-4">
-              {outputs.map((block, index) => (
-                <article key={`${block.chapter}-${index}`} className="border border-white/10 bg-night-950/70 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <p className="font-display text-lg font-semibold text-signal-cyan">
-                      {block.chapter || taskName(index)}
-                    </p>
-                    <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                      {block.tier && (
-                        <span className="border border-white/10 bg-night-900/70 px-2 py-1">
-                          route: {block.tier}
-                        </span>
-                      )}
-                      {block.model && (
-                        <span className="border border-white/10 bg-night-900/70 px-2 py-1">
-                          model: {block.model}
-                        </span>
-                      )}
-                      {typeof block.kbHits === "number" && (
-                        <span className="border border-white/10 bg-night-900/70 px-2 py-1">
-                          kb hits: {block.kbHits}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {block.evidenceRefs && block.evidenceRefs.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {block.evidenceRefs.slice(0, 5).map((item) => (
-                        <span
-                          key={item}
-                          className="border border-signal-cyan/20 bg-signal-cyan/10 px-2 py-1 text-xs text-cyan-100"
-                        >
-                          {item}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {block.auditIssues && block.auditIssues.length > 0 && (
-                    <div className="mt-3 border border-signal-amber/30 bg-signal-amber/10 p-3 text-sm text-amber-100">
-                      <p className="font-semibold">
-                        {t("generate.auditResult")}: {block.auditVerdict || "issue"}
-                        {block.revised ? t("generate.revised") : ""}
-                      </p>
-                      <div className="mt-2 space-y-1">
-                        {block.auditIssues.slice(0, 5).map((issue) => (
-                          <p key={issue}>{issue}</p>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <pre className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-slate-300">
-                    {block.text || t("generate.waitingModel")}
-                  </pre>
-                </article>
-              ))}
-            </div>
+          {(runBilling || billingSummary) && (
+            <Panel className="min-w-0">
+              <SectionTitle
+                icon={<Cpu size={18} />}
+                title={t("generate.billingTitle")}
+                hint={t("generate.billingHint")}
+              />
+              <div className="grid gap-3 md:grid-cols-3">
+                <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
+                <Stat label={t("generate.inputTokens")} value={runBilling?.input_tokens ?? "-"} />
+                <Stat label={t("generate.outputTokens")} value={runBilling?.output_tokens ?? "-"} tone="amber" />
+              </div>
+              {billingSummary && (
+                <p className="mt-3 break-words border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-5 text-slate-500">
+                  {t("generate.totalCost")}: {formatCny(billingSummary.cost_cny)} · {billingSummary.generation_count} runs
+                </p>
+              )}
+            </Panel>
           )}
-        </Panel>
+        </div>
       </div>
 
       {confirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-night-950/90 px-4 backdrop-blur">
-          <div className="max-w-md border border-white/10 bg-night-900 p-6 shadow-panel">
-            <h3 className="font-display text-xl font-semibold text-white">{t("generate.confirmTitle")}</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">{t("generate.confirmBody")}</p>
-            <div className="mt-5 flex justify-end gap-3">
-              <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
+          <div className="w-full max-w-md border border-white/10 bg-night-900 p-5 shadow-panel md:p-6">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/10 text-signal-cyan">
+                <Layers3 size={19} />
+              </div>
+              <h3 className="font-display text-xl font-semibold text-white">{t("generate.confirmTitle")}</h3>
+            </div>
+            <p className="text-sm leading-7 text-slate-300">{t("generate.confirmBody")}</p>
+            <div className="mt-5 grid gap-3 sm:flex sm:justify-end">
+              <Button className="min-h-12 w-full sm:w-auto" variant="ghost" onClick={() => setConfirmOpen(false)}>
                 {t("generate.cancel")}
               </Button>
-              <Button onClick={start}>
+              <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={start}>
                 <Play size={17} />
                 {t("generate.confirmStart")}
               </Button>

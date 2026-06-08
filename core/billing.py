@@ -208,13 +208,30 @@ def save_user_api_key(user_id: int, api_key: str, db_path: str | None = None) ->
 def get_user_api_key_status(user_id: int, db_path: str | None = None) -> dict[str, Any]:
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT created_at, updated_at FROM user_api_keys WHERE user_id = ?",
+            "SELECT encrypted_api_key, created_at, updated_at FROM user_api_keys WHERE user_id = ?",
             (user_id,),
         ).fetchone()
+    if row is None:
+        return {
+            "has_key": False,
+            "created_at": None,
+            "updated_at": None,
+            "key_preview": None,
+        }
+    preview = None
+    try:
+        decrypted = decrypt_api_key(str(row["encrypted_api_key"]))
+        if decrypted and len(decrypted) > 8:
+            preview = f"{decrypted[:4]}{'*' * (len(decrypted) - 8)}{decrypted[-4:]}"
+        elif decrypted:
+            preview = "****"
+    except Exception:
+        preview = "****"
     return {
-        "has_key": row is not None,
-        "created_at": str(row["created_at"]) if row else None,
-        "updated_at": str(row["updated_at"]) if row else None,
+        "has_key": True,
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+        "key_preview": preview,
     }
 
 

@@ -133,17 +133,17 @@ export default function KnowledgeBasePage() {
       />
       <ErrorBanner message={error} />
 
-      <div className="grid gap-6 xl:grid-cols-[390px_1fr]">
+      <div className="grid gap-6 xl:grid-cols-[390px_minmax(0,1fr)]">
         <div className="space-y-6">
           <Panel>
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <p className="font-display text-2xl font-semibold text-white">{t("knowledge.create")}</p>
-                <p className="text-sm text-slate-500">{t("knowledge.createHint")}</p>
+            <div className="mb-4 flex items-start justify-between gap-4 md:mb-5">
+              <div className="min-w-0">
+                <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("knowledge.create")}</p>
+                <p className="mt-0.5 text-xs text-slate-500 md:text-sm">{t("knowledge.createHint")}</p>
               </div>
-              <Database className="text-signal-lime" size={24} />
+              <Database className="shrink-0 text-signal-lime" size={22} />
             </div>
-            <div className="space-y-4">
+            <div className="space-y-3.5 md:space-y-4">
               <Field label={t("knowledge.label")}>
                 <Input
                   value={label}
@@ -158,7 +158,7 @@ export default function KnowledgeBasePage() {
                   onChange={(event) => setSlug(event.target.value)}
                 />
               </Field>
-              <Button className="w-full" onClick={onCreate} disabled={!label.trim() || loading}>
+              <Button className="min-h-12 w-full font-bold" onClick={onCreate} disabled={!label.trim() || loading}>
                 {loading ? <Loader2 className="animate-spin" size={17} /> : <Plus size={17} />}
                 {t("knowledge.createButton")}
               </Button>
@@ -166,17 +166,17 @@ export default function KnowledgeBasePage() {
           </Panel>
 
           <Panel>
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <p className="font-display text-2xl font-semibold text-white">{t("knowledge.upload")}</p>
-                <p className="text-sm text-slate-500">{t("knowledge.uploadHint")}</p>
+            <div className="mb-4 flex items-start justify-between gap-4 md:mb-5">
+              <div className="min-w-0">
+                <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("knowledge.upload")}</p>
+                <p className="mt-0.5 text-xs text-slate-500 md:text-sm">{t("knowledge.uploadHint")}</p>
               </div>
-              <UploadCloud className="text-signal-cyan" size={24} />
+              <UploadCloud className="shrink-0 text-signal-cyan" size={22} />
             </div>
-            <div className="space-y-4">
+            <div className="space-y-3.5 md:space-y-4">
               <Field label={t("knowledge.target")}>
                 <select
-                  className="min-h-10 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none focus:border-signal-cyan/70"
+                  className="min-h-12 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none transition focus:border-signal-cyan/70"
                   value={selectedSlug}
                   onChange={(event) => setSelectedSlug(event.target.value)}
                 >
@@ -187,9 +187,9 @@ export default function KnowledgeBasePage() {
                   ))}
                 </select>
               </Field>
-              <label className="flex min-h-36 cursor-pointer flex-col items-center justify-center border border-dashed border-white/18 bg-night-950/60 px-5 py-7 text-center transition hover:border-signal-cyan/60">
-                <FileArchive className="mb-3 text-signal-cyan" size={31} />
-                <span className="font-display text-lg font-semibold text-white">
+              <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center border border-dashed border-white/18 bg-night-950/60 px-4 py-5 text-center transition hover:border-signal-cyan/60 hover:bg-signal-cyan/5 md:min-h-36 md:px-5 md:py-7">
+                <FileArchive className="mb-2 text-signal-cyan md:mb-3" size={28} />
+                <span className="font-display text-base font-semibold text-white md:text-lg">
                   {files.length ? `${files.length} ${t("knowledge.filesSelected")}` : t("knowledge.chooseFiles")}
                 </span>
                 <span className="mt-2 text-xs text-slate-500">{t("knowledge.multiHint")}</span>
@@ -201,7 +201,7 @@ export default function KnowledgeBasePage() {
                 />
               </label>
               <Button
-                className="w-full"
+                className="min-h-12 w-full font-bold"
                 onClick={onUpload}
                 disabled={!selectedSlug || files.length === 0 || loading}
               >
@@ -212,26 +212,26 @@ export default function KnowledgeBasePage() {
           </Panel>
         </div>
 
-        <Panel>
+        <Panel className="min-w-0">
           <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p className="font-display text-2xl font-semibold text-white">{t("knowledge.status")}</p>
-              <p className="mt-1 text-sm text-slate-500">
+            <div className="min-w-0">
+              <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("knowledge.status")}</p>
+              <p className="mt-1 break-words text-sm text-slate-500">
                 {selected ? `${selected.label || selected.name || selected.slug} / ${selected.slug}` : t("knowledge.noneSelected")}
               </p>
             </div>
             {selectedSlug && (
-              <Button variant="danger" onClick={() => onDeleteKb(selectedSlug)} disabled={loading}>
+              <Button className="min-h-12 w-full md:min-h-11 md:w-auto" variant="danger" onClick={() => onDeleteKb(selectedSlug)} disabled={loading}>
                 <Trash2 size={17} />
                 {t("knowledge.delete")}
               </Button>
             )}
           </div>
 
-          <div className="mb-6 grid gap-3 md:grid-cols-3">
+          <div className="mb-5 grid grid-cols-2 gap-3 md:mb-6 md:grid-cols-3">
             <Stat label={t("knowledge.total")} value={items.length} />
             <Stat label={t("knowledge.sources")} value={stats?.source_count ?? 0} tone="lime" />
-            <Stat label={t("knowledge.chunkCount")} value={stats?.chunk_count ?? 0} tone="amber" />
+            <Stat className="col-span-2 md:col-span-1" label={t("knowledge.chunkCount")} value={stats?.chunk_count ?? 0} tone="amber" />
           </div>
 
           {uploadResults.length > 0 && (
@@ -239,9 +239,9 @@ export default function KnowledgeBasePage() {
               <p className="mb-3 font-display text-lg font-semibold text-white">{t("knowledge.recentUpload")}</p>
               <div className="space-y-2">
                 {uploadResults.map((result) => (
-                  <div key={result.file} className="flex justify-between gap-4 text-sm">
-                    <span className="truncate text-slate-300">{result.file}</span>
-                    <span className={result.ok ? "text-signal-lime" : "text-signal-rose"}>
+                  <div key={result.file} className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+                    <span className="min-w-0 break-all text-slate-300">{result.file}</span>
+                    <span className={result.ok ? "text-signal-lime" : "break-words text-signal-rose"}>
                       {result.ok ? `${result.chunks ?? 0} chunks` : result.error}
                     </span>
                   </div>
@@ -253,14 +253,15 @@ export default function KnowledgeBasePage() {
           {!stats || stats.sources.length === 0 ? (
             <EmptyState title={t("knowledge.empty")} body={t("knowledge.emptyBody")} />
           ) : (
-            <div className="divide-y divide-white/10 border border-white/10">
+            <div className="grid gap-2.5 md:gap-3">
               {stats.sources.map((source) => (
-                <div key={source} className="flex items-center justify-between gap-4 p-4">
+                <div key={source} className="flex items-center justify-between gap-3 border border-white/10 bg-night-850/70 px-3.5 py-3 transition hover:border-signal-cyan/30 hover:bg-night-800/70 md:p-4">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-white">{source}</p>
-                    <p className="mt-1 text-xs text-slate-500">vector source</p>
+                    <p className="break-all text-sm font-semibold text-white">{source}</p>
+                    <p className="mt-1 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">vector source</p>
                   </div>
                   <Button
+                    className="min-h-11 w-11 shrink-0 px-0"
                     variant="ghost"
                     onClick={() => onRemoveSource(source)}
                     disabled={loading}

@@ -79,6 +79,7 @@ export type ApiKeyStatus = {
   has_key: boolean;
   created_at?: string | null;
   updated_at?: string | null;
+  key_preview?: string | null;
 };
 
 export type UserPreferences = {
@@ -121,6 +122,7 @@ export type GenerateEvent =
 export type GenerateParams = {
   slug: string;
   template: string;
+  customInstructions?: string;
   wordLimit: number;
   topK: number;
   maxDistance: number;

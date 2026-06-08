@@ -16,19 +16,22 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { useAuth } from "./auth";
 import { Button } from "./components/ui";
 import { useI18n } from "./i18n";
-import GeneratePage from "./pages/GeneratePage";
 import HomePage from "./pages/HomePage";
-import KnowledgeBasePage from "./pages/KnowledgeBasePage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
-import AdminPage from "./pages/AdminPage";
-import SettingsPage from "./pages/SettingsPage";
-import TemplateAnalysisPage from "./pages/TemplateAnalysisPage";
 import { clsx } from "./utils";
+import { PullToRefresh } from "./components/PullToRefresh";
+
+const AdminPage = lazy(() => import("./pages/AdminPage"));
+const GeneratePage = lazy(() => import("./pages/GeneratePage"));
+const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const TemplateAnalysisPage = lazy(() => import("./pages/TemplateAnalysisPage"));
 
 const nav = [
   { to: "/", labelKey: "nav.home", icon: Home },
@@ -55,6 +58,27 @@ function ProtectedRoute({ children }: { children: ReactElement }) {
   return children;
 }
 
+function OfflineBanner() {
+  const [offline, setOffline] = useState(!navigator.onLine);
+  useEffect(() => {
+    const onOff = () => setOffline(true);
+    const onOn = () => setOffline(false);
+    window.addEventListener("offline", onOff);
+    window.addEventListener("online", onOn);
+    return () => {
+      window.removeEventListener("offline", onOff);
+      window.removeEventListener("online", onOn);
+    };
+  }, []);
+  if (!offline) return null;
+  return (
+    <div className="fixed inset-x-0 top-0 z-50 flex items-center justify-center gap-2 bg-signal-amber px-3 py-2 text-xs font-bold text-night-950 shadow-lg">
+      <span>⚠</span>
+      <span>Network disconnected — some features may be unavailable</span>
+    </div>
+  );
+}
+
 function Shell() {
   const auth = useAuth();
   const { t } = useI18n();
@@ -67,6 +91,7 @@ function Shell() {
 
   return (
     <div className="min-h-screen bg-night-950 text-slate-100">
+      <OfflineBanner />
       <div className="fixed inset-0 -z-10 bg-[linear-gradient(115deg,#05060a_0%,#09111d_44%,#111019_100%)]" />
       <div className="fixed inset-0 -z-10 opacity-45 grid-mask" />
       <div className="fixed inset-x-0 top-0 -z-10 h-64 bg-[linear-gradient(90deg,rgba(54,242,230,0.16),rgba(255,77,141,0.08),rgba(184,255,94,0.10))]" />
@@ -141,8 +166,48 @@ function Shell() {
       </aside>
 
       <div className="lg:pl-72">
-        <header className="sticky top-0 z-10 border-b border-white/10 bg-night-950/82 px-4 py-3 backdrop-blur lg:hidden">
-          <div className="flex items-center gap-2 overflow-x-auto">
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-night-950/90 px-4 py-2.5 backdrop-blur-md lg:hidden">
+          <div className="flex min-h-10 items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate font-display text-[15px] font-semibold leading-tight text-white">
+                {t("app.name")}
+              </p>
+              <p className="truncate text-[11px] leading-4 text-slate-500">{t("app.subtitle")}</p>
+            </div>
+            <button
+              className="flex h-10 w-10 shrink-0 items-center justify-center border border-white/10 bg-white/[0.035] text-slate-400 transition hover:border-white/25 hover:text-white active:border-signal-cyan/40 active:text-signal-cyan"
+              onClick={handleLogout}
+              title={t("nav.signOut")}
+              type="button"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
+        </header>
+        <PullToRefresh>
+        <main className="mx-auto w-full max-w-7xl px-4 pb-36 pt-5 overscroll-y-contain md:px-8 md:pb-10 md:pt-10">
+          <Suspense
+            fallback={
+              <div className="py-12 text-sm font-semibold tracking-widest text-slate-400 uppercase">
+                Loading...
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/template" element={<TemplateAnalysisPage />} />
+              <Route path="/generate" element={<GeneratePage />} />
+              <Route path="/knowledge" element={<KnowledgeBasePage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
+        </main>
+        </PullToRefresh>
+
+        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-night-950/92 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-1.5 backdrop-blur-md lg:hidden">
+          <div className="grid grid-cols-5 gap-1">
             {nav.map((item) => {
               const Icon = item.icon;
               return (
@@ -152,39 +217,20 @@ function Shell() {
                   end={item.to === "/"}
                   className={({ isActive }) =>
                     clsx(
-                      "flex shrink-0 items-center gap-2 border px-3 py-2 text-xs font-semibold",
+                      "relative flex min-h-14 flex-col items-center justify-center gap-0.5 overflow-hidden border px-1 text-[11px] font-semibold leading-tight transition active:scale-[0.98]",
                       isActive
-                        ? "border-signal-cyan/60 text-signal-cyan"
-                        : "border-white/10 text-slate-400",
+                        ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan shadow-glow before:absolute before:left-1/2 before:top-0 before:h-0.5 before:w-7 before:-translate-x-1/2 before:bg-signal-cyan before:shadow-[0_0_18px_rgba(54,242,230,0.75)]"
+                        : "border-transparent text-slate-500 hover:bg-white/[0.035] hover:text-slate-300 active:text-signal-cyan/80",
                     )
                   }
                 >
-                  <Icon size={15} />
-                  {t(item.labelKey)}
+                  <Icon size={17} strokeWidth={2.2} />
+                  <span className="max-w-full truncate">{t(item.labelKey)}</span>
                 </NavLink>
               );
             })}
-            <button
-              className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400"
-              onClick={handleLogout}
-              title={t("nav.signOut")}
-              type="button"
-            >
-              <LogOut size={16} />
-            </button>
           </div>
-        </header>
-        <main className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-10">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/template" element={<TemplateAnalysisPage />} />
-            <Route path="/generate" element={<GeneratePage />} />
-            <Route path="/knowledge" element={<KnowledgeBasePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </main>
+        </nav>
       </div>
     </div>
   );

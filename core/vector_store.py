@@ -1,3 +1,5 @@
+import json
+import logging
 from collections import Counter
 from typing import Any, List, Dict, Optional
 import time
@@ -9,6 +11,9 @@ from core.chunker import Chunk
 from core.kb_registry import collection_name_for_slug
 from core.openai_embeddings import TimeoutOpenAIEmbedding
 import config
+
+
+_LOG = logging.getLogger(__name__)
 
 
 def _patch_chromadb_sqlite_seq_id_decode() -> None:
@@ -77,14 +82,54 @@ class VectorStore:
             name=self._collection_name,
             embedding_function=self._embedding_fn,
         )
+        self._search_cache: Dict[str, tuple[float, List[Dict]]] = {}
+        self._search_cache_max_size = int(config.VECTOR_CACHE_MAX_SIZE)
+        self._search_cache_ttl_seconds = int(config.VECTOR_CACHE_TTL_SECONDS)
 
     @property
     def collection_name(self) -> str:
         return self._collection_name
 
+    def cache_clear(self) -> None:
+        self._search_cache.clear()
+
+    def _search_cache_key(
+        self,
+        query: str,
+        top_k: int,
+        max_distance: Optional[float],
+        filter_dict: Optional[Dict],
+    ) -> str:
+        return json.dumps([query, top_k, max_distance, filter_dict], sort_keys=True)
+
+    def _search_cache_get(self, cache_key: str) -> Optional[List[Dict]]:
+        if self._search_cache_max_size <= 0 or self._search_cache_ttl_seconds <= 0:
+            return None
+        cached = self._search_cache.get(cache_key)
+        if cached is None:
+            return None
+        cached_at, items = cached
+        if time.time() - cached_at > self._search_cache_ttl_seconds:
+            self._search_cache.pop(cache_key, None)
+            return None
+        self._search_cache.pop(cache_key, None)
+        self._search_cache[cache_key] = (cached_at, items)
+        _LOG.debug("Vector search cache hit: %s", cache_key)
+        return [dict(item) for item in items]
+
+    def _search_cache_set(self, cache_key: str, items: List[Dict]) -> None:
+        if self._search_cache_max_size <= 0 or self._search_cache_ttl_seconds <= 0:
+            return
+        self._search_cache.pop(cache_key, None)
+        self._search_cache[cache_key] = (time.time(), [dict(item) for item in items])
+        while len(self._search_cache) > self._search_cache_max_size:
+            oldest_key = next(iter(self._search_cache))
+            self._search_cache.pop(oldest_key, None)
+
     def add_documents(self, chunks: List[Chunk]):
         if not chunks:
             return
+        self.cache_clear()
         sources = set(c.metadata.get("source", "") for c in chunks)
         for src in sources:
             self.delete_by_source(src)
@@ -117,6 +162,11 @@ class VectorStore:
         filter_dict: Optional[Dict] = None,
         max_distance: Optional[float] = None,
     ) -> List[Dict]:
+        cache_key = self._search_cache_key(query, top_k, max_distance, filter_dict)
+        cached_items = self._search_cache_get(cache_key)
+        if cached_items is not None:
+            return cached_items
+
         kwargs: Dict = {
             "query_texts": [query],
             "n_results": top_k,
@@ -133,12 +183,14 @@ class VectorStore:
         docs_outer = results.get("documents") if results else None
         doc_row = _first_row(docs_outer)
         if doc_row is None:
+            self._search_cache_set(cache_key, items)
             return items
         dist_row = _first_row(results.get("distances"))
         meta_row = _first_row(results.get("metadatas"))
         try:
             row_len = len(doc_row)
         except TypeError:
+            self._search_cache_set(cache_key, items)
             return items
         for i in range(row_len):
             try:
@@ -168,6 +220,7 @@ class VectorStore:
                     "distance": float(dist) if dist is not None else None,
                 }
             )
+        self._search_cache_set(cache_key, items)
         return items
 
     def list_sources(self) -> List[str]:
@@ -192,6 +245,7 @@ class VectorStore:
         return dict(c)
 
     def delete_by_source(self, source: str):
+        self.cache_clear()
         try:
             self._collection.delete(where={"source": source})
         except Exception:
@@ -232,6 +286,7 @@ class VectorStore:
 
     def delete_entire_collection(self):
         """删除当前 kb 对应的整个 Chroma collection。"""
+        self.cache_clear()
         try:
             self._client.delete_collection(self._collection_name)
         except Exception:

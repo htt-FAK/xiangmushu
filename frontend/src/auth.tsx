@@ -222,3 +222,11 @@ export async function verifyLoginCode(email: string, password: string, code: str
 export async function loginWithPassword(email: string, password: string) {
   return authRequest<VerifyCodeResponse>("/api/auth/login", { email, password });
 }
+
+export async function resetPassword(email: string, code: string, newPassword: string) {
+  return authRequest<VerifyCodeResponse>("/api/auth/reset-password", {
+    email,
+    code,
+    new_password: newPassword,
+  });
+}

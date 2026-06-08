@@ -87,6 +87,8 @@ TEMP_LARGE_LLM = float(os.getenv("TEMP_LARGE_LLM", "0.65"))
 
 # 检索：Chroma 返回的 distance，越小通常越相似（与距离度量有关）；超过则视为弱相关
 RETRIEVAL_MAX_DISTANCE = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "1.25"))
+VECTOR_CACHE_MAX_SIZE = int(os.getenv("VECTOR_CACHE_MAX_SIZE", "64"))
+VECTOR_CACHE_TTL_SECONDS = int(os.getenv("VECTOR_CACHE_TTL_SECONDS", "300"))
 # 侧栏开启「联网补料」时：除空库/无命中外，若最佳命中的估算相似度低于该值也走百炼 enable_search。
 # 估算式 sim ≈ 1 - min(distance)（夹在 0~1），与 Chroma 余弦距离族一致；其它度量下请用环境变量微调阈值。
 RETRIEVAL_WEB_SIMILARITY_THRESHOLD = float(
@@ -134,6 +136,7 @@ USER_API_KEY_ENCRYPTION_KEY = os.getenv(
     "USER_API_KEY_ENCRYPTION_KEY",
     os.getenv("AUTH_JWT_SECRET", "dev-change-me-auth-secret"),
 ).strip()
+UPLOAD_MAX_SIZE_MB = int(os.getenv("UPLOAD_MAX_SIZE_MB", "50"))
 
 # 单次入库写入 Chroma 的最大 chunk 数（减小单次 embedding 体积，降低超时概率）
 EMBED_ADD_BATCH_SIZE = int(os.getenv("EMBED_ADD_BATCH_SIZE", "12"))

@@ -21,6 +21,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+  if (response.status === 401) {
+    window.localStorage.removeItem("xiangmushu.auth.token");
+    const currentPath = window.location.pathname;
+    if (currentPath !== "/login") {
+      window.location.href = `/login?next=${encodeURIComponent(currentPath)}`;
+    }
+    throw new Error("Session expired");
+  }
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || `HTTP ${response.status}`);
@@ -140,6 +148,7 @@ export async function streamGenerate(
   const form = new FormData();
   form.append("slug", params.slug);
   form.append("template", params.template);
+  form.append("custom_instructions", params.customInstructions ?? "");
   form.append("word_limit", String(params.wordLimit));
   form.append("top_k", String(params.topK));
   form.append("max_distance", String(params.maxDistance));

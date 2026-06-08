@@ -34,6 +34,7 @@ from core.auth import (
     get_user_preferences,
     get_or_create_user,
     init_db,
+    reset_password_with_code,
     send_verification_email,
     update_user_preferences,
     user_from_token,
@@ -47,6 +48,19 @@ from core.billing import (
     normalize_usage,
     record_billing,
     save_user_api_key,
+)
+from core.audit_log import (
+    ADMIN_ACCESS,
+    API_KEY_DELETED,
+    API_KEY_SAVED,
+    CODE_REQUESTED,
+    FILE_UPLOADED,
+    LOGIN_FAILED,
+    LOGIN_SUCCESS,
+    PASSWORD_RESET_FAILED,
+    PASSWORD_RESET_SUCCESS,
+    REGISTER_SUCCESS,
+    log_audit,
 )
 
 
@@ -119,7 +133,24 @@ def validate_password(password: str) -> tuple[bool, str]:
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "unknown")
+
+
+def _user_agent(request: Request) -> str:
+    return request.headers.get("user-agent", "")
+
+
+def _upload_size_limit_bytes() -> int:
+    return config.UPLOAD_MAX_SIZE_MB * 1024 * 1024
+
+
+def _raise_if_upload_too_large(content: bytes) -> None:
+    if len(content) > _upload_size_limit_bytes():
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"文件大小超过限制（最大 {config.UPLOAD_MAX_SIZE_MB}MB）",
+        )
 
 
 app = FastAPI(title="智能计划书生成器")
@@ -141,6 +172,12 @@ class VerifyCodeRequest(BaseModel):
     email: str
     code: str
     password: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
 
 
 class ApiKeyRequest(BaseModel):
@@ -226,6 +263,11 @@ if os.path.isdir(FRONTEND_ASSETS_DIR):
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
 
 
+@app.get("/api/health")
+async def health_check():
+    return {"ok": True, "service": "xiangmushu", "status": "healthy"}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return FileResponse(_spa_index_path(), media_type="text/html")
@@ -235,13 +277,21 @@ async def index():
 # 知识库 API
 # ---------------------------------------------------------------------------
 @app.post("/api/auth/request-code")
-async def auth_request_code(payload: EmailRequest):
+async def auth_request_code(payload: EmailRequest, request: Request):
     email_key = payload.email.lower().strip()
     if not rate_limiter.allow(f"request-code:{email_key}", [(1, 60), (5, 3600)]):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
     try:
         verification = create_verification_code(payload.email, password=payload.password)
-        send_verification_email(verification.email, verification.code)
+        purpose = "reset_password" if payload.password is None else "register"
+        send_verification_email(verification.email, verification.code, purpose=purpose)
+        log_audit(
+            CODE_REQUESTED,
+            email=verification.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"purpose": purpose},
+        )
         return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
     except (InvalidEmailError, InvalidPasswordError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
@@ -251,40 +301,131 @@ async def auth_request_code(payload: EmailRequest):
 
 
 @app.post("/api/auth/verify-code")
-async def auth_verify_code(payload: VerifyCodeRequest):
+async def auth_verify_code(payload: VerifyCodeRequest, request: Request):
     password_ok, password_message = validate_password(payload.password)
     if not password_ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_message)
     try:
         user = consume_verification_code(payload.email, payload.code, payload.password)
         token = create_access_token(user)
+        log_audit(
+            REGISTER_SUCCESS,
+            user_id=user.id,
+            email=user.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+        )
         return {
             "access_token": token,
             "token_type": "bearer",
             "user": {"id": user.id, "email": user.email},
         }
     except (InvalidEmailError, InvalidCodeError, InvalidPasswordError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid verification code",
+        ) from exc
+
+
+@app.post("/api/auth/reset-password")
+async def auth_reset_password(payload: ResetPasswordRequest, request: Request):
+    password_ok, password_message = validate_password(payload.new_password)
+    if not password_ok:
+        log_audit(
+            PASSWORD_RESET_FAILED,
+            email=payload.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"reason": "invalid_password"},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_message)
+    try:
+        user = reset_password_with_code(payload.email, payload.code, payload.new_password)
+        token = create_access_token(user)
+        log_audit(
+            PASSWORD_RESET_SUCCESS,
+            user_id=user.id,
+            email=user.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+        )
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {"id": user.id, "email": user.email},
+        }
+    except (InvalidEmailError, InvalidCodeError) as exc:
+        log_audit(
+            PASSWORD_RESET_FAILED,
+            email=payload.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"reason": "invalid_code"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid verification code",
+        ) from exc
+    except AuthError as exc:
+        log_audit(
+            PASSWORD_RESET_FAILED,
+            email=payload.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"reason": "auth_error"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid verification code",
+        ) from exc
 
 
 @app.post("/api/auth/login")
 async def auth_login(payload: LoginRequest, request: Request):
     """Login with email + password only (no verification code needed)."""
     if not rate_limiter.allow(f"login:{_client_ip(request)}", [(10, 60)]):
+        log_audit(
+            LOGIN_FAILED,
+            email=payload.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"reason": "rate_limited"},
+        )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
     try:
         user = get_or_create_user(payload.email)
         if not verify_password(payload.password, _get_password_hash(user.email)):
             raise InvalidPasswordError("Email or password is incorrect")
         token = create_access_token(user)
+        log_audit(
+            LOGIN_SUCCESS,
+            user_id=user.id,
+            email=user.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+        )
         return {
             "access_token": token,
             "token_type": "bearer",
             "user": {"id": user.id, "email": user.email},
         }
     except InvalidPasswordError as exc:
+        log_audit(
+            LOGIN_FAILED,
+            email=payload.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"reason": "invalid_credentials"},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except AuthError as exc:
+        log_audit(
+            LOGIN_FAILED,
+            email=payload.email,
+            ip=_client_ip(request),
+            ua=_user_agent(request),
+            detail={"reason": "auth_error"},
+        )
         logger.exception("Login failed")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -318,18 +459,36 @@ async def user_apikey_status(current_user: User = Depends(get_current_user)):
 @app.post("/api/user/apikey")
 async def user_apikey_save(
     payload: ApiKeyRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
 ):
     try:
         save_user_api_key(current_user.id, payload.api_key)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    log_audit(
+        API_KEY_SAVED,
+        user_id=current_user.id,
+        email=current_user.email,
+        ip=_client_ip(request),
+        ua=_user_agent(request),
+    )
     return {"ok": True, **get_user_api_key_status(current_user.id)}
 
 
 @app.delete("/api/user/apikey")
-async def user_apikey_delete(current_user: User = Depends(get_current_user)):
+async def user_apikey_delete(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
     delete_user_api_key(current_user.id)
+    log_audit(
+        API_KEY_DELETED,
+        user_id=current_user.id,
+        email=current_user.email,
+        ip=_client_ip(request),
+        ua=_user_agent(request),
+    )
     return {"ok": True, **get_user_api_key_status(current_user.id)}
 
 
@@ -384,6 +543,7 @@ async def kb_sources(
 
 @app.post("/api/kb/upload")
 async def kb_upload(
+    request: Request,
     slug: str = Form(...),
     files: list[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
@@ -394,12 +554,21 @@ async def kb_upload(
         fname = f.filename or getattr(f, "name", "unknown")
         save_path = os.path.join(config.HISTORICAL_DIR, fname)
         content = await f.read()
+        _raise_if_upload_too_large(content)
         with open(save_path, "wb") as out:
             out.write(content)
         try:
             parsed = path_to_parsed_document(save_path, original_name=fname)
             chunks = _chunker.chunk(parsed)
             vs.add_documents(chunks)
+            log_audit(
+                FILE_UPLOADED,
+                user_id=current_user.id,
+                email=current_user.email,
+                ip=_client_ip(request),
+                ua=_user_agent(request),
+                detail={"filename": fname, "chunks": len(chunks)},
+            )
             results.append({"file": fname, "ok": True, "chunks": len(chunks)})
         except Exception as e:
             results.append({"file": fname, "ok": False, "error": str(e)})
@@ -445,6 +614,7 @@ async def template_analyze(
     fname = file.filename or getattr(file, "name", "unknown")
     save_path = os.path.join(config.TEMPLATE_DIR, fname)
     content = await file.read()
+    _raise_if_upload_too_large(content)
     with open(save_path, "wb") as out:
         out.write(content)
     try:
@@ -471,6 +641,7 @@ async def generate(
     use_stream: bool = Form(True),
     enable_audit: bool = Form(False),
     enable_visual_audit: bool = Form(True),
+    custom_instructions: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
     vs = _get_vs(slug)
@@ -497,6 +668,10 @@ async def generate(
     generator = ContentGenerator(vs, api_key=user_api_key)
     auditor = ContentAuditor() if enable_audit else None
     language = get_user_preferences(current_user.id)["language"]
+    custom_instructions = (custom_instructions or "").strip()
+    if custom_instructions:
+        for task in tasks:
+            task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
 
     def event_stream():
         results: list[str] = []
@@ -673,7 +848,17 @@ async def download(
 
 
 @app.get("/api/admin/stats")
-async def admin_stats(admin: User = Depends(require_admin)):
+async def admin_stats(
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    log_audit(
+        ADMIN_ACCESS,
+        user_id=admin.id,
+        email=admin.email,
+        ip=_client_ip(request),
+        ua=_user_agent(request),
+    )
     import sqlite3 as _sqlite3
     db = config.AUTH_DB_PATH
     with _sqlite3.connect(db) as conn:

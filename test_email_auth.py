@@ -8,12 +8,12 @@ from fastapi.testclient import TestClient
 import config
 from core.auth import (
     InvalidCodeError,
-    InvalidPasswordError,
     consume_verification_code,
     create_access_token,
     create_verification_code,
     get_or_create_user,
     init_db,
+    reset_password_with_code,
     set_password,
     user_from_token,
     verify_password,
@@ -50,7 +50,7 @@ def auth_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
     monkeypatch.setattr(config, "AUTH_CODE_TTL_MINUTES", 10)
     monkeypatch.setattr(config, "AUTH_JWT_EXPIRE_MINUTES", 30)
-    monkeypatch.setattr(server, "send_verification_email", lambda email, code: None)
+    monkeypatch.setattr(server, "send_verification_email", lambda email, code, purpose="register": None)
     monkeypatch.setattr(server, "rate_limiter", server.SimpleRateLimiter())
     init_db(str(db_path))
     return db_path
@@ -65,6 +65,14 @@ def password_hash_for(db_path, email: str) -> str | None:
     with sqlite3.connect(db_path) as conn:
         row = conn.execute("SELECT password_hash FROM users WHERE email = ?", (email,)).fetchone()
     return row[0] if row else None
+
+
+def audit_actions(db_path) -> list[str]:
+    with sqlite3.connect(db_path) as conn:
+        return [
+            str(row[0])
+            for row in conn.execute("SELECT action FROM audit_logs ORDER BY id").fetchall()
+        ]
 
 
 def test_password_hash_round_trip():
@@ -104,8 +112,21 @@ def test_password_must_match_for_login(auth_db):
     consume_verification_code("user@example.com", "123456", "secret-1", db_path=str(auth_db))
 
     create_verification_code("user@example.com", code="654321", db_path=str(auth_db))
-    with pytest.raises(InvalidPasswordError):
+    with pytest.raises(InvalidCodeError, match="Invalid verification code"):
         consume_verification_code("user@example.com", "654321", "wrong-password", db_path=str(auth_db))
+
+
+def test_reset_password_with_code_updates_existing_user(auth_db):
+    create_verification_code("user@example.com", password="old-pass1", code="123456", db_path=str(auth_db))
+    user = consume_verification_code("user@example.com", "123456", "old-pass1", db_path=str(auth_db))
+    create_verification_code("user@example.com", code="654321", db_path=str(auth_db))
+
+    reset_user = reset_password_with_code("user@example.com", "654321", "new-pass1", db_path=str(auth_db))
+
+    assert reset_user.id == user.id
+    assert verify_password("new-pass1", password_hash_for(auth_db, "user@example.com"))
+    with pytest.raises(InvalidCodeError):
+        reset_password_with_code("user@example.com", "654321", "new-pass2", db_path=str(auth_db))
 
 
 def test_jwt_round_trip_loads_user(auth_db):
@@ -133,6 +154,8 @@ def test_auth_api_issues_token_and_me_returns_user(auth_db):
         assert me.status_code == 200
         assert me.json()["email"] == "user@example.com"
 
+    assert "REGISTER_SUCCESS" in audit_actions(auth_db)
+
 
 def test_verify_code_rejects_weak_password(auth_db):
     create_verification_code("user@example.com", password="short1", code="123456", db_path=str(auth_db))
@@ -145,6 +168,80 @@ def test_verify_code_rejects_weak_password(auth_db):
 
         assert response.status_code == 400
         assert "密码" in response.json()["detail"]
+
+
+def test_reset_password_api_issues_token_and_allows_new_password(auth_db):
+    create_verification_code("user@example.com", password="old-pass1", code="123456", db_path=str(auth_db))
+    consume_verification_code("user@example.com", "123456", "old-pass1", db_path=str(auth_db))
+    create_verification_code("user@example.com", code="654321", db_path=str(auth_db))
+
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/auth/reset-password",
+            json={"email": "user@example.com", "new_password": "new-pass1", "code": "654321"},
+        )
+        assert response.status_code == 200
+        token = response.json()["access_token"]
+
+        me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json()["email"] == "user@example.com"
+
+        old_login = client.post(
+            "/api/auth/login",
+            json={"email": "user@example.com", "password": "old-pass1"},
+        )
+        assert old_login.status_code == 401
+
+        new_login = client.post(
+            "/api/auth/login",
+            json={"email": "user@example.com", "password": "new-pass1"},
+        )
+        assert new_login.status_code == 200
+
+    actions = audit_actions(auth_db)
+    assert "PASSWORD_RESET_SUCCESS" in actions
+    assert "LOGIN_FAILED" in actions
+    assert "LOGIN_SUCCESS" in actions
+
+
+def test_reset_password_api_uses_uniform_invalid_code_message(auth_db):
+    create_verification_code("missing@example.com", code="654321", db_path=str(auth_db))
+
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/auth/reset-password",
+            json={"email": "missing@example.com", "new_password": "new-pass1", "code": "654321"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid verification code"
+    assert "PASSWORD_RESET_FAILED" in audit_actions(auth_db)
+
+
+def test_upload_endpoints_reject_files_over_size_limit(auth_db, monkeypatch):
+    monkeypatch.setattr(config, "UPLOAD_MAX_SIZE_MB", 0)
+    user = get_or_create_user("user@example.com", db_path=str(auth_db))
+    token = create_access_token(user)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(server.app) as client:
+        kb_response = client.post(
+            "/api/kb/upload",
+            headers=headers,
+            data={"slug": "kb1"},
+            files={"files": ("too-large.txt", b"x", "text/plain")},
+        )
+        template_response = client.post(
+            "/api/template/analyze",
+            headers=headers,
+            files={"file": ("too-large.docx", b"x", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+
+    assert kb_response.status_code == 413
+    assert kb_response.json()["detail"] == "文件大小超过限制（最大 0MB）"
+    assert template_response.status_code == 413
+    assert template_response.json()["detail"] == "文件大小超过限制（最大 0MB）"
 
 
 def test_request_code_rate_limits_same_email(auth_db):
