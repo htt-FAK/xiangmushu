@@ -115,6 +115,7 @@ RAG_SNIPPET_MAX_CHARS = int(os.getenv("RAG_SNIPPET_MAX_CHARS", "1100"))
 # 生成 max_tokens 上限（输出侧控费；实际取 min(硬顶, 字数×系数+余量)）
 GEN_MAX_TOKENS_HARD_CAP = int(os.getenv("GEN_MAX_TOKENS_HARD_CAP", "4096"))
 GEN_MAX_TOKENS_WORD_FACTOR = int(os.getenv("GEN_MAX_TOKENS_WORD_FACTOR", "5"))
+GENERATION_MAX_WORKERS = int(os.getenv("GENERATION_MAX_WORKERS", "5"))
 
 # OpenAI 客户端：超时与重试（embedding / 入库易触达默认短超时）
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "180"))

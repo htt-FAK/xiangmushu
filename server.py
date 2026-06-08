@@ -4,10 +4,12 @@ FastAPI 后端 — 为 HTML 前端提供 REST + SSE 接口
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import mimetypes
 import os
+import threading
 import time
 from dataclasses import asdict
 
@@ -231,6 +233,25 @@ _vs_cache: dict[str, VectorStore] = {}
 _chunker = Chunker()
 _analyzer = TemplateAnalyzer()
 _filler = WordFiller()
+
+# Template analysis cache: key=(template_path, mtime), value=tasks list
+_template_analysis_cache: dict[tuple[str, float], list] = {}
+_TEMPLATE_CACHE_MAX = 16
+
+
+def _cached_analyze(template_path: str) -> list:
+    """Analyze template with LRU-style cache keyed by path + mtime."""
+    mtime = os.path.getmtime(template_path)
+    key = (template_path, mtime)
+    if key in _template_analysis_cache:
+        return _template_analysis_cache[key]
+    tasks = _analyzer.analyze(template_path)
+    # Evict oldest entries if over limit
+    while len(_template_analysis_cache) >= _TEMPLATE_CACHE_MAX:
+        oldest = next(iter(_template_analysis_cache))
+        del _template_analysis_cache[oldest]
+    _template_analysis_cache[key] = tasks
+    return tasks
 
 
 def _get_vs(slug: str) -> VectorStore:
@@ -618,7 +639,7 @@ async def template_analyze(
     with open(save_path, "wb") as out:
         out.write(content)
     try:
-        tasks = _analyzer.analyze(save_path)
+        tasks = _cached_analyze(save_path)
         task_dicts = [asdict(t) for t in tasks]
         mode = "anchor" if tasks and tasks[0].location_hint.get(
             "anchor") else "infer"
@@ -651,7 +672,7 @@ async def generate(
 
     # 分析模板
     try:
-        tasks = _analyzer.analyze(template_path)
+        tasks = _cached_analyze(template_path)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"模板分析失败: {e}"}, status_code=500)
     if not tasks:
@@ -665,81 +686,69 @@ async def generate(
             {"ok": False, "error": f"Failed to load saved API Key: {exc}"},
             status_code=500,
         )
-    generator = ContentGenerator(vs, api_key=user_api_key)
-    auditor = ContentAuditor() if enable_audit else None
     language = get_user_preferences(current_user.id)["language"]
     custom_instructions = (custom_instructions or "").strip()
     if custom_instructions:
         for task in tasks:
             task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
+    billing_lock = threading.Lock()
 
-    def event_stream():
-        results: list[str] = []
-        traces = []
-        billing_records = []
-        for i, task in enumerate(tasks):
-            if task.word_limit <= 0:
-                task.word_limit = word_limit
-            # 通知前端当前任务
-            yield _sse({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
+    def _generate_one_task(i, task):
+        local_generator = ContentGenerator(vs, api_key=user_api_key)
+        local_auditor = ContentAuditor() if enable_audit else None
+        result = {
+            "index": i,
+            "content": "",
+            "route_meta": {},
+            "route": None,
+            "billing": None,
+            "audit": None,
+            "trace": None,
+            "error": None,
+            "chunks": [],
+        }
+        try:
+            gen_bundle = local_generator.prepare_generation_bundle(
+                task,
+                top_k=top_k,
+                enable_web=enable_web,
+                retrieval_max_distance=max_distance,
+                language=language,
+            )
+            result["route_meta"] = gen_bundle.route_meta
+            result["route"] = {
+                "type": "route",
+                "index": i,
+                "model": gen_bundle.model,
+                "tier": gen_bundle.route_meta.get("generation_tier"),
+                "kb_hits": gen_bundle.route_meta.get("kb_hits", 0),
+                "evidence_refs": gen_bundle.evidence_refs[:5],
+            }
+            if use_stream:
+                acc: list[str] = []
+                for piece in local_generator.stream_from_bundle(gen_bundle, route_hook=None):
+                    acc.append(piece)
+                content = "".join(acc).strip()
+                result["chunks"] = acc
+            else:
+                content = local_generator.generate_from_bundle(gen_bundle, route_hook=None)
+                result["chunks"] = [content]
+            result["content"] = content
 
-            try:
-                gen_bundle = generator.prepare_generation_bundle(
-                    task,
-                    top_k=top_k,
-                    enable_web=enable_web,
-                    retrieval_max_distance=max_distance,
-                    language=language,
-                )
-                yield _sse(
-                    {
-                        "type": "route",
-                        "index": i,
-                        "model": gen_bundle.model,
-                        "tier": gen_bundle.route_meta.get("generation_tier"),
-                        "kb_hits": gen_bundle.route_meta.get("kb_hits", 0),
-                        "evidence_refs": gen_bundle.evidence_refs[:5],
-                    }
-                )
-                if use_stream:
-                    acc: list[str] = []
-                    for piece in generator.stream_from_bundle(gen_bundle, route_hook=None):
-                        acc.append(piece)
-                        yield _sse({"type": "chunk", "index": i, "text": piece})
-                    content = "".join(acc).strip()
-                else:
-                    content = generator.generate_from_bundle(gen_bundle, route_hook=None)
-                    yield _sse({"type": "chunk", "index": i, "text": content})
-                billed_model, raw_usage = generator.pop_last_usage()
+            billed_model, raw_usage = local_generator.pop_last_usage()
+            with billing_lock:
                 billing_record = record_billing(
                     current_user.id,
                     billed_model or gen_bundle.model,
                     normalize_usage(raw_usage),
                 )
-                if billing_record is not None:
-                    billing_records.append(billing_record)
-                    yield _sse({"type": "billing", "index": i, "billing": billing_record})
-            except Exception as e:
-                content = f"（生成失败：{e}）"
-                yield _sse({"type": "error", "index": i, "error": str(e)})
-                results.append(content)
-                traces.append(
-                    build_generation_trace(
-                        task,
-                        {"model": "", "generation_tier": "error", "evidence_refs": []},
-                        content,
-                        audit_verdict="error",
-                        audit_issues=[str(e)],
-                    )
-                )
-                yield _sse({"type": "progress", "index": i, "total": len(tasks)})
-                continue
+            result["billing"] = billing_record
 
             audit_issues = rule_audit(task, content, gen_bundle.route_meta)
             audit_verdict = "pass" if not audit_issues else "rule_issue"
             revised = False
-            if auditor is not None and need_model_audit(task, gen_bundle.route_meta, audit_issues):
-                ar = auditor.audit(
+            if local_auditor is not None and need_model_audit(task, gen_bundle.route_meta, audit_issues):
+                ar = local_auditor.audit(
                     task,
                     content,
                     gen_bundle.ref_texts,
@@ -750,30 +759,83 @@ async def generate(
                 audit_issues = audit_issues + list(ar.issues)
                 if should_apply_revision(task, ar):
                     content = ar.revised_content.strip()
+                    result["content"] = content
                     revised = True
             if audit_issues:
-                yield _sse(
-                    {
-                        "type": "audit",
-                        "index": i,
-                        "verdict": audit_verdict,
-                        "issues": audit_issues[:5],
-                        "revised": revised,
-                    }
-                )
-
-            results.append(content)
-            traces.append(
-                build_generation_trace(
-                    task,
-                    gen_bundle.route_meta,
-                    content,
-                    audit_verdict=audit_verdict,
-                    audit_issues=audit_issues,
-                    revised=revised,
-                )
+                result["audit"] = {
+                    "type": "audit",
+                    "index": i,
+                    "verdict": audit_verdict,
+                    "issues": audit_issues[:5],
+                    "revised": revised,
+                }
+            result["trace"] = build_generation_trace(
+                task,
+                gen_bundle.route_meta,
+                result["content"],
+                audit_verdict=audit_verdict,
+                audit_issues=audit_issues,
+                revised=revised,
             )
-            yield _sse({"type": "progress", "index": i, "total": len(tasks)})
+        except Exception as e:
+            content = f"（生成失败：{e}）"
+            result["content"] = content
+            result["error"] = str(e)
+            result["route_meta"] = {"model": "", "generation_tier": "error", "evidence_refs": []}
+            result["trace"] = build_generation_trace(
+                task,
+                result["route_meta"],
+                content,
+                audit_verdict="error",
+                audit_issues=[str(e)],
+            )
+        return result
+
+    def event_stream():
+        task_results = []
+        for i, task in enumerate(tasks):
+            if task.word_limit <= 0:
+                task.word_limit = word_limit
+            yield _sse({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS) as executor:
+            futures = [
+                executor.submit(_generate_one_task, i, task)
+                for i, task in enumerate(tasks)
+            ]
+            pending = set(futures)
+            while pending:
+                done, pending = concurrent.futures.wait(
+                    pending, timeout=5.0, return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                if not done:
+                    # Heartbeat: keep connection alive during long tasks
+                    yield _sse({"type": "heartbeat"})
+                    continue
+                for future in done:
+                    result = future.result()
+                    task_results.append(result)
+                    index = result["index"]
+                    if result["route"] is not None:
+                        yield _sse(result["route"])
+                    for piece in result["chunks"]:
+                        yield _sse({"type": "chunk", "index": index, "text": piece})
+                    if result["billing"] is not None:
+                        yield _sse({"type": "billing", "index": index, "billing": result["billing"]})
+                    if result["error"] is not None:
+                        yield _sse({"type": "error", "index": index, "error": result["error"]})
+                    if result["audit"] is not None:
+                        yield _sse(result["audit"])
+                    yield _sse({"type": "progress", "index": index, "total": len(tasks)})
+
+        task_results.sort(key=lambda item: item["index"])
+        results: list[str] = [item["content"] for item in task_results]
+        traces = [item["trace"] for item in task_results]
+        billing_records = [
+            item["billing"]
+            for item in task_results
+            if item["billing"] is not None
+        ]
 
         # 回填 Word
         output_name = template.replace(".docx", "_已填写.docx")
