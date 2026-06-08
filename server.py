@@ -66,6 +66,19 @@ from core.audit_log import (
 )
 
 
+def _safe_filename(raw: str) -> str:
+    """Sanitize uploaded filename to prevent path traversal and injection."""
+    import re as _re
+    name = os.path.basename(raw or "unknown")
+    # Remove null bytes and control characters
+    name = name.replace("\x00", "").strip()
+    # Only allow safe characters: alphanumeric, CJK, dots, hyphens, underscores, spaces
+    name = _re.sub(r'[^\w.\-\s\u4e00-\u9fff]', '_', name)
+    # Collapse multiple dots (prevent .. traversal)
+    name = _re.sub(r'\.{2,}', '.', name)
+    return name or "unnamed"
+
+
 def _get_password_hash(email: str) -> str:
     """Look up password hash from DB for login verification."""
     import sqlite3
@@ -102,11 +115,31 @@ from core.visual_auditor import audit_document_visual
 
 
 class SimpleRateLimiter:
+    _MAX_KEYS = 10000  # Prevent unbounded memory growth
+
     def __init__(self) -> None:
         self._events: dict[str, list[float]] = {}
+        self._last_cleanup = time.monotonic()
+
+    def _cleanup_stale(self, now: float) -> None:
+        """Periodically remove keys with no recent events."""
+        if now - self._last_cleanup < 60:  # Every 60s
+            return
+        self._last_cleanup = now
+        stale_keys = [
+            k for k, stamps in self._events.items()
+            if not stamps or stamps[-1] < now - 300  # No activity in 5min
+        ]
+        for k in stale_keys:
+            del self._events[k]
+        # Hard cap: evict oldest keys if over limit
+        while len(self._events) > self._MAX_KEYS:
+            oldest = next(iter(self._events))
+            del self._events[oldest]
 
     def allow(self, key: str, limits: list[tuple[int, int]]) -> bool:
         now = time.monotonic()
+        self._cleanup_stale(now)
         max_window = max(window for _, window in limits)
         events = [stamp for stamp in self._events.get(key, []) if stamp > now - max_window]
 
@@ -234,23 +267,77 @@ _chunker = Chunker()
 _analyzer = TemplateAnalyzer()
 _filler = WordFiller()
 
-# Template analysis cache: key=(template_path, mtime), value=tasks list
+# Template analysis cache: memory + disk persistence
 _template_analysis_cache: dict[tuple[str, float], list] = {}
 _TEMPLATE_CACHE_MAX = 16
+_TEMPLATE_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", ".cache")
+
+
+def _cache_key_str(template_path: str, mtime: float) -> str:
+    """Deterministic filename-safe cache key from path + mtime."""
+    import hashlib
+    raw = f"{os.path.abspath(template_path)}:{mtime}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _load_cached_tasks(cache_file: str) -> list | None:
+    """Load cached FillTask dicts from JSON file, return list of FillTask or None."""
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return None
+        from core.fill_task import FillTask
+        return [FillTask(**item) for item in data]
+    except Exception:
+        return None
+
+
+def _save_cached_tasks(cache_file: str, tasks: list) -> None:
+    """Persist FillTask list to JSON file."""
+    try:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        from dataclasses import asdict
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump([asdict(t) for t in tasks], f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Failed to save template cache: %s", e)
 
 
 def _cached_analyze(template_path: str) -> list:
-    """Analyze template with LRU-style cache keyed by path + mtime."""
+    """Analyze template with memory + disk cache keyed by path + mtime."""
     mtime = os.path.getmtime(template_path)
     key = (template_path, mtime)
+
+    # 1. Memory cache hit
     if key in _template_analysis_cache:
         return _template_analysis_cache[key]
+
+    # 2. Disk cache hit
+    ck = _cache_key_str(template_path, mtime)
+    cache_file = os.path.join(_TEMPLATE_CACHE_DIR, f"{ck}.json")
+    if os.path.isfile(cache_file):
+        tasks = _load_cached_tasks(cache_file)
+        if tasks is not None:
+            # Promote to memory cache
+            while len(_template_analysis_cache) >= _TEMPLATE_CACHE_MAX:
+                oldest = next(iter(_template_analysis_cache))
+                del _template_analysis_cache[oldest]
+            _template_analysis_cache[key] = tasks
+            return tasks
+
+    # 3. Cache miss — analyze
     tasks = _analyzer.analyze(template_path)
-    # Evict oldest entries if over limit
+
+    # Save to memory
     while len(_template_analysis_cache) >= _TEMPLATE_CACHE_MAX:
         oldest = next(iter(_template_analysis_cache))
         del _template_analysis_cache[oldest]
     _template_analysis_cache[key] = tasks
+
+    # Persist to disk
+    _save_cached_tasks(cache_file, tasks)
+
     return tasks
 
 
@@ -572,7 +659,7 @@ async def kb_upload(
     vs = _get_vs(slug)
     results = []
     for f in files:
-        fname = f.filename or getattr(f, "name", "unknown")
+        fname = _safe_filename(f.filename or getattr(f, "name", "unknown"))
         save_path = os.path.join(config.HISTORICAL_DIR, fname)
         content = await f.read()
         _raise_if_upload_too_large(content)
@@ -632,7 +719,7 @@ async def template_analyze(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    fname = file.filename or getattr(file, "name", "unknown")
+    fname = _safe_filename(file.filename or getattr(file, "name", "unknown"))
     save_path = os.path.join(config.TEMPLATE_DIR, fname)
     content = await file.read()
     _raise_if_upload_too_large(content)
@@ -688,12 +775,15 @@ async def generate(
         )
     language = get_user_preferences(current_user.id)["language"]
     custom_instructions = (custom_instructions or "").strip()
-    if custom_instructions:
-        for task in tasks:
-            task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
     billing_lock = threading.Lock()
 
     def _generate_one_task(i, task):
+        import copy
+        task = copy.deepcopy(task)  # Avoid shared reference in concurrent workers
+        if task.word_limit <= 0:
+            task.word_limit = word_limit
+        if custom_instructions:
+            task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
         local_generator = ContentGenerator(vs, api_key=user_api_key)
         local_auditor = ContentAuditor() if enable_audit else None
         result = {
@@ -778,9 +868,10 @@ async def generate(
                 revised=revised,
             )
         except Exception as e:
-            content = f"（生成失败：{e}）"
+            logger.exception("Task %d generation failed", i)
+            content = "（生成失败，请重试）"
             result["content"] = content
-            result["error"] = str(e)
+            result["error"] = "generation_failed"
             result["route_meta"] = {"model": "", "generation_tier": "error", "evidence_refs": []}
             result["trace"] = build_generation_trace(
                 task,
@@ -794,8 +885,6 @@ async def generate(
     def event_stream():
         task_results = []
         for i, task in enumerate(tasks):
-            if task.word_limit <= 0:
-                task.word_limit = word_limit
             yield _sse({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS) as executor:
@@ -968,7 +1057,10 @@ async def spa_fallback(full_path: str):
         return JSONResponse({"error": "not found"}, status_code=404)
 
     if os.path.isdir(FRONTEND_DIST_DIR):
-        candidate = os.path.join(FRONTEND_DIST_DIR, full_path)
+        candidate = os.path.normpath(os.path.join(FRONTEND_DIST_DIR, full_path))
+        dist_dir = os.path.normpath(FRONTEND_DIST_DIR)
+        if not candidate.startswith(dist_dir + os.sep) and candidate != dist_dir:
+            return FileResponse(_spa_index_path(), media_type="text/html")
         if os.path.isfile(candidate):
             media_type, _ = mimetypes.guess_type(candidate)
             return FileResponse(candidate, media_type=media_type)

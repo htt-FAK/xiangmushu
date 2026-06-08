@@ -203,12 +203,23 @@ _DEFAULT_JWT_SECRET = "dev-change-me-auth-secret"
 AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", _DEFAULT_JWT_SECRET).strip()
 if AUTH_JWT_SECRET == _DEFAULT_JWT_SECRET:
     import sys
-    print(
-        "\n⚠️  WARNING: AUTH_JWT_SECRET is using the default value.\n"
-        "   Set a strong secret in .env for production use.\n"
-        "   Example: AUTH_JWT_SECRET=<random-64-char-string>\n",
-        file=sys.stderr,
-    )
+    # Check if running in development (localhost) or production
+    _is_dev = os.getenv("ENV", "").lower() in ("dev", "development", "")
+    if not _is_dev:
+        print(
+            "\n❌ FATAL: AUTH_JWT_SECRET must be set in production.\n"
+            "   Set a strong secret in .env or environment variables.\n"
+            "   Example: AUTH_JWT_SECRET=<random-64-char-string>\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    else:
+        print(
+            "\n⚠️  WARNING: AUTH_JWT_SECRET is using the default value.\n"
+            "   Set a strong secret in .env for production use.\n"
+            "   Example: AUTH_JWT_SECRET=<random-64-char-string>\n",
+            file=sys.stderr,
+        )
 AUTH_JWT_EXPIRE_MINUTES = int(os.getenv("AUTH_JWT_EXPIRE_MINUTES", "1440"))
 AUTH_CODE_TTL_MINUTES = int(os.getenv("AUTH_CODE_TTL_MINUTES", "10"))
 AUTH_SMTP_HOST = os.getenv("AUTH_SMTP_HOST", "").strip()

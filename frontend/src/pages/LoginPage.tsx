@@ -22,7 +22,9 @@ export default function LoginPage() {
   const location = useLocation();
 
   const params = new URLSearchParams(location.search);
-  const next = params.get("next") || "/";
+  const rawNext = params.get("next") || "/";
+  // Prevent open redirect: only allow relative paths starting with /
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
   const isPasswordValid = password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
 
   function switchMode(nextMode: AuthMode) {
