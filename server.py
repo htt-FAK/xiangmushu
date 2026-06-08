@@ -837,8 +837,10 @@ async def generate(
             if item["billing"] is not None
         ]
 
-        # 回填 Word
-        output_name = template.replace(".docx", "_已填写.docx")
+        # 回填 Word — 文件名加 user_id + 时间戳防多用户覆盖
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        base_name = template.replace(".docx", "")
+        output_name = f"{base_name}_u{current_user.id}_{ts}.docx"
         output_path = os.path.join(config.OUTPUT_DIR, output_name)
         try:
             _filler.fill_template(template_path, tasks, results, output_path)
@@ -900,6 +902,11 @@ async def download(
         return JSONResponse({"error": "非法文件路径"}, status_code=400)
     if not os.path.isfile(path):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
+    # 校验文件归属：文件名包含 _u{user_id}_ 时只允许本人下载
+    import re as _re
+    owner_match = _re.search(r'_u(\d+)_', filename)
+    if owner_match and int(owner_match.group(1)) != current_user.id:
+        return JSONResponse({"error": "无权访问该文件"}, status_code=403)
     media_type, _ = mimetypes.guess_type(path)
     return FileResponse(
         path,
