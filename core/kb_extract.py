@@ -40,7 +40,43 @@ def _synthetic_doc(
     )
 
 
-def _extract_pdf_blocks(path: str) -> list[DocumentBlock]:
+def _extract_pdf_blocks_markitdown(path: str) -> list[DocumentBlock]:
+    """Try MarkItDown for better PDF extraction (tables, formatting)."""
+    try:
+        from markitdown import MarkItDown
+        md = MarkItDown()
+        result = md.convert(path)
+        text = result.text_content.strip()
+        if not text:
+            return []
+        # Split by markdown headings or double newlines into blocks
+        import re
+        sections = re.split(r'\n(?=#{1,3}\s)', text)
+        blocks: list[DocumentBlock] = []
+        for idx, section in enumerate(sections, start=1):
+            section = section.strip()
+            if not section:
+                continue
+            # Extract heading if present
+            heading_match = re.match(r'^(#{1,3})\s+(.+?)\n', section)
+            chapter = heading_match.group(2) if heading_match else f"第{idx}节"
+            blocks.append(
+                DocumentBlock(
+                    text=section,
+                    page=idx,
+                    block_type="text",
+                    source_type="pdf_markitdown",
+                    chapter=chapter,
+                    metadata={"parser": "markitdown"},
+                )
+            )
+        return blocks
+    except Exception:
+        return []
+
+
+def _extract_pdf_blocks_pypdf(path: str) -> list[DocumentBlock]:
+    """Fallback PDF extraction using pypdf."""
     from pypdf import PdfReader
 
     reader = PdfReader(path)
@@ -59,6 +95,14 @@ def _extract_pdf_blocks(path: str) -> list[DocumentBlock]:
                 )
             )
     return blocks
+
+
+def _extract_pdf_blocks(path: str) -> list[DocumentBlock]:
+    """PDF extraction: try MarkItDown first, fallback to pypdf."""
+    blocks = _extract_pdf_blocks_markitdown(path)
+    if blocks:
+        return blocks
+    return _extract_pdf_blocks_pypdf(path)
 
 
 def _extract_pptx_blocks(path: str) -> list[DocumentBlock]:
