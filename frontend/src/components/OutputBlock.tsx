@@ -1,4 +1,5 @@
 import { clsx } from "../utils";
+import type { ReactNode } from "react";
 
 export type OutputBlockData = {
   chapter: string;
@@ -18,36 +19,50 @@ export function OutputBlock({
   waitingText,
   auditResultLabel,
   revisedLabel,
+  action,
+  busy = false,
+  busyLabel = "refreshing",
 }: {
   block: OutputBlockData;
   fallbackName: string;
   waitingText: string;
   auditResultLabel: string;
   revisedLabel: string;
+  action?: ReactNode;
+  busy?: boolean;
+  busyLabel?: string;
 }) {
   return (
     <article className="min-w-0 border border-white/10 bg-night-950/70 p-3.5 shadow-[0_14px_48px_rgba(0,0,0,0.22)] md:p-4">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
-        <p className="min-w-0 break-words font-display text-base font-semibold leading-snug text-signal-cyan md:text-lg">
-          {block.chapter || fallbackName}
-        </p>
-        <div className="flex flex-wrap gap-1.5 text-[11px] text-slate-300 md:text-xs">
-          {block.tier && (
-            <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1 uppercase tracking-[0.08em]">
-              route: {block.tier}
-            </span>
-          )}
-          {block.model && (
-            <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1">
-              model: {block.model}
-            </span>
-          )}
-          {typeof block.kbHits === "number" && (
-            <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1">
-              kb hits: {block.kbHits}
-            </span>
-          )}
+        <div className="min-w-0 flex-1">
+          <p className="min-w-0 break-words font-display text-base font-semibold leading-snug text-signal-cyan md:text-lg">
+            {block.chapter || fallbackName}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-300 md:text-xs">
+            {block.tier && (
+              <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1 uppercase tracking-[0.08em]">
+                route: {block.tier}
+              </span>
+            )}
+            {block.model && (
+              <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1">
+                model: {block.model}
+              </span>
+            )}
+            {typeof block.kbHits === "number" && (
+              <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1">
+                kb hits: {block.kbHits}
+              </span>
+            )}
+            {busy && (
+              <span className="max-w-full break-all border border-signal-cyan/25 bg-signal-cyan/10 px-2 py-1 text-cyan-100">
+                {busyLabel}
+              </span>
+            )}
+          </div>
         </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
 
       {block.evidenceRefs && block.evidenceRefs.length > 0 && (

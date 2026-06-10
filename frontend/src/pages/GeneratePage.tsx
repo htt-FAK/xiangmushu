@@ -1,40 +1,63 @@
 import {
+  AlertTriangle,
   BookOpen,
   CheckCircle2,
   Cpu,
+  Database,
   Download,
   FileCheck2,
+  FileSearch,
   FileText,
   Gauge,
   Layers3,
   Loader2,
   MessageSquareText,
+  PenTool,
   Play,
+  RotateCcw,
   Search,
   ShieldCheck,
   Sparkles,
   Square,
-  Database,
-  FileSearch,
-  PenTool,
-  AlertTriangle,
 } from "lucide-react";
-import { lazy, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, type ReactNode, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { downloadUrl, fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, handleDownload, streamGenerate } from "../api";
-import { Button, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
-import { useI18n } from "../i18n";
-import type { BillingSummary, GenerateEvent, GenerationBilling, KnowledgeBase, PostFillChecks, TemplateItem } from "../types";
-import { clsx } from "../utils";
+import { fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, handleDownload, streamGenerate } from "../api";
 import type { OutputBlockData } from "../components/OutputBlock";
+import { Button, EmptyState, ErrorBanner, Input, PageHeader, Panel, Stat } from "../components/ui";
+import { useI18n } from "../i18n";
+import type {
+  BillingSummary,
+  GenerateEvent,
+  GenerateParams,
+  GenerationBilling,
+  KnowledgeBase,
+  PostFillChecks,
+  TemplateItem,
+} from "../types";
+import { clsx } from "../utils";
 
 const LazyOutputBlock = lazy(() => import("../components/OutputBlock").then((m) => ({ default: m.OutputBlock })));
 
 type OutputBlock = OutputBlockData;
+type RailItem = { value: string; title: string; meta?: string };
+type GenerateStep = "idle" | "retrieval" | "analysis" | "generation" | "audit" | "done";
+
+const stepOrder: GenerateStep[] = ["idle", "retrieval", "analysis", "generation", "audit", "done"];
 
 function formatCny(value?: number | null) {
   if (typeof value !== "number") return "-";
   return `¥${value.toFixed(4)}`;
+}
+
+function normalizeRailQuery(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function filterRailItems(items: RailItem[], query: string) {
+  const normalized = normalizeRailQuery(query);
+  if (!normalized) return items;
+  return items.filter((item) => `${item.title} ${item.meta ?? ""}`.toLowerCase().includes(normalized));
 }
 
 function SectionTitle({
@@ -69,61 +92,89 @@ function OptionRail({
   value,
   onChange,
   empty,
+  emptyFiltered,
   emptyLink,
   tone = "cyan",
   compact = false,
+  searchValue,
+  onSearchChange,
+  searchPlaceholder,
+  disabled = false,
 }: {
-  items: Array<{ value: string; title: string; meta?: string }>;
+  items: RailItem[];
   value: string;
   onChange: (value: string) => void;
   empty: string;
+  emptyFiltered?: string;
   emptyLink?: { to: string; label: string };
   tone?: "cyan" | "lime";
   compact?: boolean;
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
+  searchPlaceholder?: string;
+  disabled?: boolean;
 }) {
-  if (items.length === 0) {
-    return (
-      <div className="flex flex-col gap-2 border border-dashed border-white/15 bg-night-950/60 px-3 py-3">
-        <span className="text-sm text-slate-500">{empty}</span>
-        {emptyLink && (
-          <Link
-            to={emptyLink.to}
-            className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-signal-cyan hover:underline"
-          >
-            {emptyLink.label} →
-          </Link>
-        )}
-      </div>
-    );
-  }
+  const emptyMessage = searchValue ? emptyFiltered || empty : empty;
 
   return (
-    <div className={clsx("grid overflow-y-auto pr-1", compact ? "max-h-52 gap-1.5" : "max-h-64 gap-2")}>
-      {items.map((item) => {
-        const active = item.value === value;
-        return (
-          <button
-            key={item.value}
-            type="button"
-            onClick={() => onChange(item.value)}
-            className={clsx(
-              "group flex items-center justify-between gap-3 border px-3 text-left transition active:scale-[0.98] active:brightness-90",
-              compact ? "min-h-[54px] py-2" : "min-h-[64px] py-2.5",
-              active
-                ? tone === "lime"
-                  ? "border-signal-lime/60 bg-signal-lime/10 text-signal-lime"
-                  : "border-signal-cyan/60 bg-signal-cyan/10 text-signal-cyan"
-                : "border-white/10 bg-night-950/70 text-slate-300 hover:border-white/25 hover:text-white",
-            )}
-          >
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold">{item.title}</span>
-              {item.meta && <span className="mt-1 block truncate text-xs text-slate-500">{item.meta}</span>}
-            </span>
-            {active && <CheckCircle2 className="shrink-0" size={17} />}
-          </button>
-        );
-      })}
+    <div className="space-y-3">
+      {onSearchChange && (
+        <Input
+          className="md:hidden"
+          value={searchValue ?? ""}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder={searchPlaceholder}
+        />
+      )}
+
+      {items.length === 0 ? (
+        <div className="flex flex-col gap-2 border border-dashed border-white/15 bg-night-950/60 px-3 py-3">
+          <span className="text-sm text-slate-500">{emptyMessage}</span>
+          {emptyLink && !searchValue && (
+            <Link
+              to={emptyLink.to}
+              className="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-signal-cyan hover:underline"
+            >
+              {emptyLink.label} →
+            </Link>
+          )}
+        </div>
+      ) : (
+        <div
+          className={clsx(
+            "grid overflow-y-auto pr-1",
+            compact ? "max-h-52 gap-1.5" : "max-h-64 gap-2",
+            "grid-cols-2 md:grid-cols-1",
+          )}
+        >
+          {items.map((item) => {
+            const active = item.value === value;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                disabled={disabled}
+                onClick={() => onChange(item.value)}
+                className={clsx(
+                  "group flex h-full min-w-0 items-start justify-between gap-3 border px-3 text-left transition active:scale-[0.98] active:brightness-90 disabled:pointer-events-none disabled:opacity-45",
+                  compact ? "min-h-[72px] py-2.5 md:min-h-[54px] md:py-2" : "min-h-[82px] py-3 md:min-h-[64px] md:py-2.5",
+                  active
+                    ? tone === "lime"
+                      ? "border-signal-lime/60 bg-signal-lime/10 text-signal-lime"
+                      : "border-signal-cyan/60 bg-signal-cyan/10 text-signal-cyan"
+                    : "border-white/10 bg-night-950/70 text-slate-300 hover:border-white/25 hover:text-white",
+                )}
+              >
+                <span className="min-w-0">
+                  <span className="block break-words text-sm font-semibold leading-5 md:truncate">{item.title}</span>
+                  {item.meta && <span className="mt-1 block break-all text-xs text-slate-500 md:truncate">{item.meta}</span>}
+                </span>
+                {active && <CheckCircle2 className="mt-0.5 shrink-0" size={17} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -189,9 +240,9 @@ export default function GeneratePage() {
   const [useStream] = useState(true);
   const [enableAudit] = useState(false);
   const [enableVisualAudit] = useState(true);
-  const [currentStep, setCurrentStep] = useState<"idle" | "retrieval" | "analysis" | "generation" | "audit" | "done">("idle");
-  const visualTarget = 80; // 保留用于视觉评分阈值显示
+  const [currentStep, setCurrentStep] = useState<GenerateStep>("idle");
   const [running, setRunning] = useState(false);
+  const [regeneratingIndex, setRegeneratingIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [currentTask, setCurrentTask] = useState("");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -208,58 +259,90 @@ export default function GeneratePage() {
   const [traceOpen, setTraceOpen] = useState(false);
   const [downloadingDoc, setDownloadingDoc] = useState(false);
   const [downloadingReport, setDownloadingReport] = useState(false);
+  const [knowledgeSearch, setKnowledgeSearch] = useState("");
+  const [templateSearch, setTemplateSearch] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const sectionAbortRef = useRef<AbortController | null>(null);
+  const visualTarget = 80;
+  const busy = running || regeneratingIndex !== null;
+  const deferredKnowledgeSearch = useDeferredValue(knowledgeSearch);
+  const deferredTemplateSearch = useDeferredValue(templateSearch);
 
-  // 智能推荐：根据模板和知识库自动选择配置
   const recommendedConfig = useMemo(() => {
     if (!template || !slug) return null;
-    const tmpl = templates.find((t) => t.name === template);
-    const kb = kbs.find((k) => k.slug === slug);
-    
-    // 根据模板名称推断文档类型
-    const isComplex = /项目|方案|报告|论文/i.test(template);
-    const hasRichKB = kb && ((kb as any).document_count ?? 0) > 10;
-    
+    const kb = kbs.find((item) => item.slug === slug) as KnowledgeBase & { document_count?: number } | undefined;
+    const isComplex = /项目|方案|报告|论文|project|proposal|report|paper/i.test(template);
+    const hasRichKB = (kb?.document_count ?? 0) > 10;
+
     return {
-      qualityMode: isComplex ? "quality" : "balanced" as const,
+      qualityMode: (isComplex ? "quality" : "balanced") as "balanced" | "quality",
       enableWeb: !hasRichKB,
       enableAudit: isComplex,
-      wordLimit: isComplex ? 500 : 300,
     };
-  }, [template, slug, templates, kbs]);
+  }, [template, slug, kbs]);
+
+  const knowledgeItems = useMemo<RailItem[]>(
+    () =>
+      kbs.map((kb) => ({
+        value: kb.slug,
+        title: kb.label || kb.name || kb.slug,
+        meta: kb.slug,
+      })),
+    [kbs],
+  );
+
+  const templateItems = useMemo<RailItem[]>(
+    () =>
+      templates.map((item) => ({
+        value: item.name,
+        title: item.name,
+        meta: "DOCX",
+      })),
+    [templates],
+  );
+
+  const filteredKnowledgeItems = useMemo(
+    () => filterRailItems(knowledgeItems, deferredKnowledgeSearch),
+    [knowledgeItems, deferredKnowledgeSearch],
+  );
+
+  const filteredTemplateItems = useMemo(
+    () => filterRailItems(templateItems, deferredTemplateSearch),
+    [templateItems, deferredTemplateSearch],
+  );
 
   useEffect(() => {
-    Promise.allSettled([fetchTemplates(), fetchKnowledgeBases()])
-      .then(([tmplResult, kbResult]) => {
-        if (tmplResult.status === "fulfilled") {
-          setTemplates(tmplResult.value);
-          setTemplate((current) => current || tmplResult.value[0]?.name || "");
-        }
-        if (kbResult.status === "fulfilled") {
-          setKbs(kbResult.value);
-          setSlug((current) => current || kbResult.value[0]?.slug || "");
-        }
-        const failures: string[] = [];
-        if (tmplResult.status === "rejected") failures.push(`Templates: ${tmplResult.reason}`);
-        if (kbResult.status === "rejected") failures.push(`Knowledge bases: ${kbResult.reason}`);
-        if (failures.length > 0) {
-          setError(JSON.stringify({ level: "warning", message: failures.join("; "), retryable: true }));
-        }
-      });
+    Promise.allSettled([fetchTemplates(), fetchKnowledgeBases()]).then(([templateResult, kbResult]) => {
+      if (templateResult.status === "fulfilled") {
+        setTemplates(templateResult.value);
+        setTemplate((current) => current || templateResult.value[0]?.name || "");
+      }
+      if (kbResult.status === "fulfilled") {
+        setKbs(kbResult.value);
+        setSlug((current) => current || kbResult.value[0]?.slug || "");
+      }
+
+      const failures: string[] = [];
+      if (templateResult.status === "rejected") failures.push(`Templates: ${templateResult.reason}`);
+      if (kbResult.status === "rejected") failures.push(`Knowledge bases: ${kbResult.reason}`);
+      if (failures.length > 0) {
+        setError(JSON.stringify({ level: "warning", message: failures.join("; "), retryable: true }));
+      }
+    });
+
     fetchBillingSummary()
       .then(setBillingSummary)
       .catch(() => undefined);
     fetchApiKeyStatus()
-      .then((s) => setHasApiKey(s.has_key))
+      .then((status) => setHasApiKey(status.has_key))
       .catch(() => setHasApiKey(null));
   }, []);
 
-  // 应用智能推荐
   useEffect(() => {
-    if (recommendedConfig && !running) {
-      setQualityMode(recommendedConfig.qualityMode as "speed" | "balanced" | "quality");
+    if (recommendedConfig && !busy) {
+      setQualityMode(recommendedConfig.qualityMode);
     }
-  }, [recommendedConfig, running]);
+  }, [recommendedConfig, busy]);
 
   const percent = useMemo(() => {
     if (!progress.total) return 0;
@@ -277,24 +360,24 @@ export default function GeneratePage() {
     ];
   }, [postFillChecks, t]);
 
-  // 步骤指示器组件
-  function StepIndicator({ step, label, icon }: { step: string; label: string; icon: ReactNode }) {
+  function StepIndicator({ step, label, icon }: { step: GenerateStep; label: string; icon: ReactNode }) {
     const isActive = currentStep === step;
-    const isCompleted = [
-      ["retrieval", "analysis", "generation", "audit", "done"].indexOf(currentStep) > 
-      ["retrieval", "analysis", "generation", "audit", "done"].indexOf(step as any)
-    ][0];
-    
+    const isCompleted = stepOrder.indexOf(currentStep) > stepOrder.indexOf(step);
+
     return (
-      <div className={clsx(
-        "flex items-center gap-2 px-3 py-2 rounded-lg border transition-all",
-        isActive ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan" :
-        isCompleted ? "border-signal-lime/50 bg-signal-lime/5 text-signal-lime" :
-        "border-white/10 bg-night-950/50 text-slate-500"
-      )}>
+      <div
+        className={clsx(
+          "flex items-center gap-2 rounded-lg border px-3 py-2 transition-all",
+          isActive
+            ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
+            : isCompleted
+              ? "border-signal-lime/50 bg-signal-lime/5 text-signal-lime"
+              : "border-white/10 bg-night-950/50 text-slate-500",
+        )}
+      >
         <div className="shrink-0">{icon}</div>
         <span className="text-xs font-medium">{label}</span>
-        {isActive && <Loader2 className="animate-spin ml-auto" size={14} />}
+        {isActive && <Loader2 className="ml-auto animate-spin" size={14} />}
         {isCompleted && <CheckCircle2 className="ml-auto" size={14} />}
       </div>
     );
@@ -304,48 +387,91 @@ export default function GeneratePage() {
     return `${t("generate.taskFallback")} ${index + 1}`;
   }
 
+  function createOutputShell(index: number, chapter?: string): OutputBlock {
+    return {
+      chapter: chapter || taskName(index),
+      text: "",
+      evidenceRefs: [],
+      auditIssues: [],
+    };
+  }
+
   function updateOutput(index: number, patch: Partial<OutputBlock>) {
     setOutputs((prev) => {
       const next = [...prev];
-      const existing = next[index] ?? {
-        chapter: taskName(index),
-        text: "",
-        evidenceRefs: [],
-        auditIssues: [],
-      };
+      const existing = next[index] ?? createOutputShell(index);
       next[index] = { ...existing, ...patch };
       return next;
     });
   }
 
-  function stop() {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setRunning(false);
+  function appendOutputChunk(index: number, text: string, chapter?: string) {
+    setOutputs((prev) => {
+      const next = [...prev];
+      const existing = next[index] ?? createOutputShell(index, chapter);
+      next[index] = { ...existing, chapter: chapter || existing.chapter, text: `${existing.text}${text}` };
+      return next;
+    });
   }
 
-  function requestStart() {
-    if (!template || !slug) return;
-    setConfirmOpen(true);
+  function refreshBillingSummary() {
+    fetchBillingSummary()
+      .then(setBillingSummary)
+      .catch(() => undefined);
   }
 
-  // 根据质量模式映射参数
-  const getParamsByQuality = () => {
+  function getParamsByQuality() {
     switch (qualityMode) {
       case "quality":
         return { topK: 6, maxDistance: 1.0, wordLimit: 500 };
       case "speed":
         return { topK: 2, maxDistance: 1.5, wordLimit: 200 };
-      default: // balanced
+      default:
         return { topK: 4, maxDistance: 1.25, wordLimit: 300 };
     }
-  };
+  }
+
+  function buildGenerateParams(): GenerateParams {
+    const params = getParamsByQuality();
+    return {
+      slug,
+      template,
+      customInstructions: generationBrief.trim(),
+      wordLimit: params.wordLimit,
+      topK: params.topK,
+      maxDistance: params.maxDistance,
+      enableWeb,
+      useStream,
+      enableAudit,
+      enableVisualAudit,
+    };
+  }
+
+  function handleStreamError(message: string) {
+    setError(JSON.stringify({ level: "error", message, retryable: true }));
+  }
+
+  function stop() {
+    abortRef.current?.abort();
+    sectionAbortRef.current?.abort();
+    abortRef.current = null;
+    sectionAbortRef.current = null;
+    setRunning(false);
+    setRegeneratingIndex(null);
+  }
+
+  function requestStart() {
+    if (!template || !slug || busy) return;
+    setConfirmOpen(true);
+  }
 
   async function start() {
     setConfirmOpen(false);
     if (!template || !slug) return;
 
     const controller = new AbortController();
+    const chapters: Record<number, string> = {};
+
     abortRef.current = controller;
     setRunning(true);
     setError("");
@@ -360,31 +486,26 @@ export default function GeneratePage() {
     setProgress({ done: 0, total: 0 });
     setCurrentStep("retrieval");
 
-    const chapters: Record<number, string> = {};
-
-    const params = getParamsByQuality();
-    
     try {
       await streamGenerate(
-        {
-          slug,
-          template,
-          customInstructions: generationBrief.trim(),
-          wordLimit: params.wordLimit,
-          topK: params.topK,
-          maxDistance: params.maxDistance,
-          enableWeb,
-          useStream,
-          enableAudit,
-          enableVisualAudit,
-        },
-        (event: GenerateEvent) => {
+        buildGenerateParams(),
+        (event) => {
           if (event.type === "task") {
             chapters[event.index] = event.chapter;
             setCurrentTask(event.chapter);
             setCurrentStep("generation");
             setProgress((prev) => ({ done: prev.done, total: event.total }));
-            updateOutput(event.index, { chapter: event.chapter });
+            updateOutput(event.index, {
+              chapter: event.chapter,
+              text: "",
+              model: undefined,
+              tier: undefined,
+              kbHits: undefined,
+              evidenceRefs: [],
+              auditVerdict: undefined,
+              auditIssues: [],
+              revised: false,
+            });
             return;
           }
 
@@ -401,17 +522,7 @@ export default function GeneratePage() {
           }
 
           if (event.type === "chunk") {
-            setOutputs((prev) => {
-              const next = [...prev];
-              const existing = next[event.index] ?? {
-                chapter: chapters[event.index] || taskName(event.index),
-                text: "",
-                evidenceRefs: [],
-                auditIssues: [],
-              };
-              next[event.index] = { ...existing, text: `${existing.text}${event.text}` };
-              return next;
-            });
+            appendOutputChunk(event.index, event.text, chapters[event.index]);
             return;
           }
 
@@ -451,19 +562,13 @@ export default function GeneratePage() {
             if (event.billing_summary) {
               setBillingSummary(event.billing_summary);
             }
-            fetchBillingSummary()
-              .then(setBillingSummary)
-              .catch(() => undefined);
+            refreshBillingSummary();
             setCurrentTask(t("generate.pass"));
             return;
           }
 
           if (event.type === "error") {
-            // 错误分级处理
-            const errorObj = typeof event.error === 'string' 
-              ? { level: "error", message: event.error, retryable: true }
-              : event.error;
-            setError(JSON.stringify(errorObj));
+            handleStreamError(event.error);
           }
         },
         controller.signal,
@@ -473,58 +578,182 @@ export default function GeneratePage() {
         setError(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      setRunning(false);
       abortRef.current = null;
+      setRunning(false);
     }
+  }
+
+  async function regenerateSection(index: number) {
+    if (!template || !slug || running || regeneratingIndex !== null) return;
+
+    const previousBlock = outputs[index];
+    if (!previousBlock) return;
+
+    const controller = new AbortController();
+    const chapters: Record<number, string> = {};
+    let failed = false;
+
+    sectionAbortRef.current = controller;
+    setRegeneratingIndex(index);
+    setError("");
+
+    try {
+      await streamGenerate(
+        buildGenerateParams(),
+        (event) => {
+          if (event.type === "task") {
+            chapters[event.index] = event.chapter;
+            if (event.index !== index) return;
+            updateOutput(index, {
+              chapter: event.chapter,
+              text: "",
+              model: undefined,
+              tier: undefined,
+              kbHits: undefined,
+              evidenceRefs: [],
+              auditVerdict: undefined,
+              auditIssues: [],
+              revised: false,
+            });
+            return;
+          }
+
+          if (event.type === "route" && event.index === index) {
+            updateOutput(index, {
+              chapter: chapters[event.index] || previousBlock.chapter || taskName(index),
+              model: event.model,
+              tier: event.tier,
+              kbHits: event.kb_hits,
+              evidenceRefs: event.evidence_refs ?? [],
+            });
+            return;
+          }
+
+          if (event.type === "chunk" && event.index === index) {
+            appendOutputChunk(index, event.text, chapters[event.index] || previousBlock.chapter);
+            return;
+          }
+
+          if (event.type === "audit" && event.index === index) {
+            updateOutput(index, {
+              auditVerdict: event.verdict,
+              auditIssues: event.issues,
+              revised: event.revised,
+            });
+            return;
+          }
+
+          if (event.type === "done") {
+            refreshBillingSummary();
+            return;
+          }
+
+          if (event.type === "error") {
+            failed = true;
+            handleStreamError(event.error);
+            controller.abort();
+          }
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      failed = true;
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if ((failed || controller.signal.aborted) && previousBlock) {
+        setOutputs((prev) => {
+          const next = [...prev];
+          next[index] = previousBlock;
+          return next;
+        });
+      }
+      sectionAbortRef.current = null;
+      setRegeneratingIndex(null);
+    }
+  }
+
+  function renderOutputBlocks(actionsEnabled: boolean) {
+    return outputs.map((block, index) => (
+      <Suspense
+        key={`${block.chapter}-${index}`}
+        fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}
+      >
+        <LazyOutputBlock
+          block={block}
+          fallbackName={taskName(index)}
+          waitingText={t("generate.waitingModel")}
+          auditResultLabel={t("generate.auditResult")}
+          revisedLabel={t("generate.revised")}
+          busy={regeneratingIndex === index}
+          busyLabel={t("generate.regenerating")}
+          action={
+            actionsEnabled ? (
+              <Button
+                variant="ghost"
+                className="min-h-10 gap-2 px-3 text-xs"
+                disabled={busy}
+                onClick={() => regenerateSection(index)}
+              >
+                {regeneratingIndex === index ? <Loader2 className="animate-spin" size={15} /> : <RotateCcw size={15} />}
+                {regeneratingIndex === index ? t("generate.regenerating") : t("generate.regenerateChapter")}
+              </Button>
+            ) : undefined
+          }
+        />
+      </Suspense>
+    ));
   }
 
   return (
     <>
-      <PageHeader
-        eyebrow={t("generate.eyebrow")}
-        title={t("generate.title")}
-        description={t("generate.description")}
-      />
+      <PageHeader eyebrow={t("generate.eyebrow")} title={t("generate.title")} description={t("generate.description")} />
 
-      {/* 错误分级显示 */}
-      {error && (() => {
-        try {
-          const errorObj = JSON.parse(error);
-          const isError = typeof errorObj === 'object' && errorObj.level;
-          if (!isError) return <ErrorBanner message={error} />;
-          
-          const { level, message, retryable } = errorObj;
-          const styles = {
-            warning: "border-signal-amber/40 bg-signal-amber/10 text-amber-100",
-            error: "border-rose-500/40 bg-rose-500/10 text-rose-100",
-            info: "border-signal-cyan/40 bg-signal-cyan/10 text-cyan-100",
-          };
-          const icons = {
-            warning: <AlertTriangle className="shrink-0" size={20} />,
-            error: <AlertTriangle className="shrink-0" size={20} />,
-            info: <MessageSquareText className="shrink-0" size={20} />,
-          };
-          
-          return (
-            <div className={clsx("mb-6 flex flex-col gap-4 border px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5", styles[level as keyof typeof styles] || styles.error)}>
-              <div className="flex min-w-0 items-center gap-3">
-                {icons[level as keyof typeof icons] || icons.error}
-                <p className="min-w-0 break-words text-sm font-semibold">{message}</p>
+      {error &&
+        (() => {
+          try {
+            const errorObj = JSON.parse(error);
+            const isTypedError = typeof errorObj === "object" && errorObj?.level;
+            if (!isTypedError) return <ErrorBanner message={error} />;
+
+            const { level, message, retryable } = errorObj as { level: "warning" | "error" | "info"; message: string; retryable?: boolean };
+            const styles = {
+              warning: "border-signal-amber/40 bg-signal-amber/10 text-amber-100",
+              error: "border-rose-500/40 bg-rose-500/10 text-rose-100",
+              info: "border-signal-cyan/40 bg-signal-cyan/10 text-cyan-100",
+            };
+            const icons = {
+              warning: <AlertTriangle className="shrink-0" size={20} />,
+              error: <AlertTriangle className="shrink-0" size={20} />,
+              info: <MessageSquareText className="shrink-0" size={20} />,
+            };
+
+            return (
+              <div
+                className={clsx(
+                  "mb-6 flex flex-col gap-4 border px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5",
+                  styles[level] || styles.error,
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  {icons[level] || icons.error}
+                  <p className="min-w-0 break-words text-sm font-semibold">{message}</p>
+                </div>
+                {retryable && (
+                  <button
+                    onClick={() => setError("")}
+                    className="inline-flex min-h-11 items-center justify-center border border-current px-4 text-xs font-bold transition hover:bg-white/10 sm:w-auto"
+                  >
+                    重试
+                  </button>
+                )}
               </div>
-              {retryable && (
-                <button
-                  onClick={() => setError("")}
-                  className="inline-flex min-h-11 items-center justify-center border border-current px-4 text-xs font-bold transition hover:bg-white/10 sm:w-auto"
-                >
-                  重试
-                </button>
-              )}
-            </div>
-          );
-        } catch {
-          return <ErrorBanner message={error} />;
-        }
-      })()}
+            );
+          } catch {
+            return <ErrorBanner message={error} />;
+          }
+        })()}
 
       {hasApiKey === false && (
         <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
@@ -544,11 +773,7 @@ export default function GeneratePage() {
       <div className="grid gap-6 xl:grid-cols-[430px_minmax(0,1fr)]">
         <div className="space-y-5">
           <Panel className="min-w-0">
-            <SectionTitle
-              icon={<Sparkles size={18} />}
-              title={t("generate.setupTitle")}
-              hint={t("generate.setupHint")}
-            />
+            <SectionTitle icon={<Sparkles size={18} />} title={t("generate.setupTitle")} hint={t("generate.setupHint")} />
 
             <div className="space-y-3 transition-all duration-200">
               <SetupField label={t("generate.knowledge")} compact={true}>
@@ -556,13 +781,14 @@ export default function GeneratePage() {
                   value={slug}
                   onChange={setSlug}
                   empty={t("generate.noKnowledge")}
+                  emptyFiltered={t("generate.noMatchingKnowledgeBase")}
                   emptyLink={{ to: "/knowledge", label: t("generate.goKnowledge") }}
                   compact={true}
-                  items={kbs.map((kb) => ({
-                    value: kb.slug,
-                    title: kb.label || kb.name || kb.slug,
-                    meta: kb.slug,
-                  }))}
+                  disabled={busy}
+                  items={filteredKnowledgeItems}
+                  searchValue={knowledgeSearch}
+                  onSearchChange={setKnowledgeSearch}
+                  searchPlaceholder={t("generate.searchKnowledgeBase")}
                 />
               </SetupField>
 
@@ -571,51 +797,61 @@ export default function GeneratePage() {
                   value={template}
                   onChange={setTemplate}
                   empty={t("generate.noTemplates")}
+                  emptyFiltered={t("generate.noMatchingTemplate")}
                   emptyLink={{ to: "/template", label: t("generate.goTemplate") }}
                   tone="lime"
                   compact={true}
-                  items={templates.map((item) => ({
-                    value: item.name,
-                    title: item.name,
-                    meta: "DOCX",
-                  }))}
+                  disabled={busy}
+                  items={filteredTemplateItems}
+                  searchValue={templateSearch}
+                  onSearchChange={setTemplateSearch}
+                  searchPlaceholder={t("generate.searchTemplate")}
                 />
               </SetupField>
 
-              {/* 智能推荐提示 */}
-              {recommendedConfig && !running && (
+              {recommendedConfig && !busy && (
                 <div className="mb-2 flex items-start gap-2 border border-dashed border-signal-cyan/30 bg-signal-cyan/5 px-3 py-2.5 text-xs">
-                  <Sparkles className="shrink-0 mt-0.5 text-signal-cyan" size={14} />
+                  <Sparkles className="mt-0.5 shrink-0 text-signal-cyan" size={14} />
                   <div className="min-w-0">
-                    <p className="font-semibold text-signal-cyan">智能推荐已启用</p>
+                    <p className="font-semibold text-signal-cyan">Smart defaults active</p>
                     <p className="mt-0.5 break-words text-slate-400">
-                      根据模板「{template}」和知识库，建议：{recommendedConfig.qualityMode === "quality" ? "质量优先" : recommendedConfig.qualityMode === "speed" ? "速度优先" : "平衡模式"}
-                      {recommendedConfig.enableWeb ? " + 联网搜索" : ""}
-                      {recommendedConfig.enableAudit ? " + 内容审核" : ""}
+                      {recommendedConfig.qualityMode === "quality" ? "Quality first" : "Balanced mode"}
+                      {recommendedConfig.enableWeb ? " + web enrichment" : ""}
+                      {recommendedConfig.enableAudit ? " + content audit" : ""}
                     </p>
                   </div>
                 </div>
               )}
 
-              <SetupField label={t("generate.qualityMode") || "生成质量"} compact={true}>
+              <SetupField label={t("generate.qualityMode")} compact={true}>
                 <div className="grid grid-cols-3 gap-2">
                   {(["speed", "balanced", "quality"] as const).map((mode) => {
-                    const labels = { speed: "速度优先", balanced: "平衡模式", quality: "质量优先" };
-                    const descs = { speed: "快速生成，适合简单文档", balanced: "速度与质量均衡", quality: "深度检索，适合复杂文档" };
+                    const labels = {
+                      speed: "速度优先",
+                      balanced: "平衡模式",
+                      quality: "质量优先",
+                    };
+                    const descriptions = {
+                      speed: "更快完成基础草稿。",
+                      balanced: "兼顾速度和质量。",
+                      quality: "更适合复杂文档。",
+                    };
+
                     return (
                       <button
                         key={mode}
                         type="button"
+                        disabled={busy}
                         onClick={() => setQualityMode(mode)}
                         className={clsx(
-                          "border px-3 py-2.5 text-left transition hover:border-white/25",
+                          "border px-3 py-2.5 text-left transition hover:border-white/25 disabled:pointer-events-none disabled:opacity-45",
                           qualityMode === mode
                             ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
-                            : "border-white/10 bg-night-950/70 text-slate-300"
+                            : "border-white/10 bg-night-950/70 text-slate-300",
                         )}
                       >
                         <span className="block text-xs font-semibold">{labels[mode]}</span>
-                        <span className="mt-0.5 block text-[10px] text-slate-500">{descs[mode]}</span>
+                        <span className="mt-0.5 block text-[10px] text-slate-500">{descriptions[mode]}</span>
                       </button>
                     );
                   })}
@@ -640,11 +876,7 @@ export default function GeneratePage() {
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-              <Button
-                className="min-h-14 w-full text-base font-bold shadow-glow"
-                onClick={requestStart}
-                disabled={!template || !slug || running}
-              >
+              <Button className="min-h-14 w-full text-base font-bold shadow-glow" onClick={requestStart} disabled={!template || !slug || busy}>
                 {running ? <Loader2 className="animate-spin" size={19} /> : <Play size={19} />}
                 {running ? t("generate.running") : t("generate.start")}
               </Button>
@@ -652,7 +884,7 @@ export default function GeneratePage() {
                 className="min-h-14 w-full font-bold sm:w-12 sm:px-0"
                 variant="ghost"
                 onClick={stop}
-                disabled={!running}
+                disabled={!busy}
                 aria-label={t("generate.stop")}
               >
                 <Square size={17} />
@@ -663,14 +895,13 @@ export default function GeneratePage() {
 
         <div className="min-w-0 space-y-5">
           <Panel className="min-w-0">
-            {/* 步骤指示器 */}
             {running && (
               <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                <StepIndicator step="retrieval" label={t("generate.stepRetrieval") || "检索知识库"} icon={<Database size={16} />} />
-                <StepIndicator step="analysis" label={t("generate.stepAnalysis") || "分析模板"} icon={<FileSearch size={16} />} />
-                <StepIndicator step="generation" label={t("generate.stepGeneration") || "生成内容"} icon={<PenTool size={16} />} />
-                <StepIndicator step="audit" label={t("generate.stepAudit") || "审核校验"} icon={<ShieldCheck size={16} />} />
-                <StepIndicator step="done" label={t("generate.stepDone") || "完成"} icon={<CheckCircle2 size={16} />} />
+                <StepIndicator step="retrieval" label={t("generate.stepRetrieval")} icon={<Database size={16} />} />
+                <StepIndicator step="analysis" label={t("generate.stepAnalysis")} icon={<FileSearch size={16} />} />
+                <StepIndicator step="generation" label={t("generate.stepGeneration")} icon={<PenTool size={16} />} />
+                <StepIndicator step="audit" label={t("generate.stepAudit")} icon={<ShieldCheck size={16} />} />
+                <StepIndicator step="done" label={t("generate.stepDone")} icon={<CheckCircle2 size={16} />} />
               </div>
             )}
 
@@ -679,8 +910,13 @@ export default function GeneratePage() {
               title={t("generate.runOverview")}
               hint={t("generate.runOverviewHint")}
               action={
-                <span className={clsx("shrink-0 border px-2.5 py-1 text-xs font-semibold", running ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime" : "border-white/10 bg-white/[0.035] text-slate-500")}>
-                  {running ? t("generate.running") : t("generate.idle")}
+                <span
+                  className={clsx(
+                    "shrink-0 border px-2.5 py-1 text-xs font-semibold",
+                    busy ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime" : "border-white/10 bg-white/[0.035] text-slate-500",
+                  )}
+                >
+                  {running ? t("generate.running") : regeneratingIndex !== null ? t("generate.regenerating") : t("generate.idle")}
                 </span>
               }
             />
@@ -698,70 +934,36 @@ export default function GeneratePage() {
             </div>
 
             <div className="mt-5 border border-white/10 bg-night-950 p-1">
-              <div
-                className="h-2 bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all"
-                style={{ width: `${percent}%` }}
-              />
+              <div className="h-2 bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all" style={{ width: `${percent}%` }} />
             </div>
           </Panel>
 
           <Panel className="min-w-0">
-            <SectionTitle
-              icon={<BookOpen size={18} />}
-              title={t("generate.outputTitle")}
-              hint={t("generate.outputHint")}
-            />
+            <SectionTitle icon={<BookOpen size={18} />} title={t("generate.outputTitle")} hint={t("generate.outputHint")} />
             {outputs.length === 0 ? (
               <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
-            ) : running ? (
-              <div className="space-y-4">
-                {outputs.map((block, index) => (
-                  <Suspense key={`${block.chapter}-${index}`} fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}>
-                    <LazyOutputBlock
-                      block={block}
-                      fallbackName={taskName(index)}
-                      waitingText={t("generate.waitingModel")}
-                      auditResultLabel={t("generate.auditResult")}
-                      revisedLabel={t("generate.revised")}
-                    />
-                  </Suspense>
-                ))}
-              </div>
-            ) : downloadPath ? (
-              <div className="flex justify-center py-4">
-                <Button
-                  variant="ghost"
-                  className="min-h-11 gap-2 border border-white/10 bg-white/[0.035] px-5 text-sm font-semibold text-slate-200 hover:border-white/25 hover:text-white"
-                  onClick={() => setTraceOpen(true)}
-                >
-                  <MessageSquareText size={17} />
-                  {t("generate.viewTrace")}
-                </Button>
-              </div>
             ) : (
               <div className="space-y-4">
-                {outputs.map((block, index) => (
-                  <Suspense key={`${block.chapter}-${index}`} fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}>
-                    <LazyOutputBlock
-                      block={block}
-                      fallbackName={taskName(index)}
-                      waitingText={t("generate.waitingModel")}
-                      auditResultLabel={t("generate.auditResult")}
-                      revisedLabel={t("generate.revised")}
-                    />
-                  </Suspense>
-                ))}
+                {downloadPath && !running && (
+                  <div className="flex justify-center py-1">
+                    <Button
+                      variant="ghost"
+                      className="min-h-11 gap-2 border border-white/10 bg-white/[0.035] px-5 text-sm font-semibold text-slate-200 hover:border-white/25 hover:text-white"
+                      onClick={() => setTraceOpen(true)}
+                    >
+                      <MessageSquareText size={17} />
+                      {t("generate.viewTrace")}
+                    </Button>
+                  </div>
+                )}
+                {renderOutputBlocks(true)}
               </div>
             )}
           </Panel>
 
           {(downloadPath || reportPath || reportSummary || postFillChecks) && (
             <Panel className="min-w-0">
-              <SectionTitle
-                icon={<FileCheck2 size={18} />}
-                title={t("generate.acceptance")}
-                hint={t("generate.acceptanceHint")}
-              />
+              <SectionTitle icon={<FileCheck2 size={18} />} title={t("generate.acceptance")} hint={t("generate.acceptanceHint")} />
 
               {(downloadPath || reportPath) && (
                 <div className="mb-5 flex flex-wrap gap-3">
@@ -816,15 +1018,13 @@ export default function GeneratePage() {
                     <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("generate.checkResult")}</p>
                     <p className="mt-2 text-white">{postFillChecks.ok ? t("generate.pass") : t("generate.review")}</p>
                     <p className="mt-2 break-words text-xs text-slate-400">
-                      template words {postFillChecks.template_words ?? "-"} / output words{" "}
-                      {postFillChecks.output_words ?? "-"}
+                      template words {postFillChecks.template_words ?? "-"} / output words {postFillChecks.output_words ?? "-"}
                     </p>
                   </div>
                   <div className="min-w-0 border border-white/10 bg-night-900/70 p-3 text-sm text-slate-300">
                     <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("generate.structure")}</p>
                     <p className="mt-2 break-words text-white">
-                      template tables {postFillChecks.template_tables ?? "-"} / output tables{" "}
-                      {postFillChecks.output_tables ?? "-"}
+                      template tables {postFillChecks.template_tables ?? "-"} / output tables {postFillChecks.output_tables ?? "-"}
                     </p>
                     <p className="mt-2 break-words text-xs text-slate-400">
                       cover {postFillChecks.cover_modified ? t("generate.review") : t("generate.pass")}, rating table{" "}
@@ -838,11 +1038,7 @@ export default function GeneratePage() {
 
           {(hasAuditIssues || checkHighlights.length > 0 || visualScore !== null) && (
             <Panel className="min-w-0">
-              <SectionTitle
-                icon={<Search size={18} />}
-                title={t("generate.auditPanelTitle")}
-                hint={t("generate.auditPanelHint")}
-              />
+              <SectionTitle icon={<Search size={18} />} title={t("generate.auditPanelTitle")} hint={t("generate.auditPanelHint")} />
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="border border-white/10 bg-night-950/70 p-3">
                   <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.visualTarget")}</p>
@@ -850,12 +1046,17 @@ export default function GeneratePage() {
                 </div>
                 <div className="border border-white/10 bg-night-950/70 p-3">
                   <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.auditIssues")}</p>
-                  <p className={clsx("mt-2 font-display text-2xl font-semibold", hasAuditIssues || checkHighlights.length ? "text-signal-amber" : "text-signal-lime")}>
+                  <p
+                    className={clsx(
+                      "mt-2 font-display text-2xl font-semibold",
+                      hasAuditIssues || checkHighlights.length ? "text-signal-amber" : "text-signal-lime",
+                    )}
+                  >
                     {outputs.reduce((sum, block) => sum + (block.auditIssues?.length ?? 0), 0) + checkHighlights.length}
                   </p>
                 </div>
                 <div className="border border-white/10 bg-night-950/70 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.qualityMode") || "生成质量"}</p>
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.qualityMode")}</p>
                   <p className="mt-2 font-display text-lg font-semibold text-signal-lime">
                     {qualityMode === "quality" ? "质量优先" : qualityMode === "speed" ? "速度优先" : "平衡模式"}
                   </p>
@@ -864,10 +1065,7 @@ export default function GeneratePage() {
               {checkHighlights.length > 0 && (
                 <div className="mt-3 space-y-2">
                   {checkHighlights.map((item) => (
-                    <div
-                      key={item}
-                      className="break-words border border-signal-amber/30 bg-signal-amber/10 px-3 py-2 text-sm text-amber-100"
-                    >
+                    <div key={item} className="break-words border border-signal-amber/30 bg-signal-amber/10 px-3 py-2 text-sm text-amber-100">
                       {item}
                     </div>
                   ))}
@@ -878,11 +1076,7 @@ export default function GeneratePage() {
 
           {(runBilling || billingSummary) && (
             <Panel className="min-w-0">
-              <SectionTitle
-                icon={<Cpu size={18} />}
-                title={t("generate.billingTitle")}
-                hint={t("generate.billingHint")}
-              />
+              <SectionTitle icon={<Cpu size={18} />} title={t("generate.billingTitle")} hint={t("generate.billingHint")} />
               <div className="grid gap-3 md:grid-cols-3">
                 <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
                 <Stat label={t("generate.inputTokens")} value={runBilling?.input_tokens ?? "-"} />
@@ -917,19 +1111,7 @@ export default function GeneratePage() {
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
-            <div className="mx-auto max-w-4xl space-y-4">
-              {outputs.map((block, index) => (
-                <Suspense key={`trace-${block.chapter}-${index}`} fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}>
-                  <LazyOutputBlock
-                    block={block}
-                    fallbackName={taskName(index)}
-                    waitingText={t("generate.waitingModel")}
-                    auditResultLabel={t("generate.auditResult")}
-                    revisedLabel={t("generate.revised")}
-                  />
-                </Suspense>
-              ))}
-            </div>
+            <div className="mx-auto max-w-4xl space-y-4">{renderOutputBlocks(false)}</div>
           </div>
         </div>
       )}
