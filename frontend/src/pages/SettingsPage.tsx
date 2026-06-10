@@ -1,12 +1,155 @@
-import { Check, KeyRound, Languages, Loader2, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { deleteApiKey, fetchApiKeyStatus, saveApiKey } from "../api";
+import { Check, ChevronDown, Cpu, KeyRound, Languages, Loader2, Star, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreferences, saveApiKey, updateUserPreferences } from "../api";
 import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
 import { useI18n } from "../i18n";
-import type { ApiKeyStatus } from "../types";
+import type { ApiKeyStatus, ModelModuleConfig, ModelOption, ModelOptionsMap } from "../types";
 
 const BAILIAN_KEY_URL = "https://bailian.console.aliyun.com/#/key";
+
+// ---------------------------------------------------------------------------
+// Model Selector Component
+// ---------------------------------------------------------------------------
+function ModelSelector({
+  moduleKey,
+  config,
+  selected,
+  onSelect,
+  saving,
+}: {
+  moduleKey: string;
+  config: ModelModuleConfig;
+  selected: string;
+  onSelect: (moduleKey: string, model: string) => void;
+  saving: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  // Flatten all options for display
+  const flatOptions: { model: string; recommended?: boolean; tier?: string }[] = useMemo(() => {
+    const result: { model: string; recommended?: boolean; tier?: string }[] = [];
+    if (config.tiers) {
+      for (const [tierName, models] of Object.entries(config.tiers)) {
+        for (const m of models) {
+          result.push({ ...m, tier: tierName });
+        }
+      }
+    }
+    if (config.options) {
+      for (const m of config.options) {
+        result.push(m);
+      }
+    }
+    return result;
+  }, [config]);
+
+  const selectedLabel = flatOptions.find((o) => o.model === selected)?.model || selected || "—";
+  const isRecommended = flatOptions.find((o) => o.model === selected)?.recommended;
+
+  return (
+    <div className="relative" ref={ref}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <span className="text-sm font-medium text-slate-200">{config.label}</span>
+          {config.description && (
+            <p className="mt-0.5 text-xs text-slate-500 leading-relaxed">{config.description}</p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          disabled={saving}
+          className={`flex min-w-[200px] items-center justify-between gap-2 border px-3 py-2 text-left text-sm transition ${
+            open
+              ? "border-signal-lime/60 bg-signal-lime/8 text-white"
+              : "border-white/15 bg-white/[0.04] text-slate-200 hover:border-white/30"
+          }`}
+        >
+          <span className="flex items-center gap-1.5 truncate">
+            {selectedLabel}
+            {isRecommended && <Star size={12} className="shrink-0 fill-signal-lime text-signal-lime" />}
+          </span>
+          <ChevronDown size={14} className={`shrink-0 text-slate-500 transition ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-full min-w-[240px] max-w-[320px] border border-white/15 bg-night-900 shadow-xl">
+          {config.tiers ? (
+            Object.entries(config.tiers).map(([tierName, models]) => (
+              <div key={tierName}>
+                <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  {tierName}
+                </div>
+                {models.map((m: ModelOption) => (
+                  <button
+                    key={m.model}
+                    type="button"
+                    onClick={() => {
+                      onSelect(moduleKey, m.model);
+                      setOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
+                      selected === m.model
+                        ? "bg-signal-lime/12 text-white"
+                        : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                    }`}
+                  >
+                    <span className="truncate">{m.model}</span>
+                    {m.recommended && (
+                      <span className="ml-2 shrink-0 rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">
+                        ⭐
+                      </span>
+                    )}
+                    {selected === m.model && <Check size={14} className="ml-2 shrink-0 text-signal-lime" />}
+                  </button>
+                ))}
+              </div>
+            ))
+          ) : (
+            config.options?.map((m: ModelOption) => (
+              <button
+                key={m.model}
+                type="button"
+                onClick={() => {
+                  onSelect(moduleKey, m.model);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
+                  selected === m.model
+                    ? "bg-signal-lime/12 text-white"
+                    : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                }`}
+              >
+                <span className="truncate">{m.model}</span>
+                {m.recommended && (
+                  <span className="ml-2 shrink-0 rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">
+                    ⭐
+                  </span>
+                )}
+                {selected === m.model && <Check size={14} className="ml-2 shrink-0 text-signal-lime" />}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const { t } = useI18n();
@@ -21,7 +164,14 @@ export default function SettingsPage() {
   const [languageSaving, setLanguageSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const canConfirm = agreeChecked && agreeText === t("settings.consentExact") && apiKey.trim().length > 0;
+  // Model selection state
+  const [modelOptions, setModelOptions] = useState<ModelOptionsMap | null>(null);
+  const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
+  const [modelLoading, setModelLoading] = useState(true);
+  const [modelSaving, setModelSaving] = useState(false);
+  const modelSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const canConfirm = apiKey.trim().length > 0;
 
   useEffect(() => {
     fetchApiKeyStatus()
@@ -29,6 +179,56 @@ export default function SettingsPage() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
   }, []);
+
+  // Default models per module (matches backend _DEFAULT_MODEL_OVERRIDES)
+  const DEFAULT_MODELS: Record<string, string> = useMemo(() => ({
+    generation: "qwen3.7-max",
+    lightweight: "qwen3.6-flash",
+    vision: "qwen3.7-plus",
+    search: "qwen3.7-plus",
+    audit: "qwen3.6-flash",
+  }), []);
+
+  // Load model options + current choices
+  useEffect(() => {
+    Promise.all([fetchModelOptions(), fetchUserPreferences()])
+      .then(([options, prefs]) => {
+        setModelOptions(options);
+        // Merge saved choices with defaults for modules without saved choice
+        const saved = prefs.model_choices ?? {};
+        const merged: Record<string, string> = { ...saved };
+        for (const key of Object.keys(options)) {
+          if (!merged[key]) {
+            merged[key] = DEFAULT_MODELS[key] || "";
+          }
+        }
+        setModelChoices(merged);
+      })
+      .catch((err: unknown) => {
+        console.error("Failed to load model options", err);
+      })
+      .finally(() => setModelLoading(false));
+  }, []);
+
+  const handleModelSelect = useCallback(
+    (moduleKey: string, model: string) => {
+      setModelChoices((prev) => ({ ...prev, [moduleKey]: model }));
+      // Debounced save
+      if (modelSaveTimer.current) clearTimeout(modelSaveTimer.current);
+      setModelSaving(true);
+      modelSaveTimer.current = setTimeout(() => {
+        updateUserPreferences({ model_choices: { ...modelChoices, [moduleKey]: model } })
+          .then((updated) => {
+            setModelChoices(updated.model_choices ?? { ...modelChoices, [moduleKey]: model });
+          })
+          .catch((err: unknown) => {
+            console.error("Failed to save model choice", err);
+          })
+          .finally(() => setModelSaving(false));
+      }, 400);
+    },
+    [modelChoices],
+  );
 
   const statusText = useMemo(() => {
     if (loading) return t("settings.loading");
@@ -94,7 +294,7 @@ export default function SettingsPage() {
       />
       <ErrorBanner message={error} />
 
-      <Panel className="mb-5 md:mb-6">
+      <Panel className="hidden mb-5 md:mb-6 md:block">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-3">
@@ -141,6 +341,52 @@ export default function SettingsPage() {
           </div>
         </div>
       </Panel>
+
+      {/* Model Selection Panel — desktop only, requires API Key */}
+      {status?.has_key && (
+      <Panel className="hidden mb-5 md:mb-6 md:block">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime md:h-11 md:w-11">
+            <Cpu size={20} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">
+              {t("settings.modelCardTitle")}
+            </h2>
+            <p className="mt-0.5 text-sm text-slate-400">
+              {t("settings.modelCardBody")}
+            </p>
+          </div>
+          {modelSaving && (
+            <Loader2 className="ml-auto animate-spin text-signal-lime" size={16} />
+          )}
+        </div>
+
+        {modelLoading ? (
+          <div className="space-y-3">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex items-center justify-between">
+                <div className="h-4 w-20 animate-pulse rounded bg-white/10" />
+                <div className="h-9 w-[200px] animate-pulse rounded border border-white/10 bg-white/[0.03]" />
+              </div>
+            ))}
+          </div>
+        ) : modelOptions ? (
+          <div className="space-y-3">
+            {Object.entries(modelOptions).map(([key, cfg]) => (
+              <ModelSelector
+                key={key}
+                moduleKey={key}
+                config={cfg}
+                selected={modelChoices[key] || ""}
+                onSelect={handleModelSelect}
+                saving={modelSaving}
+              />
+            ))}
+          </div>
+        ) : null}
+      </Panel>
+      )}
 
       <div className="grid gap-5 md:gap-6 lg:grid-cols-[1fr_360px]">
         <Panel className="min-w-0">
@@ -231,27 +477,6 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-6 grid gap-4">
-              <label className="flex min-h-12 items-center gap-3 border border-white/10 bg-night-950/70 p-3 text-sm text-slate-200">
-                <input
-                  className="h-5 w-5 shrink-0 accent-signal-cyan"
-                  type="checkbox"
-                  checked={agreeChecked}
-                  onChange={(event) => setAgreeChecked(event.target.checked)}
-                />
-                <span className="min-w-0 break-words">{t("settings.readConfirm")}</span>
-              </label>
-
-              <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  {t("settings.consentLabel")}
-                </span>
-                <Input
-                  value={agreeText}
-                  onChange={(event) => setAgreeText(event.target.value)}
-                  placeholder={t("settings.consentPlaceholder")}
-                />
-              </label>
-
               <label className="block">
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                   {t("settings.apiKeyLabel")}

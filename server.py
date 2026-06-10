@@ -220,7 +220,8 @@ class ApiKeyRequest(BaseModel):
 
 
 class UserPreferencesRequest(BaseModel):
-    language: str
+    language: str | None = None
+    model_choices: dict[str, str] | None = None
 
 
 def get_current_user(
@@ -543,6 +544,12 @@ async def auth_me(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "email": current_user.email}
 
 
+@app.get("/api/user/model-options")
+async def user_model_options(current_user: User = Depends(get_current_user)):
+    """返回 USER_MODEL_OPTIONS 注册表，供前端渲染模型选择下拉框。"""
+    return config.USER_MODEL_OPTIONS
+
+
 @app.get("/api/user/preferences")
 async def user_preferences(current_user: User = Depends(get_current_user)):
     return get_user_preferences(current_user.id)
@@ -554,7 +561,11 @@ async def user_preferences_update(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return update_user_preferences(current_user.id, payload.language)
+        return update_user_preferences(
+            current_user.id,
+            language=payload.language,
+            model_choices=payload.model_choices,
+        )
     except InvalidLanguageError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 

@@ -82,8 +82,24 @@ export type ApiKeyStatus = {
   key_preview?: string | null;
 };
 
+export interface ModelOption {
+  model: string;
+  recommended?: boolean;
+}
+
+export interface ModelModuleConfig {
+  label: string;
+  description?: string;
+  tiers?: Record<string, ModelOption[]>;
+  options?: ModelOption[];
+  config_keys?: string[];
+}
+
+export type ModelOptionsMap = Record<string, ModelModuleConfig>;
+
 export type UserPreferences = {
   language: "zh" | "en";
+  model_choices?: Record<string, string>;
 };
 
 export type GenerateEvent =

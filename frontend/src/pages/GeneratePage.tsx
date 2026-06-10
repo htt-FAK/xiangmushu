@@ -14,10 +14,14 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Database,
+  FileSearch,
+  PenTool,
+  AlertTriangle,
 } from "lucide-react";
 import { lazy, Suspense, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { downloadUrl, fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, streamGenerate } from "../api";
+import { downloadUrl, fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, handleDownload, streamGenerate } from "../api";
 import { Button, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type { BillingSummary, GenerateEvent, GenerationBilling, KnowledgeBase, PostFillChecks, TemplateItem } from "../types";
@@ -180,14 +184,13 @@ export default function GeneratePage() {
   const [template, setTemplate] = useState("");
   const [slug, setSlug] = useState("");
   const [generationBrief, setGenerationBrief] = useState("");
-  const [wordLimit] = useState(300);
-  const [topK] = useState(4);
-  const [maxDistance] = useState(1.25);
-  const [visualTarget] = useState(80);
+  const [qualityMode, setQualityMode] = useState<"balanced" | "quality" | "speed">("balanced");
   const [enableWeb] = useState(false);
   const [useStream] = useState(true);
   const [enableAudit] = useState(false);
   const [enableVisualAudit] = useState(true);
+  const [currentStep, setCurrentStep] = useState<"idle" | "retrieval" | "analysis" | "generation" | "audit" | "done">("idle");
+  const visualTarget = 80; // 保留用于视觉评分阈值显示
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [currentTask, setCurrentTask] = useState("");
@@ -202,7 +205,28 @@ export default function GeneratePage() {
   const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [downloadingDoc, setDownloadingDoc] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // 智能推荐：根据模板和知识库自动选择配置
+  const recommendedConfig = useMemo(() => {
+    if (!template || !slug) return null;
+    const tmpl = templates.find((t) => t.name === template);
+    const kb = kbs.find((k) => k.slug === slug);
+    
+    // 根据模板名称推断文档类型
+    const isComplex = /项目|方案|报告|论文/i.test(template);
+    const hasRichKB = kb && ((kb as any).document_count ?? 0) > 10;
+    
+    return {
+      qualityMode: isComplex ? "quality" : "balanced" as const,
+      enableWeb: !hasRichKB,
+      enableAudit: isComplex,
+      wordLimit: isComplex ? 500 : 300,
+    };
+  }, [template, slug, templates, kbs]);
 
   useEffect(() => {
     Promise.allSettled([fetchTemplates(), fetchKnowledgeBases()])
@@ -218,7 +242,9 @@ export default function GeneratePage() {
         const failures: string[] = [];
         if (tmplResult.status === "rejected") failures.push(`Templates: ${tmplResult.reason}`);
         if (kbResult.status === "rejected") failures.push(`Knowledge bases: ${kbResult.reason}`);
-        if (failures.length > 0) setError(failures.join("; "));
+        if (failures.length > 0) {
+          setError(JSON.stringify({ level: "warning", message: failures.join("; "), retryable: true }));
+        }
       });
     fetchBillingSummary()
       .then(setBillingSummary)
@@ -227,6 +253,13 @@ export default function GeneratePage() {
       .then((s) => setHasApiKey(s.has_key))
       .catch(() => setHasApiKey(null));
   }, []);
+
+  // 应用智能推荐
+  useEffect(() => {
+    if (recommendedConfig && !running) {
+      setQualityMode(recommendedConfig.qualityMode as "speed" | "balanced" | "quality");
+    }
+  }, [recommendedConfig, running]);
 
   const percent = useMemo(() => {
     if (!progress.total) return 0;
@@ -243,6 +276,29 @@ export default function GeneratePage() {
       ...(postFillChecks.protected_issues ?? []).slice(0, 3),
     ];
   }, [postFillChecks, t]);
+
+  // 步骤指示器组件
+  function StepIndicator({ step, label, icon }: { step: string; label: string; icon: ReactNode }) {
+    const isActive = currentStep === step;
+    const isCompleted = [
+      ["retrieval", "analysis", "generation", "audit", "done"].indexOf(currentStep) > 
+      ["retrieval", "analysis", "generation", "audit", "done"].indexOf(step as any)
+    ][0];
+    
+    return (
+      <div className={clsx(
+        "flex items-center gap-2 px-3 py-2 rounded-lg border transition-all",
+        isActive ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan" :
+        isCompleted ? "border-signal-lime/50 bg-signal-lime/5 text-signal-lime" :
+        "border-white/10 bg-night-950/50 text-slate-500"
+      )}>
+        <div className="shrink-0">{icon}</div>
+        <span className="text-xs font-medium">{label}</span>
+        {isActive && <Loader2 className="animate-spin ml-auto" size={14} />}
+        {isCompleted && <CheckCircle2 className="ml-auto" size={14} />}
+      </div>
+    );
+  }
 
   function taskName(index: number) {
     return `${t("generate.taskFallback")} ${index + 1}`;
@@ -273,6 +329,18 @@ export default function GeneratePage() {
     setConfirmOpen(true);
   }
 
+  // 根据质量模式映射参数
+  const getParamsByQuality = () => {
+    switch (qualityMode) {
+      case "quality":
+        return { topK: 6, maxDistance: 1.0, wordLimit: 500 };
+      case "speed":
+        return { topK: 2, maxDistance: 1.5, wordLimit: 200 };
+      default: // balanced
+        return { topK: 4, maxDistance: 1.25, wordLimit: 300 };
+    }
+  };
+
   async function start() {
     setConfirmOpen(false);
     if (!template || !slug) return;
@@ -290,18 +358,21 @@ export default function GeneratePage() {
     setRunBilling(null);
     setCurrentTask("");
     setProgress({ done: 0, total: 0 });
+    setCurrentStep("retrieval");
 
     const chapters: Record<number, string> = {};
 
+    const params = getParamsByQuality();
+    
     try {
       await streamGenerate(
         {
           slug,
           template,
           customInstructions: generationBrief.trim(),
-          wordLimit,
-          topK,
-          maxDistance,
+          wordLimit: params.wordLimit,
+          topK: params.topK,
+          maxDistance: params.maxDistance,
           enableWeb,
           useStream,
           enableAudit,
@@ -311,12 +382,14 @@ export default function GeneratePage() {
           if (event.type === "task") {
             chapters[event.index] = event.chapter;
             setCurrentTask(event.chapter);
+            setCurrentStep("generation");
             setProgress((prev) => ({ done: prev.done, total: event.total }));
             updateOutput(event.index, { chapter: event.chapter });
             return;
           }
 
           if (event.type === "route") {
+            setCurrentStep("retrieval");
             updateOutput(event.index, {
               chapter: chapters[event.index] || taskName(event.index),
               model: event.model,
@@ -343,6 +416,7 @@ export default function GeneratePage() {
           }
 
           if (event.type === "audit") {
+            setCurrentStep("audit");
             updateOutput(event.index, {
               auditVerdict: event.verdict,
               auditIssues: event.issues,
@@ -367,6 +441,7 @@ export default function GeneratePage() {
           }
 
           if (event.type === "done") {
+            setCurrentStep("done");
             setDownloadPath(event.download);
             setReportPath(event.report_download ?? "");
             setReportSummary(event.report_summary ?? "");
@@ -384,7 +459,11 @@ export default function GeneratePage() {
           }
 
           if (event.type === "error") {
-            setError(event.error);
+            // 错误分级处理
+            const errorObj = typeof event.error === 'string' 
+              ? { level: "error", message: event.error, retryable: true }
+              : event.error;
+            setError(JSON.stringify(errorObj));
           }
         },
         controller.signal,
@@ -407,7 +486,45 @@ export default function GeneratePage() {
         description={t("generate.description")}
       />
 
-      <ErrorBanner message={error} />
+      {/* 错误分级显示 */}
+      {error && (() => {
+        try {
+          const errorObj = JSON.parse(error);
+          const isError = typeof errorObj === 'object' && errorObj.level;
+          if (!isError) return <ErrorBanner message={error} />;
+          
+          const { level, message, retryable } = errorObj;
+          const styles = {
+            warning: "border-signal-amber/40 bg-signal-amber/10 text-amber-100",
+            error: "border-rose-500/40 bg-rose-500/10 text-rose-100",
+            info: "border-signal-cyan/40 bg-signal-cyan/10 text-cyan-100",
+          };
+          const icons = {
+            warning: <AlertTriangle className="shrink-0" size={20} />,
+            error: <AlertTriangle className="shrink-0" size={20} />,
+            info: <MessageSquareText className="shrink-0" size={20} />,
+          };
+          
+          return (
+            <div className={clsx("mb-6 flex flex-col gap-4 border px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5", styles[level as keyof typeof styles] || styles.error)}>
+              <div className="flex min-w-0 items-center gap-3">
+                {icons[level as keyof typeof icons] || icons.error}
+                <p className="min-w-0 break-words text-sm font-semibold">{message}</p>
+              </div>
+              {retryable && (
+                <button
+                  onClick={() => setError("")}
+                  className="inline-flex min-h-11 items-center justify-center border border-current px-4 text-xs font-bold transition hover:bg-white/10 sm:w-auto"
+                >
+                  重试
+                </button>
+              )}
+            </div>
+          );
+        } catch {
+          return <ErrorBanner message={error} />;
+        }
+      })()}
 
       {hasApiKey === false && (
         <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
@@ -465,6 +582,46 @@ export default function GeneratePage() {
                 />
               </SetupField>
 
+              {/* 智能推荐提示 */}
+              {recommendedConfig && !running && (
+                <div className="mb-2 flex items-start gap-2 border border-dashed border-signal-cyan/30 bg-signal-cyan/5 px-3 py-2.5 text-xs">
+                  <Sparkles className="shrink-0 mt-0.5 text-signal-cyan" size={14} />
+                  <div className="min-w-0">
+                    <p className="font-semibold text-signal-cyan">智能推荐已启用</p>
+                    <p className="mt-0.5 break-words text-slate-400">
+                      根据模板「{template}」和知识库，建议：{recommendedConfig.qualityMode === "quality" ? "质量优先" : recommendedConfig.qualityMode === "speed" ? "速度优先" : "平衡模式"}
+                      {recommendedConfig.enableWeb ? " + 联网搜索" : ""}
+                      {recommendedConfig.enableAudit ? " + 内容审核" : ""}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <SetupField label={t("generate.qualityMode") || "生成质量"} compact={true}>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["speed", "balanced", "quality"] as const).map((mode) => {
+                    const labels = { speed: "速度优先", balanced: "平衡模式", quality: "质量优先" };
+                    const descs = { speed: "快速生成，适合简单文档", balanced: "速度与质量均衡", quality: "深度检索，适合复杂文档" };
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setQualityMode(mode)}
+                        className={clsx(
+                          "border px-3 py-2.5 text-left transition hover:border-white/25",
+                          qualityMode === mode
+                            ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
+                            : "border-white/10 bg-night-950/70 text-slate-300"
+                        )}
+                      >
+                        <span className="block text-xs font-semibold">{labels[mode]}</span>
+                        <span className="mt-0.5 block text-[10px] text-slate-500">{descs[mode]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </SetupField>
+
               <SetupField label={t("generate.instructions")} compact={true}>
                 <TextArea
                   value={generationBrief}
@@ -506,6 +663,17 @@ export default function GeneratePage() {
 
         <div className="min-w-0 space-y-5">
           <Panel className="min-w-0">
+            {/* 步骤指示器 */}
+            {running && (
+              <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                <StepIndicator step="retrieval" label={t("generate.stepRetrieval") || "检索知识库"} icon={<Database size={16} />} />
+                <StepIndicator step="analysis" label={t("generate.stepAnalysis") || "分析模板"} icon={<FileSearch size={16} />} />
+                <StepIndicator step="generation" label={t("generate.stepGeneration") || "生成内容"} icon={<PenTool size={16} />} />
+                <StepIndicator step="audit" label={t("generate.stepAudit") || "审核校验"} icon={<ShieldCheck size={16} />} />
+                <StepIndicator step="done" label={t("generate.stepDone") || "完成"} icon={<CheckCircle2 size={16} />} />
+              </div>
+            )}
+
             <SectionTitle
               icon={<Gauge size={18} />}
               title={t("generate.runOverview")}
@@ -545,6 +713,31 @@ export default function GeneratePage() {
             />
             {outputs.length === 0 ? (
               <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
+            ) : running ? (
+              <div className="space-y-4">
+                {outputs.map((block, index) => (
+                  <Suspense key={`${block.chapter}-${index}`} fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}>
+                    <LazyOutputBlock
+                      block={block}
+                      fallbackName={taskName(index)}
+                      waitingText={t("generate.waitingModel")}
+                      auditResultLabel={t("generate.auditResult")}
+                      revisedLabel={t("generate.revised")}
+                    />
+                  </Suspense>
+                ))}
+              </div>
+            ) : downloadPath ? (
+              <div className="flex justify-center py-4">
+                <Button
+                  variant="ghost"
+                  className="min-h-11 gap-2 border border-white/10 bg-white/[0.035] px-5 text-sm font-semibold text-slate-200 hover:border-white/25 hover:text-white"
+                  onClick={() => setTraceOpen(true)}
+                >
+                  <MessageSquareText size={17} />
+                  {t("generate.viewTrace")}
+                </Button>
+              </div>
             ) : (
               <div className="space-y-4">
                 {outputs.map((block, index) => (
@@ -573,22 +766,44 @@ export default function GeneratePage() {
               {(downloadPath || reportPath) && (
                 <div className="mb-5 flex flex-wrap gap-3">
                   {downloadPath && (
-                    <a
-                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-signal-lime bg-signal-lime px-4 text-sm font-bold text-night-950 sm:min-h-11 sm:w-auto sm:font-semibold"
-                      href={downloadUrl(downloadPath)}
+                    <button
+                      type="button"
+                      disabled={downloadingDoc}
+                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-signal-lime bg-signal-lime px-4 text-sm font-bold text-night-950 transition hover:bg-signal-lime/90 disabled:opacity-60 sm:min-h-11 sm:w-auto sm:font-semibold"
+                      onClick={async () => {
+                        setDownloadingDoc(true);
+                        try {
+                          await handleDownload(downloadPath);
+                        } catch {
+                          setError(t("generate.downloadFailed"));
+                        } finally {
+                          setDownloadingDoc(false);
+                        }
+                      }}
                     >
-                      <Download size={17} />
+                      {downloadingDoc ? <Loader2 className="animate-spin" size={17} /> : <Download size={17} />}
                       {t("generate.downloadDoc")}
-                    </a>
+                    </button>
                   )}
                   {reportPath && (
-                    <a
-                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-white/10 bg-white/[0.055] px-4 text-sm font-bold text-slate-100 sm:min-h-11 sm:w-auto sm:font-semibold"
-                      href={downloadUrl(reportPath)}
+                    <button
+                      type="button"
+                      disabled={downloadingReport}
+                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-white/10 bg-white/[0.055] px-4 text-sm font-bold text-slate-100 transition hover:bg-white/10 disabled:opacity-60 sm:min-h-11 sm:w-auto sm:font-semibold"
+                      onClick={async () => {
+                        setDownloadingReport(true);
+                        try {
+                          await handleDownload(reportPath);
+                        } catch {
+                          setError(t("generate.downloadFailed"));
+                        } finally {
+                          setDownloadingReport(false);
+                        }
+                      }}
                     >
-                      <FileText size={17} />
+                      {downloadingReport ? <Loader2 className="animate-spin" size={17} /> : <FileText size={17} />}
                       {t("generate.downloadReport")}
-                    </a>
+                    </button>
                   )}
                 </div>
               )}
@@ -640,9 +855,9 @@ export default function GeneratePage() {
                   </p>
                 </div>
                 <div className="border border-white/10 bg-night-950/70 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.retrievalProfile")}</p>
-                  <p className="mt-2 font-display text-2xl font-semibold text-signal-lime">
-                    {topK}/{maxDistance}
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.qualityMode") || "生成质量"}</p>
+                  <p className="mt-2 font-display text-lg font-semibold text-signal-lime">
+                    {qualityMode === "quality" ? "质量优先" : qualityMode === "speed" ? "速度优先" : "平衡模式"}
                   </p>
                 </div>
               </div>
@@ -682,6 +897,42 @@ export default function GeneratePage() {
           )}
         </div>
       </div>
+
+      {traceOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-night-950/95 backdrop-blur">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3 md:px-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/10 text-signal-cyan">
+                <MessageSquareText size={18} />
+              </div>
+              <h3 className="font-display text-lg font-semibold text-white">{t("generate.traceTitle")}</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTraceOpen(false)}
+              className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
+              aria-label="Close"
+            >
+              <span className="text-xl leading-none">&times;</span>
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
+            <div className="mx-auto max-w-4xl space-y-4">
+              {outputs.map((block, index) => (
+                <Suspense key={`trace-${block.chapter}-${index}`} fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}>
+                  <LazyOutputBlock
+                    block={block}
+                    fallbackName={taskName(index)}
+                    waitingText={t("generate.waitingModel")}
+                    auditResultLabel={t("generate.auditResult")}
+                    revisedLabel={t("generate.revised")}
+                  />
+                </Suspense>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">

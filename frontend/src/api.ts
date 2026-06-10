@@ -6,6 +6,7 @@ import type {
   GenerateParams,
   KnowledgeBase,
   KnowledgeSourceStats,
+  ModelOptionsMap,
   TemplateItem,
   UploadResult,
   UserPreferences,
@@ -120,16 +121,27 @@ export async function deleteApiKey(): Promise<ApiKeyStatus & { ok: boolean }> {
   });
 }
 
+export async function fetchModelOptions(): Promise<ModelOptionsMap> {
+  return requestJson<ModelOptionsMap>("/api/user/model-options");
+}
+
 export async function fetchUserPreferences(): Promise<UserPreferences> {
   return requestJson<UserPreferences>("/api/user/preferences");
 }
 
-export async function saveUserPreferences(language: UserPreferences["language"]): Promise<UserPreferences> {
+export async function updateUserPreferences(data: {
+  language?: string;
+  model_choices?: Record<string, string>;
+}): Promise<UserPreferences> {
   return requestJson<UserPreferences>("/api/user/preferences", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ language }),
+    body: JSON.stringify(data),
   });
+}
+
+export async function saveUserPreferences(language: UserPreferences["language"]): Promise<UserPreferences> {
+  return updateUserPreferences({ language });
 }
 
 export async function fetchBillingSummary(): Promise<BillingSummary> {
@@ -138,6 +150,22 @@ export async function fetchBillingSummary(): Promise<BillingSummary> {
 
 export function downloadUrl(path: string) {
   return apiUrl(path);
+}
+
+export async function handleDownload(path: string) {
+  const response = await fetch(apiUrl(path), {
+    headers: buildAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Download failed");
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = path.split("/").pop() || "document.docx";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export async function streamGenerate(

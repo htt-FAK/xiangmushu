@@ -181,6 +181,8 @@ def init_db(db_path: str | None = None) -> None:
             conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
         if "preferred_language" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'zh'")
+        if "model_choices" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN model_choices TEXT DEFAULT NULL")
         code_columns = {
             str(row[1])
             for row in conn.execute("PRAGMA table_info(email_verification_codes)").fetchall()
@@ -231,10 +233,10 @@ def get_user_by_email(email: str, db_path: str | None = None) -> User | None:
     return _row_to_user(row) if row else None
 
 
-def get_user_preferences(user_id: int, db_path: str | None = None) -> dict[str, str]:
+def get_user_preferences(user_id: int, db_path: str | None = None) -> dict:
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT preferred_language FROM users WHERE id = ?",
+            "SELECT preferred_language, model_choices FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     if row is None:
@@ -242,24 +244,44 @@ def get_user_preferences(user_id: int, db_path: str | None = None) -> dict[str, 
     language = str(row["preferred_language"] or "zh")
     if language not in {"zh", "en"}:
         language = "zh"
-    return {"language": language}
+    result: dict = {"language": language}
+    raw_mc = row["model_choices"] if "model_choices" in row.keys() else None
+    if raw_mc:
+        try:
+            result["model_choices"] = json.loads(raw_mc)
+        except (ValueError, TypeError):
+            result["model_choices"] = {}
+    else:
+        result["model_choices"] = {}
+    return result
 
 
 def update_user_preferences(
     user_id: int,
-    language: str,
+    language: str | None = None,
+    model_choices: dict | None = None,
     db_path: str | None = None,
-) -> dict[str, str]:
-    normalized = _normalize_language(language)
+) -> dict:
     with _connect(db_path) as conn:
-        cursor = conn.execute(
-            "UPDATE users SET preferred_language = ? WHERE id = ?",
-            (normalized, user_id),
-        )
-        if cursor.rowcount == 0:
+        # Fetch current values
+        row = conn.execute(
+            "SELECT preferred_language, model_choices FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
             raise AuthError("User not found")
+
+        new_lang = _normalize_language(language) if language else str(row["preferred_language"] or "zh")
+        new_mc = model_choices if model_choices is not None else (
+            json.loads(row["model_choices"]) if row["model_choices"] else {}
+        )
+
+        conn.execute(
+            "UPDATE users SET preferred_language = ?, model_choices = ? WHERE id = ?",
+            (new_lang, json.dumps(new_mc, ensure_ascii=False), user_id),
+        )
         conn.commit()
-    return {"language": normalized}
+    return {"language": new_lang, "model_choices": new_mc}
 
 
 def get_user_by_id(user_id: int, db_path: str | None = None) -> User | None:

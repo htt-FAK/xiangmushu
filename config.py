@@ -37,26 +37,27 @@ FOSUN_AIGW_API_KEY = ""  # 清空 Key 强制禁用
 _chat_client_singleton = None
 
 # Embedding 模型（百炼 compatible-mode 用 text-embedding-v3 等）
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")
+RERANK_MODEL = os.getenv("RERANK_MODEL", "qwen3-rerank")
 
 # 场景 LLM / 视觉（复星网关 ID；对齐 leaderboard v2026.05.21 fosun 主榜，均可 env 覆盖）
 # 视觉/联网/大段：qwen3.7-plus；小模型/RAG/表格快批：qwen3.7-flash
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
     _vw = os.getenv("VISION_MODEL", "").strip()
-VISION_WEB_MODEL = _vw or "qwen3.7-flash"
+VISION_WEB_MODEL = _vw or "qwen3.6-flash"
 VISION_WEB_FALLBACK_MODEL = os.getenv("VISION_WEB_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 TEMPLATE_VISION_MODEL = os.getenv("TEMPLATE_VISION_MODEL", "").strip() or "qwen3.7-plus"
-TEMPLATE_VISION_FALLBACK_MODEL = os.getenv("TEMPLATE_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+TEMPLATE_VISION_FALLBACK_MODEL = os.getenv("TEMPLATE_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 VISION_EXTRACT_MODEL = os.getenv("VISION_EXTRACT_MODEL", "").strip() or "qwen3.7-plus"
-VISION_EXTRACT_FALLBACK_MODEL = os.getenv("VISION_EXTRACT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+VISION_EXTRACT_FALLBACK_MODEL = os.getenv("VISION_EXTRACT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 TABLE_CELL_VISION_MODEL = os.getenv("TABLE_CELL_VISION_MODEL", "").strip() or "qwen3.7-plus"
-TABLE_CELL_VISION_FALLBACK_MODEL = os.getenv("TABLE_CELL_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+TABLE_CELL_VISION_FALLBACK_MODEL = os.getenv("TABLE_CELL_VISION_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.7-flash").strip()
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-flash").strip()
 SMALL_LLM_FALLBACK_MODEL = os.getenv("SMALL_LLM_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 # 结构分析：复星网关上 glm-5.1 chat 易空回复或长时间无响应，默认 qwen3.5-plus
-TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.7-flash"
+TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-flash"
 TEMPLATE_ANALYZE_FALLBACK_MODEL = (
     os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 )
@@ -66,13 +67,13 @@ TEMPLATE_ANALYZE_TIMEOUT = float(os.getenv("TEMPLATE_ANALYZE_TIMEOUT", "180"))
 TEMPLATE_ANALYZE_MAX_PROMPT_CHARS = int(
     os.getenv("TEMPLATE_ANALYZE_MAX_PROMPT_CHARS", "8000")
 )
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.7-max-preview"
-FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.7-max-2026-05-17"
-FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "qwen3.7-max-2026-05-20"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.7-max"
+FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.7-max"
+FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "qwen3.7-max"
 FALLBACK_LLM_MODEL_3 = os.getenv("FALLBACK_LLM_MODEL_3", "").strip() or "qwen3.7-max"
-AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.7-max-preview"
-AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.7-max-2026-05-17"
-AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.7-max-2026-05-20"
+AUDIT_LLM_MODEL = os.getenv("AUDIT_LLM_MODEL", "").strip() or "qwen3.7-max"
+AUDIT_FALLBACK_1 = os.getenv("AUDIT_FALLBACK_1", "").strip() or "qwen3.7-max"
+AUDIT_FALLBACK_2 = os.getenv("AUDIT_FALLBACK_2", "").strip() or "qwen3.7-max"
 AUDIT_FALLBACK_3 = os.getenv("AUDIT_FALLBACK_3", "").strip() or "qwen3.7-max"
 TEMP_AUDIT = float(os.getenv("TEMP_AUDIT", "0.2"))
 
@@ -125,7 +126,7 @@ OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "4"))
 AI_MODEL_PRICING: dict[str, dict[str, float]] = {
     "qwen-plus": {"input": 0.0008, "output": 0.002},
     "qwen-turbo": {"input": 0.0003, "output": 0.0006},
-    "qwen3.7-flash": {"input": 0.0003, "output": 0.0006},
+    "qwen3.6-flash": {"input": 0.0003, "output": 0.0006},
     "qwen3.7-plus": {"input": 0.0008, "output": 0.002},
     "qwen3.7-max": {"input": 0.002, "output": 0.006},
     "qwen3.7-max-preview": {"input": 0.002, "output": 0.006},
@@ -162,7 +163,7 @@ TABLE_CELL_VISION = _TCV not in ("0", "false", "no", "off")
 _BTF = os.getenv("BATCH_TABLE_FAST", "1").strip().lower()
 BATCH_TABLE_FAST = _BTF not in ("0", "false", "no", "off")
 BATCH_TABLE_FAST_MODEL = (
-    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.7-flash"
+    os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.6-flash"
 )
 
 # 复星网关上 chat 不可靠的模型：直接走百炼 compatible-mode，避免空回复再等一轮
@@ -179,6 +180,173 @@ FOSUN_CHAT_SKIP_MODELS = _parse_fosun_chat_skip_models()
 
 def chat_prefers_dashscope_first(model: str) -> bool:
     return (model or "").strip() in FOSUN_CHAT_SKIP_MODELS
+# ---------------------------------------------------------------------------
+# 用户可选模型注册表
+# ---------------------------------------------------------------------------
+USER_MODEL_OPTIONS: dict[str, dict] = {
+    "generation": {
+        "label": "内容生成",
+        "description": "用于文档核心内容的AI生成与填写，直接影响输出质量",
+        "config_keys": ["LARGE_LLM_MODEL"],
+        "tiers": {
+            "高性能": [
+                {"model": "qwen3.7-max", "recommended": True},
+                {"model": "glm-5.1"},
+                {"model": "glm-5"},
+                {"model": "kimi-k2.6"},
+                {"model": "kimi-k2.5"},
+            ],
+            "性价比": [
+                {"model": "MiniMax-M2.5"},
+                {"model": "deepseek-v4-pro", "recommended": True},
+            ],
+        },
+    },
+    "lightweight": {
+        "label": "轻度处理",
+        "description": "查询扩展、槽位扫描等轻量推理任务，速度优先",
+        "config_keys": ["SMALL_LLM_MODEL", "TEMPLATE_ANALYZE_MODEL", "BATCH_TABLE_FAST_MODEL"],
+        "options": [
+            {"model": "qwen3.6-flash", "recommended": True},
+            {"model": "qwen3.5-flash"},
+            {"model": "deepseek-v4-flash"},
+            {"model": "qwen3.6-35b-a3b"},
+        ],
+    },
+    "vision": {
+        "label": "视觉分析",
+        "description": "模板图片识别、网页截图理解、表格内容提取",
+        "config_keys": ["VISION_WEB_MODEL", "TEMPLATE_VISION_MODEL", "VISION_EXTRACT_MODEL", "TABLE_CELL_VISION_MODEL", "VISION_WEB_FALLBACK_MODEL", "TEMPLATE_VISION_FALLBACK_MODEL", "VISION_EXTRACT_FALLBACK_MODEL", "TABLE_CELL_VISION_FALLBACK_MODEL", "TABLE_CELL_FALLBACK_MODEL"],
+        "tiers": {
+            "高性能": [
+                {"model": "qwen3.7-plus", "recommended": True},
+                {"model": "qwen3.6-plus"},
+                {"model": "kimi-k2.6"},
+                {"model": "kimi-k2.5"},
+            ],
+            "性价比": [
+                {"model": "qwen3.5-plus"},
+                {"model": "qwen3.6-flash"},
+                {"model": "qwen3.5-flash"},
+            ],
+        },
+    },
+    "search": {
+        "label": "联网搜索",
+        "description": "实时检索网络信息，补充知识库内容",
+        "config_keys": [],
+        "tiers": {
+            "高性能": [
+                {"model": "qwen3.7-plus", "recommended": True},
+                {"model": "qwen3.6-plus"},
+                {"model": "kimi-k2.6"},
+                {"model": "kimi-k2.5"},
+            ],
+            "性价比": [
+                {"model": "qwen3.5-plus"},
+                {"model": "qwen3.6-flash"},
+                {"model": "qwen3.5-flash"},
+            ],
+        },
+    },
+    "audit": {
+        "label": "审核",
+        "description": "文本合规检查与视觉内容安全审核",
+        "config_keys": ["AUDIT_LLM_MODEL", "VISUAL_AUDIT_MODEL"],
+        "options": [
+            {"model": "qwen3.6-flash", "recommended": True},
+            {"model": "qwen3.5-flash"},
+            {"model": "qwen3.6-35b-a3b"},
+        ],
+    },
+}
+
+
+def get_user_model(module: str) -> str:
+    """从用户偏好中读取选定模型，如果没有则返回 config 默认值。"""
+    # 延迟导入避免循环引用
+    from core.auth import get_user_preferences as _get_prefs
+    # 注意：此函数需要 user_id 参数；当无法获取时回退到默认值
+    # 实际使用时应传入 user_id，这里提供无参便捷版本仅用于非请求上下文
+    # 在请求上下文中请使用 get_user_model_for_user(user_id, module)
+    return _get_default_model_for_module(module)
+
+
+def get_user_model_for_user(user_id: int, module: str) -> str:
+    """根据用户偏好返回指定模块的模型，未设置则返回默认值。"""
+    from core.auth import get_user_preferences as _get_prefs
+    try:
+        prefs = _get_prefs(user_id)
+        model_choices = prefs.get("model_choices", {})
+        if isinstance(model_choices, str):
+            import json as _json
+            try:
+                model_choices = _json.loads(model_choices)
+            except (ValueError, TypeError):
+                model_choices = {}
+        if module in model_choices and model_choices[module]:
+            return model_choices[module]
+    except Exception:
+        pass
+    return _get_default_model_for_module(module)
+
+
+# 硬编码推荐默认值：用户未保存选择时，优先使用这些高性能推荐模型
+_DEFAULT_MODEL_OVERRIDES: dict[str, str] = {
+    "generation": "qwen3.7-max",
+    "lightweight": "qwen3.6-flash",
+    "vision": "qwen3.7-plus",
+    "search": "qwen3.7-plus",
+    "audit": "qwen3.6-flash",
+}
+
+
+def _get_default_model_for_module(module: str) -> str:
+    """返回模块的默认模型。
+
+    优先级：
+    1. _DEFAULT_MODEL_OVERRIDES 中的硬编码推荐值
+    2. config_keys 第一个对应的当前环境变量值
+    3. tiers/options 中 recommended=True 且位于高性能档的模型
+    4. 任意 recommended 模型
+    5. options/tiers 中第一个模型
+    """
+    module_def = USER_MODEL_OPTIONS.get(module)
+    if not module_def:
+        return ""
+    # 1. 硬编码推荐默认值
+    override = _DEFAULT_MODEL_OVERRIDES.get(module)
+    if override:
+        return override
+    # 2. config_keys 环境变量
+    config_keys = module_def.get("config_keys", [])
+    if config_keys:
+        first_key = config_keys[0]
+        val = globals().get(first_key, "")
+        if val:
+            return val
+    # 3/4. tiers 中优先高性能档的 recommended 模型
+    tiers = module_def.get("tiers")
+    if tiers:
+        high_perf = tiers.get("高性能") or []
+        for m in high_perf:
+            if m.get("recommended"):
+                return m["model"]
+        for tier_models in tiers.values():
+            for m in tier_models:
+                if m.get("recommended"):
+                    return m["model"]
+    # options 中的 recommended
+    options = module_def.get("options")
+    if options:
+        for m in options:
+            if m.get("recommended"):
+                return m["model"]
+        if options:
+            return options[0]["model"]
+    return ""
+
+
 # 每格请求最多附带几页 PNG（减延迟；默认同模板视觉页数上限）
 TABLE_VISION_MAX_PAGES = int(os.getenv("TABLE_VISION_MAX_PAGES", str(TEMPLATE_VISION_MAX_PAGES)))
 # 正文首行缩进（pt），约 2 个中文字宽；0 表示不自动加
@@ -245,7 +413,7 @@ VISUAL_AUDIT_ENABLED = _VISUAL_AUDIT not in ("0", "false", "no", "off")
 VISUAL_AUDIT_MAX_ROUNDS = int(os.getenv("VISUAL_AUDIT_MAX_ROUNDS", "3"))
 VISUAL_AUDIT_PASS_SCORE = int(os.getenv("VISUAL_AUDIT_PASS_SCORE", "85"))
 VISUAL_AUDIT_MODEL = os.getenv("VISUAL_AUDIT_MODEL", "qwen3.7-plus").strip()
-VISUAL_AUDIT_FALLBACK_MODEL = os.getenv("VISUAL_AUDIT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus-2026-05-26"
+VISUAL_AUDIT_FALLBACK_MODEL = os.getenv("VISUAL_AUDIT_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 
 # 内容充实度配置
 _CONTENT_RICHNESS = os.getenv("CONTENT_RICHNESS_ENABLED", "1").strip().lower()
