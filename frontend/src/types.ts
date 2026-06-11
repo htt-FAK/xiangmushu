@@ -142,6 +142,14 @@ export type GenerateEvent =
   | { type: "billing"; index: number; billing: BillingRecord }
   | { type: "progress"; index: number; total: number }
   | {
+      type: "quota_alert";
+      seq?: number;
+      module?: string;
+      current_model: string;
+      available_models: string[];
+      message: string;
+    }
+  | {
       type: "done";
       seq?: number;
       filename: string;

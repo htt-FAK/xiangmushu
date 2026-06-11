@@ -106,7 +106,7 @@ from core.content_auditor import (
     should_apply_revision,
 )
 from core.filler import WordFiller
-from core.generator import ContentGenerator
+from core.generator import ContentGenerator, QuotaExceededError
 from core.kb_extract import is_supported_kb_extension, path_to_parsed_document
 from core.kb_registry import add_kb, load_registry, remove_kb
 from core.post_fill_verifier import verify_filled_document
@@ -396,6 +396,39 @@ def _serialize_session(session: GenerationSession | None) -> dict[str, object]:
     return {"session": session.snapshot() if session is not None else None}
 
 
+def _available_models_for_module(module: str) -> list[str]:
+    module_config = config.USER_MODEL_OPTIONS.get(module) or {}
+    models: list[str] = []
+    seen: set[str] = set()
+    for tier_models in (module_config.get("tiers") or {}).values():
+        for item in tier_models:
+            model = str((item or {}).get("model") or "").strip()
+            if not model or model in seen:
+                continue
+            seen.add(model)
+            models.append(model)
+    for item in module_config.get("options") or []:
+        model = str((item or {}).get("model") or "").strip()
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        models.append(model)
+    return models
+
+
+def _quota_alert_event(user_id: int, exc: QuotaExceededError) -> dict[str, object]:
+    module = str(exc.module or "").strip()
+    current_model = (config.get_user_model_for_user(user_id, module) if module else exc.model).strip() or exc.model
+    message = exc.detail.strip() or f"Quota exceeded for model: {current_model}"
+    return {
+        "type": "quota_alert",
+        "module": module,
+        "current_model": current_model,
+        "available_models": _available_models_for_module(module),
+        "message": message,
+    }
+
+
 def _resolve_generation_request(current_user: User, params: dict[str, object]) -> dict[str, object]:
     slug = str(params["slug"])
     template = str(params["template"])
@@ -540,6 +573,8 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                 audit_issues=audit_issues,
                 revised=revised,
             )
+        except QuotaExceededError:
+            raise
         except Exception as exc:
             logger.exception("Task %d generation failed", i)
             content = "（生成失败，请重试）"
@@ -561,7 +596,9 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
         for i, task in enumerate(tasks):
             emit({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS) as executor:
+        abort_generation = False
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS)
+        try:
             futures = [executor.submit(_generate_one_task, i, task) for i, task in enumerate(tasks)]
             pending = set(futures)
             while pending:
@@ -570,7 +607,14 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                     emit({"type": "heartbeat"})
                     continue
                 for future in done:
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except QuotaExceededError as exc:
+                        emit(_quota_alert_event(current_user.id, exc))
+                        abort_generation = True
+                        for pending_future in pending:
+                            pending_future.cancel()
+                        return
                     task_results.append(result)
                     index = result["index"]
                     if result["route"] is not None:
@@ -584,6 +628,8 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                     if result["audit"] is not None:
                         emit(result["audit"])
                     emit({"type": "progress", "index": index, "total": len(tasks)})
+        finally:
+            executor.shutdown(wait=not abort_generation, cancel_futures=abort_generation)
 
         task_results.sort(key=lambda item: item["index"])
         results: list[str] = [item["content"] for item in task_results]
@@ -626,6 +672,8 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                 "billing_summary": billing_summary(current_user.id),
             }
         )
+    except QuotaExceededError as exc:
+        emit(_quota_alert_event(current_user.id, exc))
     except Exception as exc:
         logger.exception("Generation session %s failed", session_id)
         emit({"type": "error", "error": classify_provider_error(exc), "terminal": True})

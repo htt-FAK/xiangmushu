@@ -135,6 +135,17 @@ class GenerationSession:
             self.billing = event.get("billing") or self.billing
             self.billing_summary = event.get("billing_summary")
             return
+        if event_type == "quota_alert":
+            message = str(event.get("message") or event.get("detail") or "Quota exceeded")
+            self.last_error = {
+                "code": "quota_exceeded",
+                "message": message,
+                "retryable": False,
+                "detail": message,
+            }
+            self.status = "error"
+            self.current_step = "error"
+            return
         if event_type == "error":
             self.last_error = event.get("error") if isinstance(event.get("error"), dict) else {"code": "unknown_error", "message": str(event.get("error") or ""), "retryable": True}
             if event.get("terminal"):

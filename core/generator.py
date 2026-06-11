@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 import config
 from core.dashscope_chat import chat_completions_create
 from core.fill_task import FillTask
+from core.provider_errors import classify_provider_error
 from core.reporting import evidence_refs_from_results
 from core.template_vision import build_table_cell_user_content
 from core.query_expander import expand_query
@@ -190,6 +191,24 @@ class GenerationBundle:
     evidence_refs: List[str]
 
 
+class QuotaExceededError(RuntimeError):
+    """Raised when the selected model hits provider quota and fallback should stop."""
+
+    def __init__(
+        self,
+        model: str,
+        module: str,
+        detail: str = "",
+        provider_error: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        message = detail.strip() or f"Quota exceeded for model: {model}"
+        super().__init__(message)
+        self.model = model
+        self.module = module
+        self.detail = detail.strip() or message
+        self.provider_error = provider_error or classify_provider_error(self.detail)
+
+
 class ContentGenerator:
     """RAG generation with route-aware model fallback chains."""
 
@@ -279,6 +298,22 @@ class ContentGenerator:
             seen.add(mid)
             ordered.append(mid)
         return ordered
+
+    @staticmethod
+    def _quota_error_for(
+        raw_error: BaseException | str,
+        model: str,
+        route_meta: Optional[Dict[str, Any]] = None,
+    ) -> Optional[QuotaExceededError]:
+        provider_error = classify_provider_error(raw_error)
+        if provider_error.get("code") != "quota_exceeded":
+            return None
+        return QuotaExceededError(
+            model=model,
+            module=str((route_meta or {}).get("model_module") or ""),
+            detail=str(provider_error.get("detail") or raw_error),
+            provider_error=provider_error,
+        )
 
     def _build_chat_request(
         self,
@@ -429,14 +464,17 @@ class ContentGenerator:
             model = self._model_for_module("search", config.VISION_WEB_MODEL)
             temperature = config.TEMP_WEB_GEN
             generation_tier = "vision_web"
+            model_module = "search"
         elif use_small_rag:
             model = self._model_for_module("lightweight", config.SMALL_LLM_MODEL)
             temperature = config.TEMP_SMALL_LLM
             generation_tier = "small_rag"
+            model_module = "lightweight"
         else:
             model = self._model_for_module("generation", config.LARGE_LLM_MODEL)
             temperature = config.TEMP_LARGE_LLM
             generation_tier = "large"
+            model_module = "generation"
 
         table_cell_mm = (
             task.task_type == "table_cell"
@@ -449,6 +487,7 @@ class ContentGenerator:
             if not use_plus:
                 model = self._model_for_module("vision", config.TABLE_CELL_VISION_MODEL)
                 temperature = float(getattr(config, "TEMP_VISION", 0.25))
+                model_module = "vision"
         if _fast_table_cell_route(task, fast_mode):
             extra_body.pop("enable_search", None)
             table_cell_mm = False
@@ -458,6 +497,7 @@ class ContentGenerator:
             )
             temperature = 0.1
             generation_tier = "table_cell_fast"
+            model_module = "lightweight"
 
         gen_max_out = _max_output_tokens(word_limit, task.task_type)
         route_meta: Dict[str, Any] = {
@@ -473,6 +513,7 @@ class ContentGenerator:
             "enable_web_requested": enable_web,
             "native_web_search": bool(extra_body.get("enable_search")),
             "model": model,
+            "model_module": model_module,
             "temperature": temperature,
             "top_k": top_k,
             "retrieval_max_distance": max_d,
@@ -598,14 +639,17 @@ class ContentGenerator:
             model = self._model_for_module("search", config.VISION_WEB_MODEL)
             temperature = config.TEMP_WEB_GEN
             generation_tier = "vision_web"
+            model_module = "search"
         elif use_small_rag:
             model = self._model_for_module("lightweight", config.SMALL_LLM_MODEL)
             temperature = config.TEMP_SMALL_LLM
             generation_tier = "small_rag"
+            model_module = "lightweight"
         else:
             model = self._model_for_module("generation", config.LARGE_LLM_MODEL)
             temperature = config.TEMP_LARGE_LLM
             generation_tier = "large"
+            model_module = "generation"
 
         table_cell_mm = (
             task.task_type == "table_cell"
@@ -618,6 +662,7 @@ class ContentGenerator:
             if not use_plus:
                 model = self._model_for_module("vision", config.TABLE_CELL_VISION_MODEL)
                 temperature = float(getattr(config, "TEMP_VISION", 0.25))
+                model_module = "vision"
         if _fast_table_cell_route(task, fast_mode):
             extra_body.pop("enable_search", None)
             table_cell_mm = False
@@ -627,6 +672,7 @@ class ContentGenerator:
             )
             temperature = 0.1
             generation_tier = "table_cell_fast"
+            model_module = "lightweight"
 
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -644,6 +690,7 @@ class ContentGenerator:
             "enable_web_requested": enable_web,
             "native_web_search": bool(extra_body.get("enable_search")),
             "model": model,
+            "model_module": model_module,
             "temperature": temperature,
             "generation_tier": generation_tier,
             "use_small_llm_for_rag": bool(use_small_rag),
@@ -756,6 +803,9 @@ class ContentGenerator:
                     return
                 _LOG.warning("content_gen_stream_empty model=%s, trying next fallback", model)
             except Exception as e:
+                quota_error = self._quota_error_for(e, model, bundle.route_meta)
+                if quota_error is not None:
+                    raise quota_error
                 last_error = e
                 _LOG.warning("content_gen_stream_error model=%s err=%s", model, e)
         if last_error is not None:
@@ -832,6 +882,9 @@ class ContentGenerator:
                     _LOG.warning("content_gen_nonstream_empty model=%s, trying next fallback", model)
                     continue
                 if self._is_error_content(text):
+                    quota_error = self._quota_error_for(text, model, bundle.route_meta)
+                    if quota_error is not None:
+                        raise quota_error
                     _LOG.warning("content_gen_nonstream_error_text model=%s text=%s", model, text[:200])
                     continue
                 self.last_usage = getattr(resp, "usage", None)
@@ -847,6 +900,9 @@ class ContentGenerator:
                 )
                 return text.strip()
             except Exception as e:
+                quota_error = self._quota_error_for(e, model, bundle.route_meta)
+                if quota_error is not None:
+                    raise quota_error
                 last_error = e
                 _LOG.warning("content_gen_nonstream_error model=%s err=%s", model, e)
         if last_error is not None:

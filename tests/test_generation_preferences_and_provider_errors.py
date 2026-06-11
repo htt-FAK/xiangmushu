@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.fill_task import FillTask
-from core.generator import ContentGenerator
+from core.generator import ContentGenerator, QuotaExceededError
 from core.provider_errors import classify_provider_error
 
 
@@ -112,3 +112,80 @@ def test_provider_error_classifies_429_quota_message_as_quota():
 
     assert result["code"] == "quota_exceeded"
     assert result["retryable"] is False
+
+
+def test_generate_from_bundle_raises_quota_error_without_fallback(monkeypatch):
+    monkeypatch.setattr("config.FULL_RECALL_MODE", False)
+    monkeypatch.setattr("config.get_user_model_for_user", lambda user_id, module: "quota-model")
+    vs = DummyVectorStore(
+        [{"distance": 0.9, "text": "evidence", "metadata": {"source": "a.txt"}}],
+        count=1,
+    )
+    generator = ContentGenerator(vs, user_id=7)
+    bundle = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=False, retrieval_max_distance=1.0)
+
+    calls: list[str] = []
+
+    class QuotaError(Exception):
+        status_code = 429
+
+    def fake_chat(*args, **kwargs):
+        calls.append(kwargs["model"])
+        raise QuotaError("429 insufficient_quota: balance exhausted")
+
+    monkeypatch.setattr("core.generator.chat_completions_create", fake_chat)
+
+    try:
+        generator.generate_from_bundle(bundle)
+        assert False, "QuotaExceededError was not raised"
+    except QuotaExceededError as exc:
+        assert exc.model == "quota-model"
+        assert exc.module == "generation"
+
+    assert calls == ["quota-model"]
+
+
+def test_generate_from_bundle_keeps_non_quota_fallback(monkeypatch):
+    monkeypatch.setattr("config.FULL_RECALL_MODE", False)
+    monkeypatch.setattr("config.get_user_model_for_user", lambda user_id, module: "primary-model")
+    monkeypatch.setattr("config.FALLBACK_LLM_MODEL_1", "fallback-model")
+    monkeypatch.setattr("config.FALLBACK_LLM_MODEL_2", "")
+    monkeypatch.setattr("config.FALLBACK_LLM_MODEL_3", "")
+    vs = DummyVectorStore(
+        [{"distance": 0.9, "text": "evidence", "metadata": {"source": "a.txt"}}],
+        count=1,
+    )
+    generator = ContentGenerator(vs, user_id=7)
+    bundle = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=False, retrieval_max_distance=1.0)
+
+    calls: list[str] = []
+
+    class TemporaryProviderError(Exception):
+        status_code = 503
+
+    class _Message:
+        def __init__(self, content: str):
+            self.content = content
+
+    class _Choice:
+        def __init__(self, content: str):
+            self.message = _Message(content)
+
+    class _Response:
+        def __init__(self, model: str, content: str):
+            self.model = model
+            self.choices = [_Choice(content)]
+            self.usage = None
+
+    def fake_chat(*args, **kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "primary-model":
+            raise TemporaryProviderError("provider temporarily unavailable")
+        return _Response(kwargs["model"], "fallback success")
+
+    monkeypatch.setattr("core.generator.chat_completions_create", fake_chat)
+
+    result = generator.generate_from_bundle(bundle)
+
+    assert result == "fallback success"
+    assert calls == ["primary-model", "fallback-model"]

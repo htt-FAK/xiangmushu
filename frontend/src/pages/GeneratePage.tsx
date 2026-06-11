@@ -28,10 +28,12 @@ import {
   fetchKnowledgeBases,
   fetchKnowledgeSources,
   fetchTemplates,
+  fetchUserPreferences,
   handleDownload,
   startGenerateSession,
   streamGenerate,
   streamGenerationSession,
+  updateUserPreferences,
 } from "../api";
 import type { OutputBlockData } from "../components/OutputBlock";
 import { Button, EmptyState, ErrorBanner, Input, PageHeader, Panel, Stat } from "../components/ui";
@@ -42,6 +44,7 @@ import type {
   GenerationBilling,
   KnowledgeBase,
   KnowledgeSourceStats,
+  UserPreferences,
   PostFillChecks,
   TemplateItem,
 } from "../types";
@@ -51,6 +54,7 @@ import { deriveGenerateReadiness, useWorkflow } from "../workflow";
 const LazyOutputBlock = lazy(() => import("../components/OutputBlock").then((m) => ({ default: m.OutputBlock })));
 
 type OutputBlock = OutputBlockData;
+type QuotaAlertPayload = Extract<GenerateEvent, { type: "quota_alert" }>;
 type RailItem = { value: string; title: string; meta?: string };
 type GenerateStep = "idle" | "retrieval" | "analysis" | "generation" | "audit" | "done";
 
@@ -266,8 +270,12 @@ export default function GeneratePage() {
   const [visualScore, setVisualScore] = useState<number | null>(null);
   const [runBilling, setRunBilling] = useState<GenerationBilling | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const [modelChoices, setModelChoices] = useState<UserPreferences["model_choices"]>({});
   const [selectedKnowledgeStats, setSelectedKnowledgeStats] = useState<KnowledgeSourceStats | null>(workflowState.knowledge.stats);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [quotaAlert, setQuotaAlert] = useState<QuotaAlertPayload | null>(null);
+  const [quotaSelection, setQuotaSelection] = useState("");
+  const [savingQuotaSwitch, setSavingQuotaSwitch] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [downloadingDoc, setDownloadingDoc] = useState(false);
   const [downloadingReport, setDownloadingReport] = useState(false);
@@ -357,6 +365,10 @@ export default function GeneratePage() {
 
   function handleEvent(event: GenerateEvent) {
     if (event.type === "heartbeat") return;
+    if (event.type === "quota_alert") {
+      handleQuotaAlert(event);
+      return;
+    }
     if (event.type === "task") {
       setCurrentTask(event.chapter);
       setCurrentStep("generation");
@@ -470,6 +482,9 @@ export default function GeneratePage() {
     fetchApiKeyStatus()
       .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
       .catch(() => setHasApiKey(null));
+    fetchUserPreferences()
+      .then((prefs) => setModelChoices(prefs.model_choices ?? {}))
+      .catch(() => undefined);
     fetchActiveGenerationSession()
       .then((result) => {
         if (result.session) {
@@ -607,6 +622,44 @@ export default function GeneratePage() {
     setError(JSON.stringify({ level: "error", message, retryable: true }));
   }
 
+  function handleQuotaAlert(event: QuotaAlertPayload) {
+    setQuotaAlert(event);
+    setQuotaSelection(() => {
+      const preferred = modelChoices?.[event.module];
+      if (preferred && event.available_models.includes(preferred)) return preferred;
+      if (event.available_models.includes(event.current_model)) return event.current_model;
+      return event.available_models[0] ?? event.current_model;
+    });
+    setRunning(false);
+    setRegeneratingIndex(null);
+    setError("");
+  }
+
+  async function saveQuotaModelSwitch() {
+    if (!quotaAlert || !quotaSelection) return;
+    const nextChoices = { ...(modelChoices ?? {}), [quotaAlert.module]: quotaSelection };
+    setSavingQuotaSwitch(true);
+    try {
+      const updated = await updateUserPreferences({ model_choices: nextChoices });
+      setModelChoices(updated.model_choices ?? nextChoices);
+      setQuotaAlert(null);
+      setQuotaSelection("");
+      setError(JSON.stringify({
+        level: "info",
+        message: t("generate.quotaSwitchSaved").replace("{0}", quotaSelection),
+        retryable: false,
+      }));
+    } catch (err) {
+      setError(JSON.stringify({
+        level: "error",
+        message: err instanceof Error ? err.message : String(err),
+        retryable: true,
+      }));
+    } finally {
+      setSavingQuotaSwitch(false);
+    }
+  }
+
   function stop() {
     abortRef.current?.abort();
     sectionAbortRef.current?.abort();
@@ -720,6 +773,13 @@ export default function GeneratePage() {
           }
 
           if (event.type === "done") {
+            return;
+          }
+
+          if (event.type === "quota_alert") {
+            failed = true;
+            handleQuotaAlert(event);
+            controller.abort();
             return;
           }
 
@@ -1288,6 +1348,85 @@ export default function GeneratePage() {
               <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={start}>
                 <Play size={17} />
                 {t("generate.confirmStart")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {quotaAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
+          <div className="w-full max-w-xl border border-rose-500/30 bg-night-900 p-5 shadow-panel md:p-6">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center border border-rose-500/40 bg-rose-500/10 text-rose-200">
+                <Cpu size={19} />
+              </div>
+              <h3 className="font-display text-xl font-semibold text-white">{t("generate.quotaDialogTitle")}</h3>
+            </div>
+            <p className="text-sm leading-7 text-slate-300">
+              {t("generate.quotaDialogBody")
+                .replace("{0}", quotaAlert.current_model)
+                .replace("{1}", quotaAlert.module)}
+            </p>
+            {quotaAlert.detail && (
+              <p className="mt-3 break-all border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-5 text-slate-400">
+                {quotaAlert.detail}
+              </p>
+            )}
+            <div className="mt-5 grid gap-2">
+              {quotaAlert.available_models.map((model) => {
+                const selected = quotaSelection === model;
+                const disabled = model === quotaAlert.current_model;
+                return (
+                  <button
+                    key={model}
+                    type="button"
+                    onClick={() => setQuotaSelection(model)}
+                    className={clsx(
+                      "flex items-center justify-between gap-3 border px-3 py-3 text-left transition",
+                      selected
+                        ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
+                        : "border-white/10 bg-night-950/70 text-slate-300 hover:border-white/25 hover:text-white",
+                      disabled && "opacity-60",
+                    )}
+                  >
+                    <span className="min-w-0">
+                      <span className="block break-all text-sm font-semibold">{model}</span>
+                      <span className="mt-1 block text-xs text-slate-500">
+                        {disabled ? t("generate.quotaCurrentModel") : t("generate.quotaSwitchOption")}
+                      </span>
+                    </span>
+                    {selected && <CheckCircle2 className="shrink-0" size={16} />}
+                  </button>
+                );
+              })}
+            </div>
+            {quotaAlert.available_models.filter((model) => model !== quotaAlert.current_model).length === 0 && (
+              <p className="mt-3 text-sm text-amber-200">{t("generate.quotaNoAlternative")}</p>
+            )}
+            <div className="mt-5 grid gap-3 sm:flex sm:justify-end">
+              <Button
+                className="min-h-12 w-full sm:w-auto"
+                variant="ghost"
+                onClick={() => {
+                  setQuotaAlert(null);
+                  setQuotaSelection("");
+                }}
+                disabled={savingQuotaSwitch}
+              >
+                {t("generate.cancel")}
+              </Button>
+              <Button
+                className="min-h-12 w-full font-bold sm:w-auto"
+                onClick={saveQuotaModelSwitch}
+                disabled={
+                  savingQuotaSwitch ||
+                  !quotaSelection ||
+                  quotaSelection === quotaAlert.current_model
+                }
+              >
+                {savingQuotaSwitch ? <Loader2 className="animate-spin" size={17} /> : <Cpu size={17} />}
+                {t("generate.quotaSaveModel")}
               </Button>
             </div>
           </div>
