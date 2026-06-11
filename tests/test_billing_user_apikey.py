@@ -135,6 +135,42 @@ def test_user_api_key_validation_endpoint_returns_probe_result(tmp_path, monkeyp
     assert data["validated_model"] == "qwen3.6-flash"
 
 
+def test_user_api_key_validation_endpoint_surfaces_quota_message(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
+    init_db(str(db_path))
+    user = get_or_create_user("quota@example.com", db_path=str(db_path))
+    headers = _auth_headers(user)
+
+    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key: {
+        "ok": False,
+        "code": "quota_exceeded",
+        "message": "当前 API Key 的模型额度已用完，暂时无法继续调用。",
+        "retryable": False,
+        "validated_model": None,
+        "probes": [
+            {
+                "ok": False,
+                "model": "qwen3.6-flash",
+                "code": "quota_exceeded",
+                "message": "当前 API Key 的模型额度已用完，暂时无法继续调用。",
+                "detail": "429 insufficient_quota: balance exhausted",
+                "retryable": False,
+            }
+        ],
+    })
+
+    with TestClient(server.app) as client:
+        response = client.post("/api/user/apikey/validate", json={"api_key": "quota-key"}, headers=headers)
+
+    assert response.status_code == 422
+    data = response.json()
+    assert data["code"] == "quota_exceeded"
+    assert "额度已用完" in data["message"]
+    assert data["retryable"] is False
+
+
 def test_generation_session_start_and_recovery_contract(tmp_path, monkeypatch):
     db_path = tmp_path / "auth.sqlite3"
     monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))

@@ -453,7 +453,11 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
             task.word_limit = word_limit
         if custom_instructions:
             task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
-        local_generator = ContentGenerator(vs, api_key=user_api_key)
+        local_generator = ContentGenerator(
+            vs,
+            api_key=user_api_key,
+            user_id=current_user.id,
+        )
         local_auditor = ContentAuditor() if enable_audit else None
         result = {
             "index": i,

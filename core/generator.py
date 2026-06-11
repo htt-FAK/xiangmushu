@@ -193,9 +193,15 @@ class GenerationBundle:
 class ContentGenerator:
     """RAG generation with route-aware model fallback chains."""
 
-    def __init__(self, vector_store: VectorStore, api_key: str | None = None):
+    def __init__(
+        self,
+        vector_store: VectorStore,
+        api_key: str | None = None,
+        user_id: int | None = None,
+    ):
         self._vs = vector_store
         self._client = self._client_for_api_key(api_key) if api_key else config.openai_client_for_chat()
+        self._user_id = user_id
         self.last_usage: Any = None
         self.last_model: str = ""
 
@@ -213,6 +219,12 @@ class ContentGenerator:
     def _get_client(self) -> Any:
         """Return the active chat client."""
         return self._client
+
+    def _model_for_module(self, module: str, fallback: str) -> str:
+        if self._user_id is None:
+            return fallback
+        model = config.get_user_model_for_user(self._user_id, module)
+        return (model or "").strip() or fallback
 
     def pop_last_usage(self) -> tuple[str, Any]:
         usage = self.last_usage
@@ -414,15 +426,15 @@ class ContentGenerator:
 
         if use_plus:
             extra_body["enable_search"] = True
-            model = config.VISION_WEB_MODEL
+            model = self._model_for_module("search", config.VISION_WEB_MODEL)
             temperature = config.TEMP_WEB_GEN
             generation_tier = "vision_web"
         elif use_small_rag:
-            model = config.SMALL_LLM_MODEL
+            model = self._model_for_module("lightweight", config.SMALL_LLM_MODEL)
             temperature = config.TEMP_SMALL_LLM
             generation_tier = "small_rag"
         else:
-            model = config.LARGE_LLM_MODEL
+            model = self._model_for_module("generation", config.LARGE_LLM_MODEL)
             temperature = config.TEMP_LARGE_LLM
             generation_tier = "large"
 
@@ -435,12 +447,15 @@ class ContentGenerator:
         if table_cell_mm:
             generation_tier = "table_cell_vision"
             if not use_plus:
-                model = config.TABLE_CELL_VISION_MODEL
+                model = self._model_for_module("vision", config.TABLE_CELL_VISION_MODEL)
                 temperature = float(getattr(config, "TEMP_VISION", 0.25))
         if _fast_table_cell_route(task, fast_mode):
             extra_body.pop("enable_search", None)
             table_cell_mm = False
-            model = getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL)
+            model = self._model_for_module(
+                "lightweight",
+                getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL),
+            )
             temperature = 0.1
             generation_tier = "table_cell_fast"
 
@@ -580,15 +595,15 @@ class ContentGenerator:
         extra_body: Dict[str, Any] = {}
         if use_plus:
             extra_body["enable_search"] = True
-            model = config.VISION_WEB_MODEL
+            model = self._model_for_module("search", config.VISION_WEB_MODEL)
             temperature = config.TEMP_WEB_GEN
             generation_tier = "vision_web"
         elif use_small_rag:
-            model = config.SMALL_LLM_MODEL
+            model = self._model_for_module("lightweight", config.SMALL_LLM_MODEL)
             temperature = config.TEMP_SMALL_LLM
             generation_tier = "small_rag"
         else:
-            model = config.LARGE_LLM_MODEL
+            model = self._model_for_module("generation", config.LARGE_LLM_MODEL)
             temperature = config.TEMP_LARGE_LLM
             generation_tier = "large"
 
@@ -601,12 +616,15 @@ class ContentGenerator:
         if table_cell_mm:
             generation_tier = "table_cell_vision"
             if not use_plus:
-                model = config.TABLE_CELL_VISION_MODEL
+                model = self._model_for_module("vision", config.TABLE_CELL_VISION_MODEL)
                 temperature = float(getattr(config, "TEMP_VISION", 0.25))
         if _fast_table_cell_route(task, fast_mode):
             extra_body.pop("enable_search", None)
             table_cell_mm = False
-            model = getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL)
+            model = self._model_for_module(
+                "lightweight",
+                getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL),
+            )
             temperature = 0.1
             generation_tier = "table_cell_fast"
 

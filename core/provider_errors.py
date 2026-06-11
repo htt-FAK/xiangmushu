@@ -71,7 +71,7 @@ def classify_provider_error(exc: BaseException | str | None) -> dict[str, Any]:
         "temporarily unavailable",
     )
 
-    if any(marker in lowered for marker in quota_markers):
+    if code == 402 or any(marker in lowered for marker in quota_markers):
         return {
             "code": "quota_exceeded",
             "message": "当前 API Key 的模型额度已用完，暂时无法继续调用。",

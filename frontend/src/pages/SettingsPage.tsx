@@ -88,7 +88,7 @@ function ModelSelector({
       </div>
 
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-full min-w-[240px] max-w-[320px] border border-white/15 bg-night-900 shadow-xl">
+        <div className="absolute right-0 z-50 mt-1 w-full min-w-[240px] max-w-[320px] border border-white/15 bg-night-900 shadow-xl">
           {config.tiers ? (
             Object.entries(config.tiers).map(([tierName, models]) => (
               <div key={tierName}>
