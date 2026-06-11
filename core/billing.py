@@ -214,6 +214,7 @@ def get_user_api_key_status(user_id: int, db_path: str | None = None) -> dict[st
     if row is None:
         return {
             "has_key": False,
+            "validated": False,
             "created_at": None,
             "updated_at": None,
             "key_preview": None,
@@ -229,6 +230,7 @@ def get_user_api_key_status(user_id: int, db_path: str | None = None) -> dict[st
         preview = "****"
     return {
         "has_key": True,
+        "validated": True,
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "key_preview": preview,

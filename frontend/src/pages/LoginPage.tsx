@@ -1,5 +1,5 @@
 import { AtSign, CheckCircle2, KeyRound, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { loginWithPassword, requestLoginCode, resetPassword, useAuth, verifyLoginCode } from "../auth";
 import { Button, ErrorBanner, Field, Input } from "../components/ui";
@@ -16,10 +16,32 @@ export default function LoginPage() {
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+  const [resendMsg, setResendMsg] = useState("");
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const auth = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Countdown timer: decrement cooldown every second
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    cooldownRef.current = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          if (cooldownRef.current) clearInterval(cooldownRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+    };
+  }, [cooldown > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startCooldown = useCallback(() => setCooldown(60), []);
 
   const params = new URLSearchParams(location.search);
   const rawNext = params.get("next") || "/";
@@ -32,6 +54,8 @@ export default function LoginPage() {
     setSent(false);
     setCode("");
     setError("");
+    setCooldown(0);
+    setResendMsg("");
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -49,10 +73,12 @@ export default function LoginPage() {
         const result = await requestLoginCode(email, password);
         setEmail(result.email);
         setSent(true);
+        startCooldown();
       } else {
         const result = await requestLoginCode(email);
         setEmail(result.email);
         setSent(true);
+        startCooldown();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : (mode === "login" ? t("login.verifyError") : t("login.sendError")));
@@ -74,6 +100,28 @@ export default function LoginPage() {
       navigate(next, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : t("login.verifyError"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    if (cooldown > 0 || loading) return;
+    setError("");
+    setResendMsg("");
+    setLoading(true);
+    try {
+      if (mode === "register") {
+        await requestLoginCode(email, password);
+      } else {
+        await requestLoginCode(email);
+      }
+      startCooldown();
+      setCode(""); // clear old code so user enters the new one
+      setResendMsg(t("login.resendSuccess"));
+      setTimeout(() => setResendMsg(""), 4000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("login.resendFailed"));
     } finally {
       setLoading(false);
     }
@@ -134,6 +182,12 @@ export default function LoginPage() {
             </div>
 
             <ErrorBanner message={error} />
+            {resendMsg && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-signal-lime/30 bg-signal-lime/10 px-3 py-2 text-sm font-medium text-signal-lime">
+                <CheckCircle2 size={15} />
+                {resendMsg}
+              </div>
+            )}
 
             <form className="space-y-4 md:space-y-5" onSubmit={sent ? handleVerifyCode : handleSubmit}>
               <Field label={t("login.email")}>
@@ -159,7 +213,7 @@ export default function LoginPage() {
                       className="pl-10 tracking-[0.24em]"
                       inputMode="numeric"
                       maxLength={6}
-                      pattern="\\d{6}"
+                      pattern="[0-9]{6}"
                       value={code}
                       onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
                       placeholder={t("login.codePlaceholder")}
@@ -205,7 +259,7 @@ export default function LoginPage() {
                       className="pl-10 tracking-[0.24em]"
                       inputMode="numeric"
                       maxLength={6}
-                      pattern="\\d{6}"
+                      pattern="[0-9]{6}"
                       value={code}
                       onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
                       placeholder={t("login.codePlaceholder")}
@@ -213,6 +267,26 @@ export default function LoginPage() {
                     />
                   </div>
                 </Field>
+              )}
+
+              {mode !== "login" && sent && (
+                <div className="flex items-center justify-between">
+                  <button
+                    className={clsx(
+                      "text-sm font-semibold transition",
+                      cooldown > 0
+                        ? "cursor-not-allowed text-slate-500"
+                        : "text-signal-cyan hover:text-white",
+                    )}
+                    disabled={cooldown > 0 || loading}
+                    onClick={handleResend}
+                    type="button"
+                  >
+                    {cooldown > 0
+                      ? t("login.resendCooldown").replace("{n}", String(cooldown))
+                      : t("login.resendCode")}
+                  </button>
+                </div>
               )}
 
               <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -264,6 +338,8 @@ export default function LoginPage() {
                       setSent(false);
                       setCode("");
                       setError("");
+                      setResendMsg("");
+                      setCooldown(0);
                     }}
                   >
                     {t("login.changeEmail")}

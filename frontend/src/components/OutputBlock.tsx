@@ -19,6 +19,10 @@ export function OutputBlock({
   waitingText,
   auditResultLabel,
   revisedLabel,
+  routeLabel = "route",
+  modelLabel = "model",
+  kbHitsLabel = "kb hits",
+  auditFallbackLabel = "issue",
   action,
   busy = false,
   busyLabel = "refreshing",
@@ -28,6 +32,10 @@ export function OutputBlock({
   waitingText: string;
   auditResultLabel: string;
   revisedLabel: string;
+  routeLabel?: string;
+  modelLabel?: string;
+  kbHitsLabel?: string;
+  auditFallbackLabel?: string;
   action?: ReactNode;
   busy?: boolean;
   busyLabel?: string;
@@ -42,17 +50,17 @@ export function OutputBlock({
           <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-300 md:text-xs">
             {block.tier && (
               <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1 uppercase tracking-[0.08em]">
-                route: {block.tier}
+                {routeLabel}: {block.tier}
               </span>
             )}
             {block.model && (
               <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1">
-                model: {block.model}
+                {modelLabel}: {block.model}
               </span>
             )}
             {typeof block.kbHits === "number" && (
               <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1">
-                kb hits: {block.kbHits}
+                {kbHitsLabel}: {block.kbHits}
               </span>
             )}
             {busy && (
@@ -81,7 +89,7 @@ export function OutputBlock({
       {block.auditIssues && block.auditIssues.length > 0 && (
         <div className="mt-3 min-w-0 border border-signal-amber/30 bg-signal-amber/10 p-3 text-sm text-amber-100">
           <p className="font-semibold">
-            {auditResultLabel}: {block.auditVerdict || "issue"}
+            {auditResultLabel}: {block.auditVerdict || auditFallbackLabel}
             {block.revised ? revisedLabel : ""}
           </p>
           <div className="mt-2 space-y-1">

@@ -51,6 +51,7 @@ from core.billing import (
     record_billing,
     save_user_api_key,
 )
+from core.api_key_validation import validate_user_api_key
 from core.audit_log import (
     ADMIN_ACCESS,
     API_KEY_DELETED,
@@ -64,6 +65,12 @@ from core.audit_log import (
     REGISTER_SUCCESS,
     log_audit,
 )
+from core.generation_sessions import (
+    ActiveGenerationExistsError,
+    GenerationSession,
+    session_manager,
+)
+from core.provider_errors import classify_provider_error, validation_http_status
 
 
 def _safe_filename(raw: str) -> str:
@@ -100,7 +107,7 @@ from core.content_auditor import (
 )
 from core.filler import WordFiller
 from core.generator import ContentGenerator
-from core.kb_extract import path_to_parsed_document
+from core.kb_extract import is_supported_kb_extension, path_to_parsed_document
 from core.kb_registry import add_kb, load_registry, remove_kb
 from core.post_fill_verifier import verify_filled_document
 from core.reporting import (
@@ -348,6 +355,290 @@ def _get_vs(slug: str) -> VectorStore:
     return _vs_cache[slug]
 
 
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _ensure_session_owned(session_id: str, current_user: User) -> GenerationSession:
+    session = session_manager.get_session_for_user(current_user.id, session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generation session not found")
+    return session
+
+
+def _build_generation_params(
+    slug: str,
+    template: str,
+    word_limit: int,
+    top_k: int,
+    max_distance: float,
+    enable_web: bool,
+    use_stream: bool,
+    enable_audit: bool,
+    enable_visual_audit: bool,
+    custom_instructions: str,
+) -> dict[str, object]:
+    return {
+        "slug": slug,
+        "template": template,
+        "word_limit": word_limit,
+        "top_k": top_k,
+        "max_distance": max_distance,
+        "enable_web": enable_web,
+        "use_stream": use_stream,
+        "enable_audit": enable_audit,
+        "enable_visual_audit": enable_visual_audit,
+        "custom_instructions": custom_instructions.strip(),
+    }
+
+
+def _serialize_session(session: GenerationSession | None) -> dict[str, object]:
+    return {"session": session.snapshot() if session is not None else None}
+
+
+def _resolve_generation_request(current_user: User, params: dict[str, object]) -> dict[str, object]:
+    slug = str(params["slug"])
+    template = str(params["template"])
+    vs = _get_vs(slug)
+    template_path = os.path.join(config.TEMPLATE_DIR, template)
+    if not os.path.isfile(template_path):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="模板不存在")
+    try:
+        tasks = _cached_analyze(template_path)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"模板分析失败: {exc}") from exc
+    if not tasks:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未找到待填位置")
+    try:
+        user_api_key = load_user_api_key(current_user.id)
+    except Exception as exc:
+        logger.exception("Failed to decrypt user API key")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load saved API Key: {exc}") from exc
+    language = get_user_preferences(current_user.id)["language"]
+    return {
+        "vs": vs,
+        "tasks": tasks,
+        "template_path": template_path,
+        "template": template,
+        "user_api_key": user_api_key,
+        "language": language,
+    }
+
+
+def _run_generation_session(session_id: str, current_user: User, params: dict[str, object], resolved: dict[str, object]) -> None:
+    vs = resolved["vs"]
+    tasks = resolved["tasks"]
+    template_path = str(resolved["template_path"])
+    template = str(resolved["template"])
+    user_api_key = resolved["user_api_key"]
+    language = str(resolved["language"])
+    custom_instructions = str(params["custom_instructions"] or "").strip()
+    word_limit = int(params["word_limit"])
+    top_k = int(params["top_k"])
+    max_distance = float(params["max_distance"])
+    enable_web = bool(params["enable_web"])
+    use_stream = bool(params["use_stream"])
+    enable_audit = bool(params["enable_audit"])
+    enable_visual_audit = bool(params["enable_visual_audit"])
+    billing_lock = threading.Lock()
+
+    def emit(event: dict[str, object]) -> None:
+        session_manager.append_event(session_id, event)
+
+    def _generate_one_task(i, task):
+        import copy
+
+        task = copy.deepcopy(task)
+        if task.word_limit <= 0:
+            task.word_limit = word_limit
+        if custom_instructions:
+            task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
+        local_generator = ContentGenerator(vs, api_key=user_api_key)
+        local_auditor = ContentAuditor() if enable_audit else None
+        result = {
+            "index": i,
+            "content": "",
+            "route_meta": {},
+            "route": None,
+            "billing": None,
+            "audit": None,
+            "trace": None,
+            "error": None,
+            "chunks": [],
+        }
+        try:
+            gen_bundle = local_generator.prepare_generation_bundle(
+                task,
+                top_k=top_k,
+                enable_web=enable_web,
+                retrieval_max_distance=max_distance,
+                language=language,
+            )
+            result["route_meta"] = gen_bundle.route_meta
+            result["route"] = {
+                "type": "route",
+                "index": i,
+                "model": gen_bundle.model,
+                "tier": gen_bundle.route_meta.get("generation_tier"),
+                "kb_hits": gen_bundle.route_meta.get("kb_hits", 0),
+                "evidence_refs": gen_bundle.evidence_refs[:5],
+            }
+            if use_stream:
+                acc: list[str] = []
+                for piece in local_generator.stream_from_bundle(gen_bundle, route_hook=None):
+                    acc.append(piece)
+                content = "".join(acc).strip()
+                result["chunks"] = acc
+            else:
+                content = local_generator.generate_from_bundle(gen_bundle, route_hook=None)
+                result["chunks"] = [content]
+            result["content"] = content
+
+            billed_model, raw_usage = local_generator.pop_last_usage()
+            with billing_lock:
+                billing_record = record_billing(
+                    current_user.id,
+                    billed_model or gen_bundle.model,
+                    normalize_usage(raw_usage),
+                )
+            result["billing"] = billing_record
+
+            audit_issues = rule_audit(task, content, gen_bundle.route_meta)
+            audit_verdict = "pass" if not audit_issues else "rule_issue"
+            revised = False
+            if local_auditor is not None and need_model_audit(task, gen_bundle.route_meta, audit_issues):
+                ar = local_auditor.audit(
+                    task,
+                    content,
+                    gen_bundle.ref_texts,
+                    None,
+                    gen_bundle.route_meta,
+                )
+                audit_verdict = ar.verdict
+                audit_issues = audit_issues + list(ar.issues)
+                if should_apply_revision(task, ar):
+                    content = ar.revised_content.strip()
+                    result["content"] = content
+                    revised = True
+            if audit_issues:
+                result["audit"] = {
+                    "type": "audit",
+                    "index": i,
+                    "verdict": audit_verdict,
+                    "issues": audit_issues[:5],
+                    "revised": revised,
+                }
+            result["trace"] = build_generation_trace(
+                task,
+                gen_bundle.route_meta,
+                result["content"],
+                audit_verdict=audit_verdict,
+                audit_issues=audit_issues,
+                revised=revised,
+            )
+        except Exception as exc:
+            logger.exception("Task %d generation failed", i)
+            content = "（生成失败，请重试）"
+            classified = classify_provider_error(exc)
+            result["content"] = content
+            result["error"] = classified
+            result["route_meta"] = {"model": "", "generation_tier": "error", "evidence_refs": []}
+            result["trace"] = build_generation_trace(
+                task,
+                result["route_meta"],
+                content,
+                audit_verdict="error",
+                audit_issues=[classified["detail"]],
+            )
+        return result
+
+    try:
+        task_results = []
+        for i, task in enumerate(tasks):
+            emit({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS) as executor:
+            futures = [executor.submit(_generate_one_task, i, task) for i, task in enumerate(tasks)]
+            pending = set(futures)
+            while pending:
+                done, pending = concurrent.futures.wait(pending, timeout=5.0, return_when=concurrent.futures.FIRST_COMPLETED)
+                if not done:
+                    emit({"type": "heartbeat"})
+                    continue
+                for future in done:
+                    result = future.result()
+                    task_results.append(result)
+                    index = result["index"]
+                    if result["route"] is not None:
+                        emit(result["route"])
+                    for piece in result["chunks"]:
+                        emit({"type": "chunk", "index": index, "text": piece})
+                    if result["billing"] is not None:
+                        emit({"type": "billing", "index": index, "billing": result["billing"]})
+                    if result["error"] is not None:
+                        emit({"type": "error", "index": index, "error": result["error"], "terminal": False})
+                    if result["audit"] is not None:
+                        emit(result["audit"])
+                    emit({"type": "progress", "index": index, "total": len(tasks)})
+
+        task_results.sort(key=lambda item: item["index"])
+        results: list[str] = [item["content"] for item in task_results]
+        traces = [item["trace"] for item in task_results]
+        billing_records = [item["billing"] for item in task_results if item["billing"] is not None]
+
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        base_name = template.replace(".docx", "")
+        output_name = f"{base_name}_u{current_user.id}_{ts}.docx"
+        output_path = os.path.join(config.OUTPUT_DIR, output_name)
+        _filler.fill_template(template_path, tasks, results, output_path)
+        post_fill_checks = verify_filled_document(template_path, output_path, tasks)
+        visual_payload = {}
+        if enable_visual_audit and config.VISUAL_AUDIT_ENABLED:
+            visual_result = audit_document_visual(output_path)
+            visual_payload = asdict(visual_result)
+        report = build_quality_report(
+            template_name=template,
+            output_path=output_path,
+            traces=traces,
+            post_fill_checks=post_fill_checks,
+            visual_audit=visual_payload,
+        )
+        report_path = save_quality_report(output_path, report)
+        emit(
+            {
+                "type": "done",
+                "filename": output_name,
+                "download": f"/api/download/{output_name}",
+                "report_download": f"/api/download/{os.path.basename(report_path)}",
+                "report_summary": quality_report_summary(report),
+                "post_fill_checks": post_fill_checks,
+                "visual_score": visual_payload.get("score"),
+                "billing": {
+                    "records": billing_records,
+                    "input_tokens": sum(int(item.get("input_tokens") or 0) for item in billing_records),
+                    "output_tokens": sum(int(item.get("output_tokens") or 0) for item in billing_records),
+                    "cost_cny": round(sum(float(item.get("cost_cny") or 0) for item in billing_records), 8),
+                },
+                "billing_summary": billing_summary(current_user.id),
+            }
+        )
+    except Exception as exc:
+        logger.exception("Generation session %s failed", session_id)
+        emit({"type": "error", "error": classify_provider_error(exc), "terminal": True})
+
+
+def _start_generation_session(current_user: User, params: dict[str, object]) -> GenerationSession:
+    resolved = _resolve_generation_request(current_user, params)
+    session = session_manager.create_session(current_user.id, params)
+    worker = threading.Thread(
+        target=_run_generation_session,
+        args=(session.session_id, current_user, params, resolved),
+        daemon=True,
+    )
+    worker.start()
+    return session
+
+
 # ---------------------------------------------------------------------------
 # 静态文件 & 首页
 # ---------------------------------------------------------------------------
@@ -575,12 +866,26 @@ async def user_apikey_status(current_user: User = Depends(get_current_user)):
     return get_user_api_key_status(current_user.id)
 
 
+@app.post("/api/user/apikey/validate")
+async def user_apikey_validate(
+    payload: ApiKeyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    result = validate_user_api_key(payload.api_key)
+    if result.get("ok"):
+        return result
+    return JSONResponse(result, status_code=validation_http_status(result))
+
+
 @app.post("/api/user/apikey")
 async def user_apikey_save(
     payload: ApiKeyRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
 ):
+    validation = validate_user_api_key(payload.api_key)
+    if not validation.get("ok"):
+        return JSONResponse(validation, status_code=validation_http_status(validation))
     try:
         save_user_api_key(current_user.id, payload.api_key)
     except ValueError as exc:
@@ -592,7 +897,7 @@ async def user_apikey_save(
         ip=_client_ip(request),
         ua=_user_agent(request),
     )
-    return {"ok": True, **get_user_api_key_status(current_user.id)}
+    return {"ok": True, "validation": validation, **get_user_api_key_status(current_user.id)}
 
 
 @app.delete("/api/user/apikey")
@@ -671,6 +976,15 @@ async def kb_upload(
     results = []
     for f in files:
         fname = _safe_filename(f.filename or getattr(f, "name", "unknown"))
+        ext = os.path.splitext(fname)[1].lower()
+        if not is_supported_kb_extension(ext):
+            results.append({
+                "file": fname,
+                "ok": False,
+                "error": f"不支持的文件类型: {ext or '(无扩展名)'}",
+                "unsupported_format": True,
+            })
+            continue
         save_path = os.path.join(config.HISTORICAL_DIR, fname)
         content = await f.read()
         _raise_if_upload_too_large(content)
@@ -747,8 +1061,86 @@ async def template_analyze(
 
 
 # ---------------------------------------------------------------------------
-# 生成 API（SSE 流式）
+# 生成 API（会话 + SSE）
 # ---------------------------------------------------------------------------
+@app.post("/api/generate/sessions")
+async def generate_session_start(
+    slug: str = Form(...),
+    template: str = Form(...),
+    word_limit: int = Form(300),
+    top_k: int = Form(4),
+    max_distance: float = Form(1.25),
+    enable_web: bool = Form(False),
+    use_stream: bool = Form(True),
+    enable_audit: bool = Form(False),
+    enable_visual_audit: bool = Form(True),
+    custom_instructions: str = Form(""),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        session = _start_generation_session(
+            current_user,
+            _build_generation_params(
+                slug,
+                template,
+                word_limit,
+                top_k,
+                max_distance,
+                enable_web,
+                use_stream,
+                enable_audit,
+                enable_visual_audit,
+                custom_instructions,
+            ),
+        )
+    except ActiveGenerationExistsError as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "active_generation_exists",
+                "message": "当前已有一个正在进行的生成任务，请先返回查看该任务。",
+                "session_id": exc.session_id,
+                **_serialize_session(session_manager.get_session_for_user(current_user.id, exc.session_id)),
+            },
+            status_code=409,
+        )
+    return {
+        "ok": True,
+        "session_id": session.session_id,
+        **_serialize_session(session),
+    }
+
+
+@app.get("/api/generate/sessions/active")
+async def generate_session_active(current_user: User = Depends(get_current_user)):
+    session = session_manager.get_active_session(current_user.id) or session_manager.get_latest_session(current_user.id)
+    return _serialize_session(session)
+
+
+@app.get("/api/generate/sessions/{session_id}")
+async def generate_session_snapshot(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = _ensure_session_owned(session_id, current_user)
+    return _serialize_session(session)
+
+
+@app.get("/api/generate/sessions/{session_id}/stream")
+async def generate_session_stream(
+    session_id: str,
+    after_seq: int = 0,
+    current_user: User = Depends(get_current_user),
+):
+    session = _ensure_session_owned(session_id, current_user)
+
+    def event_stream():
+        for event in session.stream_events(after_seq=after_seq):
+            yield _sse(event)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/api/generate")
 async def generate(
     slug: str = Form(...),
@@ -763,226 +1155,40 @@ async def generate(
     custom_instructions: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
-    vs = _get_vs(slug)
-    template_path = os.path.join(config.TEMPLATE_DIR, template)
-    if not os.path.isfile(template_path):
-        return JSONResponse({"ok": False, "error": "模板不存在"}, status_code=400)
-
-    # 分析模板
     try:
-        tasks = _cached_analyze(template_path)
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": f"模板分析失败: {e}"}, status_code=500)
-    if not tasks:
-        return JSONResponse({"ok": False, "error": "未找到待填位置"}, status_code=400)
-
-    try:
-        user_api_key = load_user_api_key(current_user.id)
-    except Exception as exc:
-        logger.exception("Failed to decrypt user API key")
-        return JSONResponse(
-            {"ok": False, "error": f"Failed to load saved API Key: {exc}"},
-            status_code=500,
+        session = _start_generation_session(
+            current_user,
+            _build_generation_params(
+                slug,
+                template,
+                word_limit,
+                top_k,
+                max_distance,
+                enable_web,
+                use_stream,
+                enable_audit,
+                enable_visual_audit,
+                custom_instructions,
+            ),
         )
-    language = get_user_preferences(current_user.id)["language"]
-    custom_instructions = (custom_instructions or "").strip()
-    billing_lock = threading.Lock()
-
-    def _generate_one_task(i, task):
-        import copy
-        task = copy.deepcopy(task)  # Avoid shared reference in concurrent workers
-        if task.word_limit <= 0:
-            task.word_limit = word_limit
-        if custom_instructions:
-            task.description = f"{task.description}\n\n本次生成补充要求：{custom_instructions}"
-        local_generator = ContentGenerator(vs, api_key=user_api_key)
-        local_auditor = ContentAuditor() if enable_audit else None
-        result = {
-            "index": i,
-            "content": "",
-            "route_meta": {},
-            "route": None,
-            "billing": None,
-            "audit": None,
-            "trace": None,
-            "error": None,
-            "chunks": [],
-        }
-        try:
-            gen_bundle = local_generator.prepare_generation_bundle(
-                task,
-                top_k=top_k,
-                enable_web=enable_web,
-                retrieval_max_distance=max_distance,
-                language=language,
-            )
-            result["route_meta"] = gen_bundle.route_meta
-            result["route"] = {
-                "type": "route",
-                "index": i,
-                "model": gen_bundle.model,
-                "tier": gen_bundle.route_meta.get("generation_tier"),
-                "kb_hits": gen_bundle.route_meta.get("kb_hits", 0),
-                "evidence_refs": gen_bundle.evidence_refs[:5],
-            }
-            if use_stream:
-                acc: list[str] = []
-                for piece in local_generator.stream_from_bundle(gen_bundle, route_hook=None):
-                    acc.append(piece)
-                content = "".join(acc).strip()
-                result["chunks"] = acc
-            else:
-                content = local_generator.generate_from_bundle(gen_bundle, route_hook=None)
-                result["chunks"] = [content]
-            result["content"] = content
-
-            billed_model, raw_usage = local_generator.pop_last_usage()
-            with billing_lock:
-                billing_record = record_billing(
-                    current_user.id,
-                    billed_model or gen_bundle.model,
-                    normalize_usage(raw_usage),
-                )
-            result["billing"] = billing_record
-
-            audit_issues = rule_audit(task, content, gen_bundle.route_meta)
-            audit_verdict = "pass" if not audit_issues else "rule_issue"
-            revised = False
-            if local_auditor is not None and need_model_audit(task, gen_bundle.route_meta, audit_issues):
-                ar = local_auditor.audit(
-                    task,
-                    content,
-                    gen_bundle.ref_texts,
-                    None,
-                    gen_bundle.route_meta,
-                )
-                audit_verdict = ar.verdict
-                audit_issues = audit_issues + list(ar.issues)
-                if should_apply_revision(task, ar):
-                    content = ar.revised_content.strip()
-                    result["content"] = content
-                    revised = True
-            if audit_issues:
-                result["audit"] = {
-                    "type": "audit",
-                    "index": i,
-                    "verdict": audit_verdict,
-                    "issues": audit_issues[:5],
-                    "revised": revised,
-                }
-            result["trace"] = build_generation_trace(
-                task,
-                gen_bundle.route_meta,
-                result["content"],
-                audit_verdict=audit_verdict,
-                audit_issues=audit_issues,
-                revised=revised,
-            )
-        except Exception as e:
-            logger.exception("Task %d generation failed", i)
-            content = "（生成失败，请重试）"
-            result["content"] = content
-            result["error"] = "generation_failed"
-            result["route_meta"] = {"model": "", "generation_tier": "error", "evidence_refs": []}
-            result["trace"] = build_generation_trace(
-                task,
-                result["route_meta"],
-                content,
-                audit_verdict="error",
-                audit_issues=[str(e)],
-            )
-        return result
+    except ActiveGenerationExistsError as exc:
+        active = session_manager.get_session_for_user(current_user.id, exc.session_id)
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "active_generation_exists",
+                "message": "当前已有一个正在进行的生成任务，请先返回查看该任务。",
+                "session_id": exc.session_id,
+                **_serialize_session(active),
+            },
+            status_code=409,
+        )
 
     def event_stream():
-        task_results = []
-        for i, task in enumerate(tasks):
-            yield _sse({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS) as executor:
-            futures = [
-                executor.submit(_generate_one_task, i, task)
-                for i, task in enumerate(tasks)
-            ]
-            pending = set(futures)
-            while pending:
-                done, pending = concurrent.futures.wait(
-                    pending, timeout=5.0, return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                if not done:
-                    # Heartbeat: keep connection alive during long tasks
-                    yield _sse({"type": "heartbeat"})
-                    continue
-                for future in done:
-                    result = future.result()
-                    task_results.append(result)
-                    index = result["index"]
-                    if result["route"] is not None:
-                        yield _sse(result["route"])
-                    for piece in result["chunks"]:
-                        yield _sse({"type": "chunk", "index": index, "text": piece})
-                    if result["billing"] is not None:
-                        yield _sse({"type": "billing", "index": index, "billing": result["billing"]})
-                    if result["error"] is not None:
-                        yield _sse({"type": "error", "index": index, "error": result["error"]})
-                    if result["audit"] is not None:
-                        yield _sse(result["audit"])
-                    yield _sse({"type": "progress", "index": index, "total": len(tasks)})
-
-        task_results.sort(key=lambda item: item["index"])
-        results: list[str] = [item["content"] for item in task_results]
-        traces = [item["trace"] for item in task_results]
-        billing_records = [
-            item["billing"]
-            for item in task_results
-            if item["billing"] is not None
-        ]
-
-        # 回填 Word — 文件名加 user_id + 时间戳防多用户覆盖
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        base_name = template.replace(".docx", "")
-        output_name = f"{base_name}_u{current_user.id}_{ts}.docx"
-        output_path = os.path.join(config.OUTPUT_DIR, output_name)
-        try:
-            _filler.fill_template(template_path, tasks, results, output_path)
-            post_fill_checks = verify_filled_document(template_path, output_path, tasks)
-            visual_payload = {}
-            if enable_visual_audit and config.VISUAL_AUDIT_ENABLED:
-                visual_result = audit_document_visual(output_path)
-                visual_payload = asdict(visual_result)
-            report = build_quality_report(
-                template_name=template,
-                output_path=output_path,
-                traces=traces,
-                post_fill_checks=post_fill_checks,
-                visual_audit=visual_payload,
-            )
-            report_path = save_quality_report(output_path, report)
-            yield _sse(
-                {
-                    "type": "done",
-                    "filename": output_name,
-                    "download": f"/api/download/{output_name}",
-                    "report_download": f"/api/download/{os.path.basename(report_path)}",
-                    "report_summary": quality_report_summary(report),
-                    "post_fill_checks": post_fill_checks,
-                    "visual_score": visual_payload.get("score"),
-                    "billing": {
-                        "records": billing_records,
-                        "input_tokens": sum(int(item.get("input_tokens") or 0) for item in billing_records),
-                        "output_tokens": sum(int(item.get("output_tokens") or 0) for item in billing_records),
-                        "cost_cny": round(sum(float(item.get("cost_cny") or 0) for item in billing_records), 8),
-                    },
-                    "billing_summary": billing_summary(current_user.id),
-                }
-            )
-        except Exception as e:
-            yield _sse({"type": "error", "error": f"回填失败: {e}"})
+        for event in session.stream_events(after_seq=0):
+            yield _sse(event)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-def _sse(data: dict) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 # ---------------------------------------------------------------------------

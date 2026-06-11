@@ -22,20 +22,31 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, type ReactNode, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchApiKeyStatus, fetchBillingSummary, fetchKnowledgeBases, fetchTemplates, handleDownload, streamGenerate } from "../api";
+import {
+  fetchActiveGenerationSession,
+  fetchApiKeyStatus,
+  fetchKnowledgeBases,
+  fetchKnowledgeSources,
+  fetchTemplates,
+  handleDownload,
+  startGenerateSession,
+  streamGenerate,
+  streamGenerationSession,
+} from "../api";
 import type { OutputBlockData } from "../components/OutputBlock";
 import { Button, EmptyState, ErrorBanner, Input, PageHeader, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type {
-  BillingSummary,
   GenerateEvent,
   GenerateParams,
   GenerationBilling,
   KnowledgeBase,
+  KnowledgeSourceStats,
   PostFillChecks,
   TemplateItem,
 } from "../types";
 import { clsx } from "../utils";
+import { deriveGenerateReadiness, useWorkflow } from "../workflow";
 
 const LazyOutputBlock = lazy(() => import("../components/OutputBlock").then((m) => ({ default: m.OutputBlock })));
 
@@ -230,16 +241,17 @@ function SetupField({
 
 export default function GeneratePage() {
   const { t } = useI18n();
+  const { state: workflowState, setGenerateSelections, setGenerateSession } = useWorkflow();
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
-  const [template, setTemplate] = useState("");
-  const [slug, setSlug] = useState("");
-  const [generationBrief, setGenerationBrief] = useState("");
-  const [qualityMode, setQualityMode] = useState<"balanced" | "quality" | "speed">("balanced");
-  const [enableWeb] = useState(false);
-  const [useStream] = useState(true);
-  const [enableAudit] = useState(false);
-  const [enableVisualAudit] = useState(true);
+  const [template, setTemplate] = useState(workflowState.generate.template);
+  const [slug, setSlug] = useState(workflowState.generate.slug);
+  const [generationBrief, setGenerationBrief] = useState(workflowState.generate.generationBrief);
+  const [qualityMode, setQualityMode] = useState<"balanced" | "quality" | "speed">(workflowState.generate.qualityMode);
+  const [enableWeb, setEnableWeb] = useState(false);
+  const useStream = true;
+  const [enableAudit, setEnableAudit] = useState(false);
+  const [enableVisualAudit, setEnableVisualAudit] = useState(true);
   const [currentStep, setCurrentStep] = useState<GenerateStep>("idle");
   const [running, setRunning] = useState(false);
   const [regeneratingIndex, setRegeneratingIndex] = useState<number | null>(null);
@@ -253,8 +265,8 @@ export default function GeneratePage() {
   const [postFillChecks, setPostFillChecks] = useState<PostFillChecks | null>(null);
   const [visualScore, setVisualScore] = useState<number | null>(null);
   const [runBilling, setRunBilling] = useState<GenerationBilling | null>(null);
-  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const [selectedKnowledgeStats, setSelectedKnowledgeStats] = useState<KnowledgeSourceStats | null>(workflowState.knowledge.stats);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [downloadingDoc, setDownloadingDoc] = useState(false);
@@ -263,6 +275,8 @@ export default function GeneratePage() {
   const [templateSearch, setTemplateSearch] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const sectionAbortRef = useRef<AbortController | null>(null);
+  const activeSessionIdRef = useRef<string>(workflowState.generate.session?.session_id ?? "");
+  const userOverrodeSwitchesRef = useRef(false);
   const visualTarget = 80;
   const busy = running || regeneratingIndex !== null;
   const deferredKnowledgeSearch = useDeferredValue(knowledgeSearch);
@@ -311,6 +325,129 @@ export default function GeneratePage() {
     [templateItems, deferredTemplateSearch],
   );
 
+  const readiness = useMemo(
+    () =>
+      deriveGenerateReadiness({
+        hasValidatedKey: Boolean(hasApiKey),
+        hasKnowledgeBase: kbs.length > 0,
+        hasKnowledgeSources: (selectedKnowledgeStats?.source_count ?? 0) > 0,
+        hasTemplate: templates.length > 0,
+      }),
+    [hasApiKey, kbs.length, selectedKnowledgeStats?.source_count, templates.length],
+  );
+
+  function applySessionSnapshot(session: NonNullable<typeof workflowState.generate.session>) {
+    activeSessionIdRef.current = session.session_id;
+    setGenerateSession(session);
+    setCurrentTask(session.currentTask || "");
+    setProgress(session.progress ?? { done: 0, total: 0 });
+    setOutputs((session.outputs as OutputBlock[]) ?? []);
+    setDownloadPath(session.download || "");
+    setReportPath(session.report_download || "");
+    setReportSummary(session.report_summary || "");
+    setPostFillChecks(session.post_fill_checks ?? null);
+    setVisualScore(session.visual_score ?? null);
+    setRunBilling(session.billing ?? null);
+    setCurrentStep(((session.currentStep as GenerateStep) || "idle") as GenerateStep);
+    setRunning(session.status === "running");
+    if (session.last_error?.message) {
+      setError(JSON.stringify({ level: "error", message: session.last_error.message, retryable: Boolean(session.last_error.retryable) }));
+    }
+  }
+
+  function handleEvent(event: GenerateEvent) {
+    if (event.type === "heartbeat") return;
+    if (event.type === "task") {
+      setCurrentTask(event.chapter);
+      setCurrentStep("generation");
+      setProgress((prev) => ({ done: prev.done, total: event.total }));
+      updateOutput(event.index, {
+        chapter: event.chapter,
+        text: "",
+        model: undefined,
+        tier: undefined,
+        kbHits: undefined,
+        evidenceRefs: [],
+        auditVerdict: undefined,
+        auditIssues: [],
+        revised: false,
+      });
+      return;
+    }
+    if (event.type === "route") {
+      setCurrentStep("retrieval");
+      updateOutput(event.index, {
+        model: event.model,
+        tier: event.tier,
+        kbHits: event.kb_hits,
+        evidenceRefs: event.evidence_refs ?? [],
+      });
+      return;
+    }
+    if (event.type === "chunk") {
+      appendOutputChunk(event.index, event.text);
+      return;
+    }
+    if (event.type === "audit") {
+      setCurrentStep("audit");
+      updateOutput(event.index, {
+        auditVerdict: event.verdict,
+        auditIssues: event.issues,
+        revised: event.revised,
+      });
+      return;
+    }
+    if (event.type === "billing") {
+      setRunBilling((prev) => ({
+        records: [...(prev?.records ?? []), event.billing],
+        input_tokens: (prev?.input_tokens ?? 0) + event.billing.input_tokens,
+        output_tokens: (prev?.output_tokens ?? 0) + event.billing.output_tokens,
+        cost_cny: Number(((prev?.cost_cny ?? 0) + event.billing.cost_cny).toFixed(8)),
+      }));
+      return;
+    }
+    if (event.type === "progress") {
+      setProgress({ done: event.index + 1, total: event.total });
+      return;
+    }
+    if (event.type === "done") {
+      setCurrentStep("done");
+      setDownloadPath(event.download);
+      setReportPath(event.report_download ?? "");
+      setReportSummary(event.report_summary ?? "");
+      setPostFillChecks(event.post_fill_checks ?? null);
+      setVisualScore(event.visual_score ?? null);
+      setRunBilling(event.billing ?? null);
+      setCurrentTask(t("generate.pass"));
+      setRunning(false);
+      return;
+    }
+    if (event.type === "error") {
+      const payload = typeof event.error === "string" ? { message: event.error, retryable: true } : event.error;
+      handleStreamError(payload.message);
+      if (event.terminal) setRunning(false);
+    }
+  }
+
+  async function subscribeSession(sessionId: string, afterSeq = 0) {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRunning(true);
+    try {
+      await streamGenerationSession(sessionId, handleEvent, controller.signal, afterSeq);
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : String(err));
+        setRunning(false);
+      }
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+    }
+  }
+
   useEffect(() => {
     Promise.allSettled([fetchTemplates(), fetchKnowledgeBases()]).then(([templateResult, kbResult]) => {
       if (templateResult.status === "fulfilled") {
@@ -330,17 +467,42 @@ export default function GeneratePage() {
       }
     });
 
-    fetchBillingSummary()
-      .then(setBillingSummary)
-      .catch(() => undefined);
     fetchApiKeyStatus()
-      .then((status) => setHasApiKey(status.has_key))
+      .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
       .catch(() => setHasApiKey(null));
+    fetchActiveGenerationSession()
+      .then((result) => {
+        if (result.session) {
+          applySessionSnapshot(result.session);
+          if (result.session.status === "running") {
+            void subscribeSession(result.session.session_id, result.session.last_seq);
+          }
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
-    if (recommendedConfig && !busy) {
-      setQualityMode(recommendedConfig.qualityMode);
+    setGenerateSelections({ slug, template, generationBrief, qualityMode });
+  }, [generationBrief, qualityMode, setGenerateSelections, slug, template]);
+
+  useEffect(() => {
+    if (!slug) {
+      setSelectedKnowledgeStats(null);
+      return;
+    }
+    fetchKnowledgeSources(slug)
+      .then(setSelectedKnowledgeStats)
+      .catch(() => undefined);
+  }, [slug]);
+
+  useEffect(() => {
+    if (!recommendedConfig || busy) return;
+    setQualityMode(recommendedConfig.qualityMode);
+    if (!userOverrodeSwitchesRef.current) {
+      setEnableWeb(recommendedConfig.enableWeb);
+      setEnableAudit(recommendedConfig.enableAudit);
+      setEnableVisualAudit(true);
     }
   }, [recommendedConfig, busy]);
 
@@ -414,12 +576,6 @@ export default function GeneratePage() {
     });
   }
 
-  function refreshBillingSummary() {
-    fetchBillingSummary()
-      .then(setBillingSummary)
-      .catch(() => undefined);
-  }
-
   function getParamsByQuality() {
     switch (qualityMode) {
       case "quality":
@@ -456,23 +612,18 @@ export default function GeneratePage() {
     sectionAbortRef.current?.abort();
     abortRef.current = null;
     sectionAbortRef.current = null;
-    setRunning(false);
     setRegeneratingIndex(null);
+    setError(JSON.stringify({ level: "info", message: t("generate.streamDisconnected"), retryable: true }));
   }
 
   function requestStart() {
-    if (!template || !slug || busy) return;
+    if (!template || !slug || busy || !readiness.ready) return;
     setConfirmOpen(true);
   }
 
   async function start() {
     setConfirmOpen(false);
     if (!template || !slug) return;
-
-    const controller = new AbortController();
-    const chapters: Record<number, string> = {};
-
-    abortRef.current = controller;
     setRunning(true);
     setError("");
     setOutputs([]);
@@ -487,98 +638,22 @@ export default function GeneratePage() {
     setCurrentStep("retrieval");
 
     try {
-      await streamGenerate(
-        buildGenerateParams(),
-        (event) => {
-          if (event.type === "task") {
-            chapters[event.index] = event.chapter;
-            setCurrentTask(event.chapter);
-            setCurrentStep("generation");
-            setProgress((prev) => ({ done: prev.done, total: event.total }));
-            updateOutput(event.index, {
-              chapter: event.chapter,
-              text: "",
-              model: undefined,
-              tier: undefined,
-              kbHits: undefined,
-              evidenceRefs: [],
-              auditVerdict: undefined,
-              auditIssues: [],
-              revised: false,
-            });
-            return;
-          }
-
-          if (event.type === "route") {
-            setCurrentStep("retrieval");
-            updateOutput(event.index, {
-              chapter: chapters[event.index] || taskName(event.index),
-              model: event.model,
-              tier: event.tier,
-              kbHits: event.kb_hits,
-              evidenceRefs: event.evidence_refs ?? [],
-            });
-            return;
-          }
-
-          if (event.type === "chunk") {
-            appendOutputChunk(event.index, event.text, chapters[event.index]);
-            return;
-          }
-
-          if (event.type === "audit") {
-            setCurrentStep("audit");
-            updateOutput(event.index, {
-              auditVerdict: event.verdict,
-              auditIssues: event.issues,
-              revised: event.revised,
-            });
-            return;
-          }
-
-          if (event.type === "billing") {
-            setRunBilling((prev) => ({
-              records: [...(prev?.records ?? []), event.billing],
-              input_tokens: (prev?.input_tokens ?? 0) + event.billing.input_tokens,
-              output_tokens: (prev?.output_tokens ?? 0) + event.billing.output_tokens,
-              cost_cny: Number(((prev?.cost_cny ?? 0) + event.billing.cost_cny).toFixed(8)),
-            }));
-            return;
-          }
-
-          if (event.type === "progress") {
-            setProgress({ done: event.index + 1, total: event.total });
-            return;
-          }
-
-          if (event.type === "done") {
-            setCurrentStep("done");
-            setDownloadPath(event.download);
-            setReportPath(event.report_download ?? "");
-            setReportSummary(event.report_summary ?? "");
-            setPostFillChecks(event.post_fill_checks ?? null);
-            setVisualScore(event.visual_score ?? null);
-            setRunBilling(event.billing ?? null);
-            if (event.billing_summary) {
-              setBillingSummary(event.billing_summary);
-            }
-            refreshBillingSummary();
-            setCurrentTask(t("generate.pass"));
-            return;
-          }
-
-          if (event.type === "error") {
-            handleStreamError(event.error);
-          }
-        },
-        controller.signal,
-      );
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : String(err));
+      const result = await startGenerateSession(buildGenerateParams());
+      if (!result.ok || !result.session_id || !result.session) {
+        if (result.session) {
+          applySessionSnapshot(result.session);
+        }
+        setError(JSON.stringify({ level: "warning", message: result.message || t("generate.activeSessionExists"), retryable: true }));
+        setRunning(Boolean(result.session?.status === "running"));
+        if (result.session_id && result.session?.status === "running") {
+          void subscribeSession(result.session_id, result.session.last_seq);
+        }
+        return;
       }
-    } finally {
-      abortRef.current = null;
+      applySessionSnapshot(result.session);
+      await subscribeSession(result.session_id, result.session.last_seq);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
       setRunning(false);
     }
   }
@@ -601,6 +676,7 @@ export default function GeneratePage() {
       await streamGenerate(
         buildGenerateParams(),
         (event) => {
+          if (event.type === "heartbeat") return;
           if (event.type === "task") {
             chapters[event.index] = event.chapter;
             if (event.index !== index) return;
@@ -644,13 +720,12 @@ export default function GeneratePage() {
           }
 
           if (event.type === "done") {
-            refreshBillingSummary();
             return;
           }
 
           if (event.type === "error") {
             failed = true;
-            handleStreamError(event.error);
+            handleStreamError(typeof event.error === "string" ? event.error : event.error.message);
             controller.abort();
           }
         },
@@ -686,6 +761,10 @@ export default function GeneratePage() {
           waitingText={t("generate.waitingModel")}
           auditResultLabel={t("generate.auditResult")}
           revisedLabel={t("generate.revised")}
+          routeLabel={t("generate.routeLabel")}
+          modelLabel={t("generate.modelLabel")}
+          kbHitsLabel={t("generate.kbHitsLabel")}
+          auditFallbackLabel={t("generate.auditIssueFallback")}
           busy={regeneratingIndex === index}
           busyLabel={t("generate.regenerating")}
           action={
@@ -755,17 +834,27 @@ export default function GeneratePage() {
           }
         })()}
 
-      {hasApiKey === false && (
+      {!readiness.ready && (
         <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
           <div className="flex min-w-0 items-center gap-3">
             <ShieldCheck className="shrink-0 text-signal-amber" size={20} />
-            <p className="min-w-0 break-words text-sm font-semibold text-amber-100">{t("generate.noApiKeyHint")}</p>
+            <p className="min-w-0 break-words text-sm font-semibold text-amber-100">
+              {readiness.reason === "missing_key"
+                ? t("generate.noApiKeyHint")
+                : readiness.reason === "missing_knowledge"
+                  ? t("generate.missingKnowledgeHint")
+                  : t("generate.missingTemplateHint")}
+            </p>
           </div>
           <Link
-            to="/settings"
+            to={readiness.reason === "missing_key" ? "/settings" : readiness.reason === "missing_knowledge" ? "/knowledge" : "/template"}
             className="inline-flex min-h-11 items-center justify-center border border-signal-amber bg-signal-amber px-4 text-xs font-bold text-night-950 transition hover:bg-white sm:w-auto"
           >
-            {t("generate.goSettings")}
+            {readiness.reason === "missing_key"
+              ? t("generate.goSettings")
+              : readiness.reason === "missing_knowledge"
+                ? t("generate.goKnowledge")
+                : t("generate.goTemplate")}
           </Link>
         </div>
       )}
@@ -813,11 +902,11 @@ export default function GeneratePage() {
                 <div className="mb-2 flex items-start gap-2 border border-dashed border-signal-cyan/30 bg-signal-cyan/5 px-3 py-2.5 text-xs">
                   <Sparkles className="mt-0.5 shrink-0 text-signal-cyan" size={14} />
                   <div className="min-w-0">
-                    <p className="font-semibold text-signal-cyan">Smart defaults active</p>
+                    <p className="font-semibold text-signal-cyan">{t("generate.smartDefaultsActive")}</p>
                     <p className="mt-0.5 break-words text-slate-400">
-                      {recommendedConfig.qualityMode === "quality" ? "Quality first" : "Balanced mode"}
-                      {recommendedConfig.enableWeb ? " + web enrichment" : ""}
-                      {recommendedConfig.enableAudit ? " + content audit" : ""}
+                      {recommendedConfig.qualityMode === "quality" ? t("generate.smartDefaultsQualityFirst") : t("generate.smartDefaultsBalanced")}
+                      {recommendedConfig.enableWeb ? t("generate.smartDefaultsWeb") : ""}
+                      {recommendedConfig.enableAudit ? t("generate.smartDefaultsAudit") : ""}
                     </p>
                   </div>
                 </div>
@@ -858,6 +947,75 @@ export default function GeneratePage() {
                 </div>
               </SetupField>
 
+              <SetupField label={t("generate.controlSwitchesLabel")} compact={true}>
+                <div className="space-y-2">
+                  {([
+                    {
+                      label: t("generate.enableWeb"),
+                      desc: t("generate.enableWebDesc"),
+                      value: enableWeb,
+                      onChange: (v: boolean) => {
+                        userOverrodeSwitchesRef.current = true;
+                        setEnableWeb(v);
+                      },
+                    },
+                    {
+                      label: t("generate.enableAudit"),
+                      desc: t("generate.enableAuditDesc"),
+                      value: enableAudit,
+                      onChange: (v: boolean) => {
+                        userOverrodeSwitchesRef.current = true;
+                        setEnableAudit(v);
+                      },
+                    },
+                    {
+                      label: t("generate.enableVisualAudit"),
+                      desc: t("generate.enableVisualAuditDesc"),
+                      value: enableVisualAudit,
+                      onChange: (v: boolean) => {
+                        userOverrodeSwitchesRef.current = true;
+                        setEnableVisualAudit(v);
+                      },
+                    },
+                  ] as const).map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => item.onChange(!item.value)}
+                      className={clsx(
+                        "flex w-full items-center justify-between gap-3 border px-3 py-2.5 text-left transition hover:border-white/25 active:scale-[0.99] disabled:pointer-events-none disabled:opacity-45",
+                        item.value
+                          ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
+                          : "border-white/10 bg-night-950/70 text-slate-300",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-semibold">{item.label}</span>
+                        <span className="mt-0.5 block text-[10px] text-slate-500">{item.desc}</span>
+                      </span>
+                      <span
+                        className={clsx(
+                          "flex h-5 w-9 shrink-0 items-center rounded-full border px-0.5 transition",
+                          item.value
+                            ? "border-signal-cyan bg-signal-cyan/20"
+                            : "border-white/15 bg-white/[0.08]",
+                        )}
+                      >
+                        <span
+                          className={clsx(
+                            "h-3.5 w-3.5 rounded-full transition",
+                            item.value
+                              ? "translate-x-3.5 bg-signal-cyan"
+                              : "translate-x-0 bg-slate-400",
+                          )}
+                        />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </SetupField>
+
               <SetupField label={t("generate.instructions")} compact={true}>
                 <TextArea
                   value={generationBrief}
@@ -876,7 +1034,7 @@ export default function GeneratePage() {
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-              <Button className="min-h-14 w-full text-base font-bold shadow-glow" onClick={requestStart} disabled={!template || !slug || busy}>
+               <Button className="min-h-14 w-full text-base font-bold shadow-glow" onClick={requestStart} disabled={!template || !slug || busy || !readiness.ready}>
                 {running ? <Loader2 className="animate-spin" size={19} /> : <Play size={19} />}
                 {running ? t("generate.running") : t("generate.start")}
               </Button>
@@ -933,6 +1091,14 @@ export default function GeneratePage() {
               <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
             </div>
 
+            {runBilling ? (
+              <p className="mt-3 break-words border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-5 text-slate-400">
+                {t("generate.tokenSummaryLine")
+                  .replace("{0}", String(runBilling.input_tokens ?? 0))
+                  .replace("{1}", String(runBilling.output_tokens ?? 0))}
+              </p>
+            ) : null}
+
             <div className="mt-5 border border-white/10 bg-night-950 p-1">
               <div className="h-2 bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all" style={{ width: `${percent}%` }} />
             </div>
@@ -943,20 +1109,20 @@ export default function GeneratePage() {
             {outputs.length === 0 ? (
               <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
             ) : (
-              <div className="space-y-4">
-                {downloadPath && !running && (
-                  <div className="flex justify-center py-1">
-                    <Button
-                      variant="ghost"
-                      className="min-h-11 gap-2 border border-white/10 bg-white/[0.035] px-5 text-sm font-semibold text-slate-200 hover:border-white/25 hover:text-white"
-                      onClick={() => setTraceOpen(true)}
-                    >
-                      <MessageSquareText size={17} />
-                      {t("generate.viewTrace")}
-                    </Button>
-                  </div>
-                )}
-                {renderOutputBlocks(true)}
+              <div className="flex flex-wrap items-center justify-between gap-3 border border-white/10 bg-night-900/60 px-4 py-3 text-sm text-slate-200 md:px-5">
+                <span className="min-w-0 break-words font-semibold">
+                  {running
+                    ? t("generate.streamingStatus").replace("{0}", String(progress.done)).replace("{1}", String(progress.total || 0))
+                    : t("generate.completedSummary").replace("{0}", String(outputs.length))}
+                </span>
+                <Button
+                  variant="ghost"
+                  className="min-h-10 gap-2 border border-white/10 bg-white/[0.035] px-4 text-xs font-semibold text-slate-300 hover:border-white/25 hover:text-white"
+                  onClick={() => setTraceOpen(true)}
+                >
+                  <MessageSquareText size={15} />
+                  {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
+                </Button>
               </div>
             )}
           </Panel>
@@ -1018,16 +1184,20 @@ export default function GeneratePage() {
                     <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("generate.checkResult")}</p>
                     <p className="mt-2 text-white">{postFillChecks.ok ? t("generate.pass") : t("generate.review")}</p>
                     <p className="mt-2 break-words text-xs text-slate-400">
-                      template words {postFillChecks.template_words ?? "-"} / output words {postFillChecks.output_words ?? "-"}
+                      {t("generate.templateWordsSummary")
+                        .replace("{0}", String(postFillChecks.template_words ?? "-"))
+                        .replace("{1}", String(postFillChecks.output_words ?? "-"))}
                     </p>
                   </div>
                   <div className="min-w-0 border border-white/10 bg-night-900/70 p-3 text-sm text-slate-300">
                     <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{t("generate.structure")}</p>
                     <p className="mt-2 break-words text-white">
-                      template tables {postFillChecks.template_tables ?? "-"} / output tables {postFillChecks.output_tables ?? "-"}
+                      {t("generate.tableCountSummary")
+                        .replace("{0}", String(postFillChecks.template_tables ?? "-"))
+                        .replace("{1}", String(postFillChecks.output_tables ?? "-"))}
                     </p>
                     <p className="mt-2 break-words text-xs text-slate-400">
-                      cover {postFillChecks.cover_modified ? t("generate.review") : t("generate.pass")}, rating table{" "}
+                      {t("generate.coverCheck")} {postFillChecks.cover_modified ? t("generate.review") : t("generate.pass")}, {t("generate.ratingTableCheck")}{" "}
                       {postFillChecks.rating_table_modified ? t("generate.review") : t("generate.pass")}
                     </p>
                   </div>
@@ -1074,21 +1244,6 @@ export default function GeneratePage() {
             </Panel>
           )}
 
-          {(runBilling || billingSummary) && (
-            <Panel className="min-w-0">
-              <SectionTitle icon={<Cpu size={18} />} title={t("generate.billingTitle")} hint={t("generate.billingHint")} />
-              <div className="grid gap-3 md:grid-cols-3">
-                <Stat label={t("generate.runCost")} value={formatCny(runBilling?.cost_cny)} tone="lime" />
-                <Stat label={t("generate.inputTokens")} value={runBilling?.input_tokens ?? "-"} />
-                <Stat label={t("generate.outputTokens")} value={runBilling?.output_tokens ?? "-"} tone="amber" />
-              </div>
-              {billingSummary && (
-                <p className="mt-3 break-words border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-5 text-slate-500">
-                  {t("generate.totalCost")}: {formatCny(billingSummary.cost_cny)} · {billingSummary.generation_count} runs
-                </p>
-              )}
-            </Panel>
-          )}
         </div>
       </div>
 
@@ -1105,13 +1260,13 @@ export default function GeneratePage() {
               type="button"
               onClick={() => setTraceOpen(false)}
               className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
-              aria-label="Close"
+              aria-label={t("generate.close")}
             >
               <span className="text-xl leading-none">&times;</span>
             </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
-            <div className="mx-auto max-w-4xl space-y-4">{renderOutputBlocks(false)}</div>
+            <div className="mx-auto max-w-4xl space-y-4">{renderOutputBlocks(true)}</div>
           </div>
         </div>
       )}

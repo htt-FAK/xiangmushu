@@ -1,0 +1,33 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+    <defs>
+      <linearGradient id="bg512" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#14B8A6"/><stop offset="100%" stop-color="#0F766E"/>
+      </linearGradient>
+      <linearGradient id="fb512" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#2DD4BF"/><stop offset="100%" stop-color="#5EEAD4"/>
+      </linearGradient>
+      <linearGradient id="sg512" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#F59E0B"/><stop offset="100%" stop-color="#FBBF24"/>
+      </linearGradient>
+      <filter id="gl512"><feGaussianBlur stdDeviation="4" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <filter id="sgl512"><feGaussianBlur stdDeviation="5" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <rect x="16" y="16" width="480" height="480" rx="96" fill="url(#bg512)"/>
+    <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+    <path d="M160 100 L320 100 L376 156 L376 412 Q376 420 368 420 L160 420 Q152 420 152 412 L152 108 Q152 100 160 100Z" fill="#F1F5F9" opacity="0.95"/>
+    <path d="M320 100 L320 148 Q320 156 328 156 L376 156Z" fill="#CBD5E1"/>
+    <rect x="180" y="178" width="110" height="8" rx="4" fill="#94A3B8" opacity="0.45"/>
+    <rect x="180" y="200" width="148" height="8" rx="4" fill="#94A3B8" opacity="0.35"/>
+    <rect x="176" y="234" width="156" height="14" rx="7" fill="rgba(20,184,166,0.1)"/>
+    <rect x="180" y="237" width="130" height="8" rx="4" fill="url(#fb512)" filter="url(#gl512)"/>
+    <rect x="180" y="272" width="96" height="8" rx="4" fill="#94A3B8" opacity="0.3"/>
+    <rect x="180" y="294" width="124" height="8" rx="4" fill="#94A3B8" opacity="0.25"/>
+    <rect x="180" y="316" width="72" height="8" rx="4" fill="#94A3B8" opacity="0.2"/>
+    <g transform="translate(362,128)" filter="url(#sgl512)">
+      <path d="M0-18 Q2.5-2.5 18 0 Q2.5 2.5 0 18 Q-2.5 2.5-18 0 Q-2.5-2.5 0-18Z" fill="url(#sg512)"/>
+    </g>
+  </svg>

@@ -9,7 +9,7 @@ working inside `xiangmushu`.
 - Core app files: `app.py`, `server.py`, `config.py`
 - Core logic: `core/`
 - Frontend: `frontend/`, `static/`
-- Tests: `test_*.py`, `conftest.py`
+- Tests: `tests/test_*.py`, `tests/conftest.py`
 - Durable docs: `docs/`
 
 ## Agent Artifact Rules

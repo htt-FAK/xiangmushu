@@ -80,6 +80,25 @@ export type ApiKeyStatus = {
   created_at?: string | null;
   updated_at?: string | null;
   key_preview?: string | null;
+  validated?: boolean;
+};
+
+export type ValidationProbe = {
+  ok: boolean;
+  model: string;
+  code: string;
+  message: string;
+  detail?: string;
+  retryable?: boolean;
+};
+
+export type ApiKeyValidationResult = {
+  ok: boolean;
+  code: string;
+  message: string;
+  retryable: boolean;
+  validated_model?: string | null;
+  probes: ValidationProbe[];
 };
 
 export interface ModelOption {
@@ -124,6 +143,7 @@ export type GenerateEvent =
   | { type: "progress"; index: number; total: number }
   | {
       type: "done";
+      seq?: number;
       filename: string;
       download: string;
       report_download?: string;
@@ -133,7 +153,54 @@ export type GenerateEvent =
       billing?: GenerationBilling;
       billing_summary?: BillingSummary;
     }
-  | { type: "error"; index?: number; error: string };
+  | { type: "error"; seq?: number; index?: number; terminal?: boolean; error: string | { code: string; message: string; retryable?: boolean; detail?: string } }
+  | { type: "heartbeat"; seq?: number };
+
+export type GenerationSessionSnapshot = {
+  session_id: string;
+  user_id: number;
+  status: "running" | "done" | "error" | string;
+  currentStep: string;
+  currentTask: string;
+  progress: { done: number; total: number };
+  outputs: OutputBlockSnapshot[];
+  download: string;
+  report_download: string;
+  report_summary: string;
+  post_fill_checks?: PostFillChecks | null;
+  visual_score?: number | null;
+  billing?: GenerationBilling | null;
+  billing_summary?: BillingSummary | null;
+  last_error?: { code: string; message: string; retryable?: boolean; detail?: string } | null;
+  params: GenerateParams & { [key: string]: unknown };
+  created_at: string;
+  updated_at: string;
+  last_seq: number;
+};
+
+export type OutputBlockSnapshot = {
+  chapter: string;
+  text: string;
+  model?: string | null;
+  tier?: string | null;
+  kbHits?: number | null;
+  evidenceRefs?: string[];
+  auditVerdict?: string | null;
+  auditIssues?: string[];
+  revised?: boolean;
+};
+
+export type GenerationSessionEnvelope = {
+  session: GenerationSessionSnapshot | null;
+};
+
+export type GenerationSessionStartResult = {
+  ok: boolean;
+  session_id?: string;
+  session?: GenerationSessionSnapshot | null;
+  code?: string;
+  message?: string;
+};
 
 export type GenerateParams = {
   slug: string;

@@ -20,16 +20,18 @@ import {
 } from "../components/ui";
 import { useI18n } from "../i18n";
 import type { KnowledgeBase, KnowledgeSourceStats, UploadResult } from "../types";
+import { useWorkflow } from "../workflow";
 
 export default function KnowledgeBasePage() {
   const { t } = useI18n();
+  const { state: workflowState, setKnowledgeState } = useWorkflow();
   const [items, setItems] = useState<KnowledgeBase[]>([]);
-  const [selectedSlug, setSelectedSlug] = useState("");
-  const [stats, setStats] = useState<KnowledgeSourceStats | null>(null);
+  const [selectedSlug, setSelectedSlug] = useState(workflowState.knowledge.selectedSlug);
+  const [stats, setStats] = useState<KnowledgeSourceStats | null>(workflowState.knowledge.stats);
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
+  const [uploadResults, setUploadResults] = useState<UploadResult[]>(workflowState.knowledge.uploadResults);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -42,9 +44,12 @@ export default function KnowledgeBasePage() {
   async function refreshSources(targetSlug = selectedSlug) {
     if (!targetSlug) {
       setStats(null);
+      setKnowledgeState({ stats: null });
       return;
     }
-    setStats(await fetchKnowledgeSources(targetSlug));
+    const nextStats = await fetchKnowledgeSources(targetSlug);
+    setStats(nextStats);
+    setKnowledgeState({ stats: nextStats });
   }
 
   useEffect(() => {
@@ -56,6 +61,10 @@ export default function KnowledgeBasePage() {
       setError(err instanceof Error ? err.message : String(err)),
     );
   }, [selectedSlug]);
+
+  useEffect(() => {
+    setKnowledgeState({ selectedSlug, uploadResults, stats });
+  }, [selectedSlug, setKnowledgeState, stats, uploadResults]);
 
   async function onCreate() {
     if (!label.trim()) return;

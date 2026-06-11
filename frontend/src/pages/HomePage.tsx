@@ -1,18 +1,45 @@
 import { ArrowRight, Database, FileText, RefreshCcw } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchKnowledgeBases, fetchTemplates } from "../api";
+import { fetchApiKeyStatus, fetchKnowledgeBases, fetchKnowledgeSources, fetchTemplates } from "../api";
 import { EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { formatDate, useAsyncData } from "../hooks";
 import { useI18n } from "../i18n";
+import { deriveGenerateReadiness } from "../workflow";
 
 export default function HomePage() {
   const { t } = useI18n();
   const templates = useAsyncData(fetchTemplates, []);
   const kbs = useAsyncData(fetchKnowledgeBases, []);
+  const [hasValidatedKey, setHasValidatedKey] = useState(false);
+  const [hasKnowledgeSources, setHasKnowledgeSources] = useState(false);
 
   const error = templates.error || kbs.error;
   const templateItems = templates.data ?? [];
   const kbItems = kbs.data ?? [];
+  const readiness = deriveGenerateReadiness({
+    hasValidatedKey,
+    hasKnowledgeBase: kbItems.length > 0,
+    hasKnowledgeSources,
+    hasTemplate: templateItems.length > 0,
+  });
+
+  useEffect(() => {
+    fetchApiKeyStatus()
+      .then((status) => setHasValidatedKey(Boolean(status.has_key && status.validated)))
+      .catch(() => setHasValidatedKey(false));
+  }, []);
+
+  useEffect(() => {
+    const firstSlug = kbItems[0]?.slug;
+    if (!firstSlug) {
+      setHasKnowledgeSources(false);
+      return;
+    }
+    fetchKnowledgeSources(firstSlug)
+      .then((stats) => setHasKnowledgeSources((stats.source_count ?? 0) > 0))
+      .catch(() => setHasKnowledgeSources(false));
+  }, [kbItems]);
 
   return (
     <>
@@ -39,6 +66,36 @@ export default function HomePage() {
       </div>
 
       <div className="mt-5 grid gap-5 md:mt-6 md:gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <Panel>
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <p className="font-display text-xl font-semibold text-white md:text-2xl">{t("home.setupChecklist")}</p>
+              <p className="mt-1 text-sm text-slate-400">{t("home.setupChecklistBody")}</p>
+            </div>
+            <span className={`border px-2 py-1 text-xs font-semibold ${readiness.ready ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime" : "border-signal-amber/40 bg-signal-amber/10 text-amber-100"}`}>
+              {readiness.ready ? t("home.ready") : t("home.notReady")}
+            </span>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Link to="/settings" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-cyan/40">
+              <p className="font-semibold text-white">1. {t("home.stepKey")}</p>
+              <p className="mt-1">{hasValidatedKey ? t("home.stepDone") : t("home.stepPending")}</p>
+            </Link>
+            <Link to="/knowledge" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-lime/40">
+              <p className="font-semibold text-white">2. {t("home.stepKnowledge")}</p>
+              <p className="mt-1">{hasKnowledgeSources ? t("home.stepDone") : t("home.stepPending")}</p>
+            </Link>
+            <Link to="/template" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-cyan/40">
+              <p className="font-semibold text-white">3. {t("home.stepTemplate")}</p>
+              <p className="mt-1">{templateItems.length > 0 ? t("home.stepDone") : t("home.stepPending")}</p>
+            </Link>
+            <Link to="/generate" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-lime/40">
+              <p className="font-semibold text-white">4. {t("home.stepGenerate")}</p>
+              <p className="mt-1">{readiness.ready ? t("home.readyToGenerate") : t("home.finishSetupFirst")}</p>
+            </Link>
+          </div>
+        </Panel>
+
         <Panel>
           <div className="mb-3 flex items-start justify-between gap-4 md:mb-4">
             <div className="min-w-0">

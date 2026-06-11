@@ -1,10 +1,10 @@
 import { Check, ChevronDown, Cpu, KeyRound, Languages, Loader2, Star, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreferences, saveApiKey, updateUserPreferences } from "../api";
+import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreferences, saveApiKey, updateUserPreferences, validateApiKey } from "../api";
 import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
 import { useI18n } from "../i18n";
-import type { ApiKeyStatus, ModelModuleConfig, ModelOption, ModelOptionsMap } from "../types";
+import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap } from "../types";
 
 const BAILIAN_KEY_URL = "https://bailian.console.aliyun.com/#/key";
 
@@ -163,6 +163,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [languageSaving, setLanguageSaving] = useState(false);
   const [error, setError] = useState("");
+  const [validation, setValidation] = useState<ApiKeyValidationResult | null>(null);
 
   // Model selection state
   const [modelOptions, setModelOptions] = useState<ModelOptionsMap | null>(null);
@@ -247,7 +248,14 @@ export default function SettingsPage() {
     if (!canConfirm) return;
     setSaving(true);
     setError("");
+    setValidation(null);
     try {
+      const checked = await validateApiKey(apiKey);
+      setValidation(checked);
+      if (!checked.ok) {
+        setError(checked.message);
+        return;
+      }
       const next = await saveApiKey(apiKey);
       setStatus(next);
       setApiKey("");
@@ -415,6 +423,12 @@ export default function SettingsPage() {
               {status?.updated_at && (
                 <p className="mt-3 text-xs text-slate-500">
                   {t("settings.updatedAt")} {status.updated_at}
+                </p>
+              )}
+              {validation && (
+                <p className={`mt-3 text-xs ${validation.ok ? "text-signal-lime" : "text-signal-amber"}`}>
+                  {validation.message}
+                  {validation.validated_model ? ` (${validation.validated_model})` : ""}
                 </p>
               )}
             </div>

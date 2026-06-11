@@ -1,9 +1,12 @@
 import type {
   AnalyzeResult,
+  ApiKeyValidationResult,
   ApiKeyStatus,
   BillingSummary,
   GenerateEvent,
   GenerateParams,
+  GenerationSessionEnvelope,
+  GenerationSessionStartResult,
   KnowledgeBase,
   KnowledgeSourceStats,
   ModelOptionsMap,
@@ -31,10 +34,36 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("Session expired");
   }
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `HTTP ${response.status}`);
+    const raw = await response.text();
+    try {
+      const parsed = JSON.parse(raw) as { message?: string; detail?: string };
+      throw new Error(parsed.message || parsed.detail || raw || `HTTP ${response.status}`);
+    } catch {
+      throw new Error(raw || `HTTP ${response.status}`);
+    }
   }
   return (await response.json()) as T;
+}
+
+async function requestJsonAllowError<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    headers: {
+      ...buildAuthHeaders(),
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (response.status === 401) {
+    window.localStorage.removeItem("xiangmushu.auth.token");
+    const currentPath = window.location.pathname;
+    if (currentPath !== "/login") {
+      window.location.href = `/login?next=${encodeURIComponent(currentPath)}`;
+    }
+    throw new Error("Session expired");
+  }
+  const text = await response.text();
+  if (!text) return {} as T;
+  return JSON.parse(text) as T;
 }
 
 export async function fetchTemplates(): Promise<TemplateItem[]> {
@@ -107,7 +136,15 @@ export async function fetchApiKeyStatus(): Promise<ApiKeyStatus> {
   return requestJson<ApiKeyStatus>("/api/user/apikey");
 }
 
-export async function saveApiKey(apiKey: string): Promise<ApiKeyStatus & { ok: boolean }> {
+export async function validateApiKey(apiKey: string): Promise<ApiKeyValidationResult> {
+  return requestJsonAllowError<ApiKeyValidationResult>("/api/user/apikey/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+}
+
+export async function saveApiKey(apiKey: string): Promise<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }> {
   return requestJson<ApiKeyStatus & { ok: boolean }>("/api/user/apikey", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -215,4 +252,70 @@ export async function streamGenerate(
       onEvent(JSON.parse(line.slice(5).trim()) as GenerateEvent);
     }
   }
+}
+
+async function streamSession(path: string, onEvent: (event: GenerateEvent) => void, signal?: AbortSignal) {
+  const response = await fetch(apiUrl(path), {
+    method: "GET",
+    headers: buildAuthHeaders(),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    const message = await response.text();
+    throw new Error(message || `HTTP ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const eventText of events) {
+      const line = eventText.split("\n").find((item) => item.startsWith("data:"));
+      if (!line) continue;
+      onEvent(JSON.parse(line.slice(5).trim()) as GenerateEvent);
+    }
+  }
+}
+
+export async function startGenerateSession(params: GenerateParams): Promise<GenerationSessionStartResult> {
+  const form = new FormData();
+  form.append("slug", params.slug);
+  form.append("template", params.template);
+  form.append("custom_instructions", params.customInstructions ?? "");
+  form.append("word_limit", String(params.wordLimit));
+  form.append("top_k", String(params.topK));
+  form.append("max_distance", String(params.maxDistance));
+  form.append("enable_web", String(params.enableWeb));
+  form.append("use_stream", String(params.useStream));
+  form.append("enable_audit", String(params.enableAudit));
+  form.append("enable_visual_audit", String(params.enableVisualAudit));
+
+  return requestJsonAllowError<GenerationSessionStartResult>("/api/generate/sessions", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function fetchActiveGenerationSession(): Promise<GenerationSessionEnvelope> {
+  return requestJson<GenerationSessionEnvelope>("/api/generate/sessions/active");
+}
+
+export async function fetchGenerationSession(sessionId: string): Promise<GenerationSessionEnvelope> {
+  return requestJson<GenerationSessionEnvelope>(`/api/generate/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function streamGenerationSession(
+  sessionId: string,
+  onEvent: (event: GenerateEvent) => void,
+  signal?: AbortSignal,
+  afterSeq = 0,
+) {
+  return streamSession(`/api/generate/sessions/${encodeURIComponent(sessionId)}/stream?after_seq=${afterSeq}`, onEvent, signal);
 }

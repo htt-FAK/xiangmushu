@@ -12,7 +12,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from conftest import port_open, start_server, stop_server
+from tests.conftest import port_open, start_server, stop_server
 from eval_paths import (
     API_RESULT,
     REPORT_API,
@@ -317,7 +317,7 @@ def _write_reports(rounds: list[dict], final_passed: bool) -> None:
                 "",
                 "## 改了什么",
                 "- 评测产物统一落到 artifacts/auto_eval/，不再散落在项目根目录。",
-                "- 修复 eval_paths.py、control_loop.py、test_api_ai.py 中的乱码和路径引用问题。",
+                "- 修复 eval_paths.py、control_loop.py、tests/test_api_ai.py 中的乱码和路径引用问题。",
                 "- .gitignore 补齐评测报告、截图、压缩包等生成产物规则，避免误提交。",
                 "",
                 "## 测了什么",
@@ -398,12 +398,13 @@ def _write_reports(rounds: list[dict], final_passed: bool) -> None:
 
 def _make_zip() -> dict:
     files = [
-        ROOT / "conftest.py",
+        ROOT / "tests" / "__init__.py",
+        ROOT / "tests" / "conftest.py",
         ROOT / "config.py",
         ROOT / "requirements.txt",
         ROOT / "server.py",
-        ROOT / "test_api_ai.py",
-        ROOT / "test_ui_ai.py",
+        ROOT / "tests" / "test_api_ai.py",
+        ROOT / "tests" / "test_ui_ai.py",
         ROOT / "eval_judge.py",
         ROOT / "eval_paths.py",
         ROOT / "control_loop.py",
@@ -423,7 +424,7 @@ def _make_zip() -> dict:
 
     with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in files:
-            zf.write(path, arcname=path.name)
+            zf.write(path, arcname=str(path.relative_to(ROOT)))
 
     with zipfile.ZipFile(ZIP_PATH) as zf:
         names = zf.namelist()
@@ -440,7 +441,7 @@ def _verify_zip_self_contained(zip_path: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="zip_verify_") as tmpdir:
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(tmpdir)
-        py_files = list(Path(tmpdir).glob("*.py"))
+        py_files = list(Path(tmpdir).rglob("*.py"))
         if not py_files:
             raise AssertionError("zip contains no .py files")
 
@@ -454,6 +455,11 @@ def _verify_zip_self_contained(zip_path: Path) -> None:
 
         # Phase 2: import dependency check
         zip_module_names = {pf.stem for pf in py_files}
+        zip_package_names = {
+            pf.parent.name
+            for pf in py_files
+            if pf.name == "__init__.py" and pf.parent != Path(tmpdir)
+        }
         known_stdlib = set(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else set()
 
         # Known package-name → import-name mappings (pip name ≠ import name)
@@ -505,6 +511,8 @@ def _verify_zip_self_contained(zip_path: Path) -> None:
                     mod_lower = mod.lower().replace("-", "_")
                     if mod in zip_module_names:
                         continue
+                    if mod in zip_package_names:
+                        continue
                     if mod in known_stdlib:
                         continue
                     if mod_lower in third_party:
@@ -542,8 +550,8 @@ def main() -> int:
     try:
         server_proc = _start_server_if_needed()
         for i in range(1, MAX_ROUNDS + 1):
-            api = _run_pytest("test_api_ai.py")
-            ui = _run_pytest("test_ui_ai.py")
+            api = _run_pytest("tests/test_api_ai.py")
+            ui = _run_pytest("tests/test_ui_ai.py")
             rounds.append({"round": i, "api": api, "ui": ui})
             if api["passed"] and ui["passed"]:
                 final_passed = True

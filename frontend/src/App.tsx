@@ -19,6 +19,7 @@ import {
 import { lazy, Suspense, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { useAuth } from "./auth";
+import { useWorkflow } from "./workflow";
 import { Button } from "./components/ui";
 import { useI18n } from "./i18n";
 import HomePage from "./pages/HomePage";
@@ -83,6 +84,9 @@ function Shell() {
   const auth = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const { state: workflowState } = useWorkflow();
+  const activeSession = workflowState.generate.session;
+  const activeGeneration = activeSession?.status === "running";
 
   function handleLogout() {
     auth.logout();
@@ -184,6 +188,18 @@ function Shell() {
             </button>
           </div>
         </header>
+        {activeGeneration && (
+          <div className="border-b border-signal-cyan/20 bg-signal-cyan/10 px-4 py-3 text-sm text-cyan-100 md:px-8">
+            <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3">
+              <span>
+                {t("app.activeGeneration")}: {activeSession?.currentTask || "..."} ({activeSession?.progress.done ?? 0}/{activeSession?.progress.total ?? 0})
+              </span>
+              <Button className="min-h-10 px-3 text-xs" variant="ghost" onClick={() => navigate("/generate")}>
+                {t("app.returnToGeneration")}
+              </Button>
+            </div>
+          </div>
+        )}
         <PullToRefresh>
         <main className="mx-auto w-full max-w-7xl px-4 pb-36 pt-5 overscroll-y-contain md:px-8 md:pb-10 md:pt-10">
           <Suspense

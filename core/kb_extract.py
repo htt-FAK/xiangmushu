@@ -1,12 +1,56 @@
 """知识库多格式解析：docx / pdf / pptx / 图片（视觉模型）→ ParsedDocument。"""
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 from typing import Optional
 
 from core.document_models import DocumentBlock
 from core.parser import DocumentParser, ParsedDocument, Section
+
+
+_LOG = logging.getLogger(__name__)
+
+# 直接走专用解析器的扩展名
+_DIRECT_EXTS = {
+    ".docx", ".pdf", ".pptx",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif",
+    ".md", ".markdown",
+}
+
+# MarkItDown 兜底的扩展名白名单
+MARKITDOWN_FALLBACK_EXTS = {
+    ".txt", ".csv", ".html", ".htm",
+    ".xlsx", ".xls", ".doc",
+}
+
+SUPPORTED_KB_EXTS = _DIRECT_EXTS | MARKITDOWN_FALLBACK_EXTS
+
+
+def is_supported_kb_extension(ext: str) -> bool:
+    """返回该扩展名（小写）是否属于知识库支持的类型。"""
+    return (ext or "").lower() in SUPPORTED_KB_EXTS
+
+
+def _convert_with_markitdown(path: str) -> Optional[str]:
+    """尝试用 MarkItDown 把文件转成 Markdown 文本。
+
+    转换失败或返回空文本时返回 None 并记 warning，调用方据此走兜底。
+    """
+    try:
+        from markitdown import MarkItDown
+    except ImportError:
+        _LOG.warning("markitdown not installed; cannot convert %s", path)
+        return None
+    try:
+        md = MarkItDown()
+        result = md.convert(path)
+    except Exception as exc:
+        _LOG.warning("markitdown.convert failed for %s: %s", path, exc)
+        return None
+    text = (getattr(result, "text_content", "") or "").strip()
+    return text or None
 
 
 def _synthetic_doc(
@@ -143,6 +187,40 @@ def _guess_mime(path: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+def _extract_markdown_blocks_from_text(text: str) -> list[DocumentBlock]:
+    """把一段已读好的 Markdown 文本切分为 DocumentBlock 列表。"""
+    import re
+
+    if not text:
+        return []
+    sections = re.split(r"\n(?=#{1,6}\s)", text)
+    blocks: list[DocumentBlock] = []
+    for idx, section in enumerate(sections, start=1):
+        chunk = section.strip()
+        if not chunk:
+            continue
+        heading_match = re.match(r"^(#{1,6})\s+(.+?)\n", chunk)
+        chapter = heading_match.group(2).strip() if heading_match else f"第{idx}节"
+        blocks.append(
+            DocumentBlock(
+                text=chunk,
+                page=idx,
+                block_type="text",
+                source_type="markdown",
+                chapter=chapter,
+                content_format="markdown",
+                metadata={"parser": "markdown"},
+            )
+        )
+    return blocks
+
+
+def _extract_markdown_blocks(path: str) -> list[DocumentBlock]:
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read().strip()
+    return _extract_markdown_blocks_from_text(text)
+
+
 def path_to_parsed_document(path: str, original_name: Optional[str] = None) -> ParsedDocument:
     """
     根据扩展名解析为 ParsedDocument，供 Chunker 使用。
@@ -197,5 +275,21 @@ def path_to_parsed_document(path: str, original_name: Optional[str] = None) -> P
             blocks=blocks,
         )
         return doc
+
+    if ext in (".md", ".markdown"):
+        blocks = _extract_markdown_blocks(path)
+        text = "\n\n".join(block.text for block in blocks)
+        if not (text or "").strip():
+            text = "（Markdown 文件未提取到有效文本内容）"
+        return _synthetic_doc(name, text, "markdown", blocks=blocks)
+
+    if ext in MARKITDOWN_FALLBACK_EXTS:
+        text = _convert_with_markitdown(path)
+        if text:
+            blocks = _extract_markdown_blocks_from_text(text)
+            body = "\n\n".join(b.text for b in blocks) if blocks else text
+            if not (body or "").strip():
+                body = "（未从该文件提取到有效文本内容）"
+            return _synthetic_doc(name, body, "markdown", blocks=blocks or None)
 
     raise ValueError(f"不支持的文件类型: {ext}")
