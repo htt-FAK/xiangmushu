@@ -55,6 +55,7 @@ const LazyOutputBlock = lazy(() => import("../components/OutputBlock").then((m) 
 
 type OutputBlock = OutputBlockData;
 type QuotaAlertPayload = Extract<GenerateEvent, { type: "quota_alert" }>;
+type QuotaAlertData = Pick<QuotaAlertPayload, "module" | "current_model" | "available_models" | "message">;
 type RailItem = { value: string; title: string; meta?: string };
 type GenerateStep = "idle" | "retrieval" | "analysis" | "generation" | "audit" | "done";
 
@@ -273,8 +274,8 @@ export default function GeneratePage() {
   const [modelChoices, setModelChoices] = useState<UserPreferences["model_choices"]>({});
   const [selectedKnowledgeStats, setSelectedKnowledgeStats] = useState<KnowledgeSourceStats | null>(workflowState.knowledge.stats);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [quotaAlert, setQuotaAlert] = useState<QuotaAlertPayload | null>(null);
-  const [quotaSelection, setQuotaSelection] = useState("");
+  const [quotaModalOpen, setQuotaModalOpen] = useState(false);
+  const [quotaAlertData, setQuotaAlertData] = useState<QuotaAlertData | null>(null);
   const [savingQuotaSwitch, setSavingQuotaSwitch] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [downloadingDoc, setDownloadingDoc] = useState(false);
@@ -623,32 +624,35 @@ export default function GeneratePage() {
   }
 
   function handleQuotaAlert(event: QuotaAlertPayload) {
-    setQuotaAlert(event);
-    setQuotaSelection(() => {
-      const preferred = modelChoices?.[event.module];
-      if (preferred && event.available_models.includes(preferred)) return preferred;
-      if (event.available_models.includes(event.current_model)) return event.current_model;
-      return event.available_models[0] ?? event.current_model;
+    abortRef.current?.abort();
+    sectionAbortRef.current?.abort();
+    abortRef.current = null;
+    sectionAbortRef.current = null;
+    setQuotaAlertData({
+      module: event.module,
+      current_model: event.current_model,
+      available_models: event.available_models,
+      message: event.message,
     });
+    setQuotaModalOpen(true);
     setRunning(false);
     setRegeneratingIndex(null);
     setError("");
   }
 
-  async function saveQuotaModelSwitch() {
-    if (!quotaAlert || !quotaSelection) return;
-    const nextChoices = { ...(modelChoices ?? {}), [quotaAlert.module]: quotaSelection };
+  async function handleQuotaModelSwitch(model: string) {
+    if (!quotaAlertData?.module) {
+      setError(JSON.stringify({ level: "error", message: "Missing quota module.", retryable: true }));
+      return;
+    }
+    const nextChoices = { ...(modelChoices ?? {}), [quotaAlertData.module]: model };
     setSavingQuotaSwitch(true);
     try {
       const updated = await updateUserPreferences({ model_choices: nextChoices });
       setModelChoices(updated.model_choices ?? nextChoices);
-      setQuotaAlert(null);
-      setQuotaSelection("");
-      setError(JSON.stringify({
-        level: "info",
-        message: t("generate.quotaSwitchSaved").replace("{0}", quotaSelection),
-        retryable: false,
-      }));
+      setQuotaModalOpen(false);
+      setQuotaAlertData(null);
+      await start();
     } catch (err) {
       setError(JSON.stringify({
         level: "error",
@@ -666,6 +670,7 @@ export default function GeneratePage() {
     abortRef.current = null;
     sectionAbortRef.current = null;
     setRegeneratingIndex(null);
+    setRunning(false);
     setError(JSON.stringify({ level: "info", message: t("generate.streamDisconnected"), retryable: true }));
   }
 
@@ -676,6 +681,8 @@ export default function GeneratePage() {
 
   async function start() {
     setConfirmOpen(false);
+    setQuotaModalOpen(false);
+    setQuotaAlertData(null);
     if (!template || !slug) return;
     setRunning(true);
     setError("");
@@ -1354,79 +1361,42 @@ export default function GeneratePage() {
         </div>
       )}
 
-      {quotaAlert && (
+      {quotaModalOpen && quotaAlertData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
           <div className="w-full max-w-xl border border-rose-500/30 bg-night-900 p-5 shadow-panel md:p-6">
             <div className="mb-4 flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center border border-rose-500/40 bg-rose-500/10 text-rose-200">
                 <Cpu size={19} />
               </div>
-              <h3 className="font-display text-xl font-semibold text-white">{t("generate.quotaDialogTitle")}</h3>
+              <h3 className="font-display text-xl font-semibold text-white">妯″瀷棰濆害涓嶈冻</h3>
             </div>
-            <p className="text-sm leading-7 text-slate-300">
-              {t("generate.quotaDialogBody")
-                .replace("{0}", quotaAlert.current_model)
-                .replace("{1}", quotaAlert.module)}
-            </p>
-            {quotaAlert.detail && (
-              <p className="mt-3 break-all border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-5 text-slate-400">
-                {quotaAlert.detail}
-              </p>
-            )}
+            <p className="text-sm leading-7 text-slate-300">{quotaAlertData.message}</p>
             <div className="mt-5 grid gap-2">
-              {quotaAlert.available_models.map((model) => {
-                const selected = quotaSelection === model;
-                const disabled = model === quotaAlert.current_model;
-                return (
-                  <button
-                    key={model}
-                    type="button"
-                    onClick={() => setQuotaSelection(model)}
-                    className={clsx(
-                      "flex items-center justify-between gap-3 border px-3 py-3 text-left transition",
-                      selected
-                        ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
-                        : "border-white/10 bg-night-950/70 text-slate-300 hover:border-white/25 hover:text-white",
-                      disabled && "opacity-60",
-                    )}
-                  >
-                    <span className="min-w-0">
-                      <span className="block break-all text-sm font-semibold">{model}</span>
-                      <span className="mt-1 block text-xs text-slate-500">
-                        {disabled ? t("generate.quotaCurrentModel") : t("generate.quotaSwitchOption")}
-                      </span>
-                    </span>
-                    {selected && <CheckCircle2 className="shrink-0" size={16} />}
-                  </button>
-                );
-              })}
+              {quotaAlertData.available_models.map((model) => (
+                <button
+                  key={model}
+                  type="button"
+                  onClick={() => void handleQuotaModelSwitch(model)}
+                  disabled={savingQuotaSwitch}
+                  className="flex items-center justify-between gap-3 border border-white/10 bg-night-950/70 px-3 py-3 text-left text-slate-300 transition hover:border-white/25 hover:text-white disabled:opacity-60"
+                >
+                  <span className="block min-w-0 break-all text-sm font-semibold">{model}</span>
+                  {savingQuotaSwitch ? <Loader2 className="shrink-0 animate-spin" size={16} /> : <Cpu className="shrink-0" size={16} />}
+                </button>
+              ))}
             </div>
-            {quotaAlert.available_models.filter((model) => model !== quotaAlert.current_model).length === 0 && (
-              <p className="mt-3 text-sm text-amber-200">{t("generate.quotaNoAlternative")}</p>
-            )}
             <div className="mt-5 grid gap-3 sm:flex sm:justify-end">
               <Button
                 className="min-h-12 w-full sm:w-auto"
                 variant="ghost"
                 onClick={() => {
-                  setQuotaAlert(null);
-                  setQuotaSelection("");
+                  setQuotaModalOpen(false);
+                  setQuotaAlertData(null);
+                  stop();
                 }}
                 disabled={savingQuotaSwitch}
               >
                 {t("generate.cancel")}
-              </Button>
-              <Button
-                className="min-h-12 w-full font-bold sm:w-auto"
-                onClick={saveQuotaModelSwitch}
-                disabled={
-                  savingQuotaSwitch ||
-                  !quotaSelection ||
-                  quotaSelection === quotaAlert.current_model
-                }
-              >
-                {savingQuotaSwitch ? <Loader2 className="animate-spin" size={17} /> : <Cpu size={17} />}
-                {t("generate.quotaSaveModel")}
               </Button>
             </div>
           </div>
