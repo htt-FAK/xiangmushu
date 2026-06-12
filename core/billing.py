@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Any
 
 import config
 from core.auth import iso, utc_now
+from core.db import mysql_enabled, mysql_transaction
 
 
 @dataclass(frozen=True)
@@ -89,16 +91,68 @@ def _connect(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _use_mysql(db_path: str | None = None) -> bool:
+    return db_path is None and mysql_enabled()
+
+
+def _default_provider_id(conn) -> int | None:
+    return _provider_id_for_code(conn, "dashscope")
+
+
+def _provider_id_for_code(conn, provider_code: str) -> int | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM model_providers WHERE code = %s LIMIT 1", (provider_code,))
+        row = cur.fetchone()
+    return int(row["id"]) if row else None
+
+
 def record_billing(
     user_id: int,
     model: str,
     usage: TokenUsage,
     db_path: str | None = None,
+    generation_session_id: int | None = None,
+    generated_article_id: int | None = None,
+    module_key: str | None = None,
+    provider_code: str = "dashscope",
 ) -> dict[str, Any] | None:
     if usage.input_tokens <= 0 and usage.output_tokens <= 0:
         return None
     cost = calculate_cost_cny(model, usage.input_tokens, usage.output_tokens)
     created_at = iso(utc_now())
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO billing_records(
+                        owner_user_id, generation_session_id, generated_article_id,
+                        provider_code, model, module_key, input_tokens, output_tokens, cost_cny, created_at
+                    )
+                    VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        user_id,
+                        generation_session_id,
+                        generated_article_id,
+                        provider_code,
+                        model or "",
+                        module_key,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        cost,
+                        utc_now().replace(tzinfo=None),
+                    ),
+                )
+                record_id = int(cur.lastrowid)
+        return {
+            "id": record_id,
+            "model": model or "",
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cost_cny": cost,
+            "created_at": created_at,
+        }
     with _connect(db_path) as conn:
         cursor = conn.execute(
             """
@@ -120,6 +174,28 @@ def record_billing(
 
 
 def billing_summary(user_id: int, db_path: str | None = None) -> dict[str, Any]:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                        COALESCE(SUM(cost_cny), 0) AS cost_cny,
+                        COUNT(*) AS generation_count
+                    FROM billing_records
+                    WHERE owner_user_id = %s
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return {
+            "input_tokens": int(row["input_tokens"] or 0),
+            "output_tokens": int(row["output_tokens"] or 0),
+            "cost_cny": round(float(row["cost_cny"] or 0), 8),
+            "generation_count": int(row["generation_count"] or 0),
+        }
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -188,9 +264,52 @@ def decrypt_api_key(encrypted: str) -> str:
     raise ValueError("Unsupported encrypted API key")
 
 
-def save_user_api_key(user_id: int, api_key: str, db_path: str | None = None) -> None:
+def save_user_api_key(
+    user_id: int,
+    api_key: str,
+    db_path: str | None = None,
+    validation: dict[str, Any] | None = None,
+    provider_code: str = "dashscope",
+) -> None:
     now = iso(utc_now())
     encrypted = encrypt_api_key(api_key)
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            provider_id = _provider_id_for_code(conn, provider_code)
+            if provider_id is None:
+                raise RuntimeError("Default model provider is missing; run MySQL migrations first.")
+            key_hint = None
+            value = (api_key or "").strip()
+            if value:
+                key_hint = f"{value[:4]}...{value[-4:]}" if len(value) > 8 else "****"
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO provider_credentials(
+                        owner_user_id, provider_id, encrypted_api_key, key_hint, status,
+                        validation_json, validated_at, created_at, updated_at
+                    )
+                    VALUES(%s, %s, %s, %s, 'validated', %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        encrypted_api_key = VALUES(encrypted_api_key),
+                        key_hint = VALUES(key_hint),
+                        status = VALUES(status),
+                        validation_json = VALUES(validation_json),
+                        validated_at = VALUES(validated_at),
+                        updated_at = VALUES(updated_at)
+                    """,
+                    (
+                        user_id,
+                        provider_id,
+                        encrypted,
+                        key_hint,
+                        json.dumps(validation or {}, ensure_ascii=False),
+                        utc_now().replace(tzinfo=None),
+                        utc_now().replace(tzinfo=None),
+                        utc_now().replace(tzinfo=None),
+                    ),
+                )
+        return
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -206,6 +325,48 @@ def save_user_api_key(user_id: int, api_key: str, db_path: str | None = None) ->
 
 
 def get_user_api_key_status(user_id: int, db_path: str | None = None) -> dict[str, Any]:
+    return get_provider_api_key_status(user_id, "dashscope", db_path=db_path)
+
+
+def get_provider_api_key_status(user_id: int, provider_code: str, db_path: str | None = None) -> dict[str, Any]:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            provider_id = _provider_id_for_code(conn, provider_code)
+            if provider_id is None:
+                return {
+                    "has_key": False,
+                    "validated": False,
+                    "created_at": None,
+                    "updated_at": None,
+                    "key_preview": None,
+                }
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT encrypted_api_key, key_hint, status, created_at, updated_at
+                    FROM provider_credentials
+                    WHERE owner_user_id = %s AND provider_id = %s
+                    """,
+                    (user_id, provider_id),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return {
+                "has_key": False,
+                "validated": False,
+                "created_at": None,
+                "updated_at": None,
+                "key_preview": None,
+            }
+        created_at = row.get("created_at")
+        updated_at = row.get("updated_at")
+        return {
+            "has_key": True,
+            "validated": str(row.get("status") or "") == "validated",
+            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+            "updated_at": updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at),
+            "key_preview": row.get("key_hint") or "****",
+        }
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT encrypted_api_key, created_at, updated_at FROM user_api_keys WHERE user_id = ?",
@@ -238,6 +399,28 @@ def get_user_api_key_status(user_id: int, db_path: str | None = None) -> dict[st
 
 
 def load_user_api_key(user_id: int, db_path: str | None = None) -> str | None:
+    return load_provider_api_key(user_id, "dashscope", db_path=db_path)
+
+
+def load_provider_api_key(user_id: int, provider_code: str, db_path: str | None = None) -> str | None:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            provider_id = _provider_id_for_code(conn, provider_code)
+            if provider_id is None:
+                return None
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT encrypted_api_key
+                    FROM provider_credentials
+                    WHERE owner_user_id = %s AND provider_id = %s
+                    """,
+                    (user_id, provider_id),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return decrypt_api_key(str(row["encrypted_api_key"]))
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT encrypted_api_key FROM user_api_keys WHERE user_id = ?",
@@ -249,6 +432,21 @@ def load_user_api_key(user_id: int, db_path: str | None = None) -> str | None:
 
 
 def delete_user_api_key(user_id: int, db_path: str | None = None) -> None:
+    delete_provider_api_key(user_id, "dashscope", db_path=db_path)
+
+
+def delete_provider_api_key(user_id: int, provider_code: str, db_path: str | None = None) -> None:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            provider_id = _provider_id_for_code(conn, provider_code)
+            if provider_id is None:
+                return
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM provider_credentials WHERE owner_user_id = %s AND provider_id = %s",
+                    (user_id, provider_id),
+                )
+        return
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM user_api_keys WHERE user_id = ?", (user_id,))
         conn.commit()

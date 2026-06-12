@@ -67,7 +67,20 @@ TEMPLATE_ANALYZE_TIMEOUT = float(os.getenv("TEMPLATE_ANALYZE_TIMEOUT", "180"))
 TEMPLATE_ANALYZE_MAX_PROMPT_CHARS = int(
     os.getenv("TEMPLATE_ANALYZE_MAX_PROMPT_CHARS", "8000")
 )
-LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or "qwen3.7-max"
+MAIN_WRITER_MODEL = os.getenv("MAIN_WRITER_MODEL", "").strip() or "qwen3.7-plus"
+MAIN_WRITER_FALLBACK_MODEL_1 = os.getenv("MAIN_WRITER_FALLBACK_MODEL_1", "").strip() or "qwen3.7-max"
+MAIN_WRITER_FALLBACK_MODEL_2 = os.getenv("MAIN_WRITER_FALLBACK_MODEL_2", "").strip() or "qwen3.7-plus"
+FAST_WRITER_MODEL = os.getenv("FAST_WRITER_MODEL", "").strip() or SMALL_LLM_MODEL
+FAST_WRITER_FALLBACK_MODEL_1 = os.getenv("FAST_WRITER_FALLBACK_MODEL_1", "").strip() or SMALL_LLM_FALLBACK_MODEL
+WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "").strip() or "qwen3.7-plus"
+WEB_SEARCH_FALLBACK_MODEL_1 = os.getenv("WEB_SEARCH_FALLBACK_MODEL_1", "").strip() or VISION_WEB_FALLBACK_MODEL
+VISION_LAYOUT_MODEL = os.getenv("VISION_LAYOUT_MODEL", "").strip() or TEMPLATE_VISION_MODEL
+VISION_LAYOUT_FALLBACK_MODEL_1 = os.getenv("VISION_LAYOUT_FALLBACK_MODEL_1", "").strip() or TEMPLATE_VISION_FALLBACK_MODEL
+TEMPLATE_PLANNER_MODEL = os.getenv("TEMPLATE_PLANNER_MODEL", "").strip() or TEMPLATE_ANALYZE_MODEL
+TEMPLATE_PLANNER_FALLBACK_MODEL_1 = os.getenv("TEMPLATE_PLANNER_FALLBACK_MODEL_1", "").strip() or TEMPLATE_ANALYZE_FALLBACK_MODEL
+AUDIT_TEXT_MODEL = os.getenv("AUDIT_TEXT_MODEL", "").strip() or "qwen3.6-flash"
+AUDIT_TEXT_FALLBACK_MODEL_1 = os.getenv("AUDIT_TEXT_FALLBACK_MODEL_1", "").strip() or "qwen3.7-plus"
+LARGE_LLM_MODEL = os.getenv("LARGE_LLM_MODEL", "").strip() or MAIN_WRITER_MODEL
 FALLBACK_LLM_MODEL_1 = os.getenv("FALLBACK_LLM_MODEL_1", "").strip() or "qwen3.7-max"
 FALLBACK_LLM_MODEL_2 = os.getenv("FALLBACK_LLM_MODEL_2", "").strip() or "qwen3.7-max"
 FALLBACK_LLM_MODEL_3 = os.getenv("FALLBACK_LLM_MODEL_3", "").strip() or "qwen3.7-max"
@@ -127,6 +140,7 @@ AI_MODEL_PRICING: dict[str, dict[str, float]] = {
     "qwen-plus": {"input": 0.0008, "output": 0.002},
     "qwen-turbo": {"input": 0.0003, "output": 0.0006},
     "qwen3.6-flash": {"input": 0.0003, "output": 0.0006},
+    "deepseek-v4-flash": {"input": 0.0003, "output": 0.0006},
     "qwen3.7-plus": {"input": 0.0008, "output": 0.002},
     "qwen3.7-max": {"input": 0.002, "output": 0.006},
     "qwen3.7-max-preview": {"input": 0.002, "output": 0.006},
@@ -198,9 +212,92 @@ USER_MODEL_OPTIONS: dict[str, dict] = {
             ],
             "性价比": [
                 {"model": "MiniMax-M2.5"},
-                {"model": "deepseek-v4-pro", "recommended": True},
+                {"model": "deepseek-v4-pro"},
+                {"model": "qwen3.7-plus", "recommended": True},
             ],
         },
+    },
+    "main_writer": {
+        "label": "主写作模型",
+        "description": "负责最终正文和表格单元格内容输出，当前默认使用 qwen3.7-plus",
+        "config_keys": ["MAIN_WRITER_MODEL", "LARGE_LLM_MODEL"],
+        "tiers": {
+            "高质量": [
+                {"model": "qwen3.7-plus", "recommended": True},
+                {"model": "deepseek-v4-pro"},
+                {"model": "qwen3.7-max"},
+                {"model": "glm-5.1"},
+                {"model": "kimi-k2.6"},
+            ],
+            "性价比": [
+                {"model": "MiniMax-M2.5"},
+            ],
+        },
+    },
+    "fast_writer": {
+        "label": "快速填充模型",
+        "description": "用于强证据短内容、表格快填和低成本生成",
+        "config_keys": ["FAST_WRITER_MODEL", "SMALL_LLM_MODEL", "BATCH_TABLE_FAST_MODEL"],
+        "options": [
+            {"model": "qwen3.6-flash", "recommended": True},
+            {"model": "qwen3.5-flash"},
+            {"model": "deepseek-v4-flash"},
+            {"model": "qwen3.6-35b-a3b"},
+        ],
+    },
+    "web_search": {
+        "label": "联网搜索模型",
+        "description": "只负责搜索和抽取结构化网页证据，不直接写最终正文",
+        "config_keys": ["WEB_SEARCH_MODEL", "VISION_WEB_MODEL"],
+        "tiers": {
+            "高质量": [
+                {"model": "qwen3.7-plus", "recommended": True},
+                {"model": "qwen3.6-plus"},
+                {"model": "kimi-k2.6"},
+            ],
+            "性价比": [
+                {"model": "qwen3.5-plus"},
+                {"model": "qwen3.6-flash"},
+            ],
+        },
+    },
+    "vision_layout": {
+        "label": "模板视觉模型",
+        "description": "负责模板图片、截图和版式理解",
+        "config_keys": ["VISION_LAYOUT_MODEL", "TEMPLATE_VISION_MODEL", "TABLE_CELL_VISION_MODEL"],
+        "tiers": {
+            "高质量": [
+                {"model": "qwen3.7-plus", "recommended": True},
+                {"model": "qwen3.6-plus"},
+                {"model": "kimi-k2.6"},
+            ],
+            "性价比": [
+                {"model": "qwen3.5-plus"},
+                {"model": "qwen3.6-flash"},
+            ],
+        },
+    },
+    "template_planner": {
+        "label": "模板拆解模型",
+        "description": "负责把模板结构、扫描结果和视觉摘要拆解为 FillTask",
+        "config_keys": ["TEMPLATE_PLANNER_MODEL", "TEMPLATE_ANALYZE_MODEL"],
+        "options": [
+            {"model": "qwen3.6-flash", "recommended": True},
+            {"model": "qwen3.7-plus"},
+            {"model": "qwen3.5-plus"},
+            {"model": "deepseek-v4-flash"},
+        ],
+    },
+    "audit_text": {
+        "label": "内容审核模型",
+        "description": "负责生成后文本审核和必要的轻量修订建议",
+        "config_keys": ["AUDIT_TEXT_MODEL", "AUDIT_LLM_MODEL"],
+        "options": [
+            {"model": "qwen3.6-flash", "recommended": True},
+            {"model": "qwen3.5-flash"},
+            {"model": "deepseek-v4-flash"},
+            {"model": "qwen3.7-plus"},
+        ],
     },
     "lightweight": {
         "label": "轻度处理",
@@ -284,8 +381,21 @@ def get_user_model_for_user(user_id: int, module: str) -> str:
                 model_choices = _json.loads(model_choices)
             except (ValueError, TypeError):
                 model_choices = {}
-        if module in model_choices and model_choices[module]:
-            return model_choices[module]
+        try:
+            from core.model_router import LEGACY_MODULE_TO_ROLE, ROLE_TO_LEGACY_MODULE
+
+            role = LEGACY_MODULE_TO_ROLE.get(module, module)
+            keys = [role]
+            legacy = ROLE_TO_LEGACY_MODULE.get(role)
+            if legacy and legacy not in keys:
+                keys.append(legacy)
+            if module not in keys:
+                keys.append(module)
+        except Exception:
+            keys = [module]
+        for key in keys:
+            if key in model_choices and model_choices[key]:
+                return model_choices[key]
     except Exception:
         pass
     return _get_default_model_for_module(module)
@@ -293,11 +403,17 @@ def get_user_model_for_user(user_id: int, module: str) -> str:
 
 # 硬编码推荐默认值：用户未保存选择时，优先使用这些高性能推荐模型
 _DEFAULT_MODEL_OVERRIDES: dict[str, str] = {
-    "generation": "qwen3.7-max",
+    "generation": MAIN_WRITER_MODEL,
     "lightweight": "qwen3.6-flash",
     "vision": "qwen3.7-plus",
     "search": "qwen3.7-plus",
     "audit": "qwen3.6-flash",
+    "main_writer": MAIN_WRITER_MODEL,
+    "fast_writer": FAST_WRITER_MODEL,
+    "web_search": WEB_SEARCH_MODEL,
+    "vision_layout": VISION_LAYOUT_MODEL,
+    "template_planner": TEMPLATE_PLANNER_MODEL,
+    "audit_text": AUDIT_TEXT_MODEL,
 }
 
 
@@ -363,6 +479,65 @@ HISTORICAL_DIR = os.path.join(os.path.dirname(__file__), "data", "historical")
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "data", "templates")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "data", "outputs")
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
+
+# Structured persistence. SQLite remains the compatibility fallback; set
+# PERSISTENCE_MODE=mysql to use the MySQL schema/migration path.
+PERSISTENCE_MODE = os.getenv("PERSISTENCE_MODE", "sqlite").strip().lower() or "sqlite"
+PERSISTENCE_SQLITE_FALLBACK = os.getenv("PERSISTENCE_SQLITE_FALLBACK", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+MYSQL_HOST = os.getenv("MYSQL_HOST", "").strip()
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "").strip()
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "").strip()
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "").strip()
+MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4").strip() or "utf8mb4"
+MYSQL_CONNECT_TIMEOUT = float(os.getenv("MYSQL_CONNECT_TIMEOUT", "5"))
+MYSQL_READ_TIMEOUT = float(os.getenv("MYSQL_READ_TIMEOUT", "30"))
+MYSQL_WRITE_TIMEOUT = float(os.getenv("MYSQL_WRITE_TIMEOUT", "30"))
+MYSQL_AUTO_CREATE_DATABASE = os.getenv("MYSQL_AUTO_CREATE_DATABASE", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+MYSQL_AUTO_MIGRATE = os.getenv("MYSQL_AUTO_MIGRATE", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+MYSQL_MIGRATIONS_DIR = os.getenv(
+    "MYSQL_MIGRATIONS_DIR",
+    os.path.join(os.path.dirname(__file__), "migrations", "mysql"),
+).strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+# Artifact storage configuration. Current code still writes generated files
+# locally; these settings prepare the storage layer for Tencent COS/Object
+# Storage integration.
+STORAGE_PROVIDER = os.getenv("STORAGE_PROVIDER", "local").strip().lower() or "local"
+ARTIFACT_LOCAL_ROOT = os.getenv(
+    "ARTIFACT_LOCAL_ROOT",
+    os.path.join(os.path.dirname(__file__), "data", "artifacts"),
+).strip()
+COS_BUCKET = os.getenv("COS_BUCKET", "").strip()
+COS_REGION = os.getenv("COS_REGION", "").strip()
+COS_ENDPOINT = os.getenv("COS_ENDPOINT", "").strip()
+COS_SECRET_ID = os.getenv("COS_SECRET_ID", "").strip()
+COS_SECRET_KEY = os.getenv("COS_SECRET_KEY", "").strip()
+COS_PREFIX = os.getenv("COS_PREFIX", "prod/").strip()
+COS_PRIVATE = os.getenv("COS_PRIVATE", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+COS_SIGNED_URL_EXPIRE_SECONDS = int(os.getenv("COS_SIGNED_URL_EXPIRE_SECONDS", "600"))
+
 AUTH_DB_PATH = os.getenv(
     "AUTH_DB_PATH",
     os.path.join(os.path.dirname(__file__), "data", "auth.sqlite3"),
@@ -403,7 +578,7 @@ AUTH_SMTP_USE_TLS = os.getenv("AUTH_SMTP_USE_TLS", "1").strip().lower() not in (
 )
 
 # 确保目录存在
-for d in [HISTORICAL_DIR, TEMPLATE_DIR, OUTPUT_DIR]:
+for d in [HISTORICAL_DIR, TEMPLATE_DIR, OUTPUT_DIR, ARTIFACT_LOCAL_ROOT]:
     os.makedirs(d, exist_ok=True)
 
 

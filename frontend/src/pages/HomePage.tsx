@@ -1,5 +1,5 @@
 import { ArrowRight, Database, FileText, RefreshCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchApiKeyStatus, fetchKnowledgeBases, fetchKnowledgeSources, fetchTemplates } from "../api";
 import { EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
@@ -24,10 +24,29 @@ export default function HomePage() {
     hasTemplate: templateItems.length > 0,
   });
 
-  useEffect(() => {
+  const refreshApiKeyStatus = useCallback(() => {
     fetchApiKeyStatus()
       .then((status) => setHasValidatedKey(Boolean(status.has_key && status.validated)))
       .catch(() => setHasValidatedKey(false));
+  }, []);
+
+  useEffect(() => {
+    refreshApiKeyStatus();
+  }, [refreshApiKeyStatus]);
+
+  useEffect(() => {
+    const refresh = () => refreshApiKeyStatus();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshApiKeyStatus();
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("xiangmushu:apikey-status-changed", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("xiangmushu:apikey-status-changed", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, []);
 
   useEffect(() => {

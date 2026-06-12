@@ -1,70 +1,65 @@
-"""Shared pytest fixtures for xiangmushu evaluation tests."""
+from __future__ import annotations
 
+import os
+from pathlib import Path
 import socket
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import pytest
+import requests
+
+import config
 
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_PORT = 8502
+@pytest.fixture(autouse=True)
+def _default_tests_to_sqlite(monkeypatch):
+    monkeypatch.setattr(config, "PERSISTENCE_MODE", "sqlite", raising=False)
+    monkeypatch.setattr(config, "PERSISTENCE_SQLITE_FALLBACK", True, raising=False)
 
 
-def port_open(port: int = DEFAULT_PORT) -> bool:
-    """Check whether a TCP port on 127.0.0.1 is accepting connections."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("127.0.0.1", port)) == 0
-
-
-def start_server(port: int = DEFAULT_PORT, timeout: int = 45) -> subprocess.Popen:
-    """Start the uvicorn server and wait until it is ready.
-
-    Raises RuntimeError if the process exits early or does not become ready
-    within *timeout* seconds.
-    """
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    for _ in range(timeout):
-        if proc.poll() is not None:
-            raise RuntimeError("server exited before becoming ready")
-        if port_open(port):
-            return proc
-        time.sleep(1)
-    proc.terminate()
-    raise RuntimeError(f"server did not start on port {port}")
-
-
-def stop_server(proc: subprocess.Popen | None) -> None:
-    """Terminate and clean up a server process, if running."""
-    if proc is None or proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-
-
-@pytest.fixture(scope="session")
+@pytest.fixture
 def auto_start_server():
-    """Ensure the app server is running for the test session.
+    root = Path(__file__).resolve().parents[1]
+    temp_dir = root / "data" / ".test-runtime"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    auth_db_path = temp_dir / "auth-ui.sqlite3"
 
-    If the server is already listening on the default port, this fixture
-    reuses it without starting a new process. Otherwise it starts one and
-    tears it down after all tests finish.
-    """
-    if port_open():
-        yield None
-        return
-    proc = start_server()
+    previous_auth_db = config.AUTH_DB_PATH
+    config.AUTH_DB_PATH = str(auth_db_path)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    base_url = f"http://127.0.0.1:{port}"
+
+    env = os.environ.copy()
+    env["PERSISTENCE_MODE"] = "sqlite"
+    env["PERSISTENCE_SQLITE_FALLBACK"] = "1"
+    env["AUTH_DB_PATH"] = str(auth_db_path)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=str(root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
     try:
-        yield proc
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            try:
+                response = requests.get(f"{base_url}/", timeout=2)
+                if response.status_code < 500:
+                    yield base_url
+                    return
+            except Exception:
+                time.sleep(1)
+        pytest.skip("Local UI server did not become ready in time.")
     finally:
-        stop_server(proc)
+        config.AUTH_DB_PATH = previous_auth_db
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()

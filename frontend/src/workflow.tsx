@@ -1,6 +1,7 @@
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -76,35 +77,43 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     window.localStorage.setItem(WORKFLOW_KEY, JSON.stringify(state));
   }, [state]);
 
+  const setGenerateSelections = useCallback((patch: Partial<WorkflowState["generate"]>) => {
+    setState((prev) => ({
+      ...prev,
+      generate: { ...prev.generate, ...patch },
+    }));
+  }, []);
+
+  const setGenerateSession = useCallback((session: GenerationSessionSnapshot | null) => {
+    setState((prev) => ({
+      ...prev,
+      generate: { ...prev.generate, session },
+    }));
+  }, []);
+
+  const setKnowledgeState = useCallback((patch: Partial<WorkflowState["knowledge"]>) => {
+    setState((prev) => ({
+      ...prev,
+      knowledge: { ...prev.knowledge, ...patch },
+    }));
+  }, []);
+
+  const clearGenerateSession = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      generate: { ...prev.generate, session: null },
+    }));
+  }, []);
+
   const value = useMemo<WorkflowContextValue>(
     () => ({
       state,
-      setGenerateSelections: (patch) => {
-        setState((prev) => ({
-          ...prev,
-          generate: { ...prev.generate, ...patch },
-        }));
-      },
-      setGenerateSession: (session) => {
-        setState((prev) => ({
-          ...prev,
-          generate: { ...prev.generate, session },
-        }));
-      },
-      setKnowledgeState: (patch) => {
-        setState((prev) => ({
-          ...prev,
-          knowledge: { ...prev.knowledge, ...patch },
-        }));
-      },
-      clearGenerateSession: () => {
-        setState((prev) => ({
-          ...prev,
-          generate: { ...prev.generate, session: null },
-        }));
-      },
+      setGenerateSelections,
+      setGenerateSession,
+      setKnowledgeState,
+      clearGenerateSession,
     }),
-    [state],
+    [clearGenerateSession, setGenerateSelections, setGenerateSession, setKnowledgeState, state],
   );
 
   return <WorkflowContext.Provider value={value}>{children}</WorkflowContext.Provider>;

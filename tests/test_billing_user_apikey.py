@@ -11,7 +11,7 @@ from core.billing import (
     load_user_api_key,
     record_billing,
 )
-from core.generation_sessions import session_manager
+from core.generation_sessions import GenerationSession, GenerationSessionManager, session_manager
 
 
 def _auth_headers(user):
@@ -233,3 +233,24 @@ def test_generation_session_start_and_recovery_contract(tmp_path, monkeypatch):
     assert active.json()["session"]["session_id"] == session_id
     assert snapshot.json()["session"]["status"] == "done"
     assert snapshot.json()["session"]["outputs"][0]["text"] == "测试内容"
+
+
+def test_generation_session_manager_recovers_persisted_snapshot(monkeypatch):
+    manager = GenerationSessionManager()
+    persisted = GenerationSession(
+        session_id="gen_persisted",
+        user_id=7,
+        params={"template": "demo.docx"},
+        status="done",
+        current_step="done",
+        download="/api/artifacts/a/download",
+    )
+    monkeypatch.setattr("core.generation_sessions._load_persisted_session", lambda user_id, session_id: persisted)
+    monkeypatch.setattr("core.generation_sessions._latest_persisted_session_key", lambda user_id: "gen_persisted")
+
+    loaded = manager.get_session_for_user(7, "gen_persisted")
+    latest = manager.get_latest_session(7)
+
+    assert loaded is not None
+    assert loaded.snapshot()["download"] == "/api/artifacts/a/download"
+    assert latest is loaded

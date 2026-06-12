@@ -63,7 +63,7 @@ export function Stat({
   return (
     <div className={clsx("min-w-0 border border-white/10 bg-night-850/80 p-3.5 md:p-4", className)}>
       <p className="break-words text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500 md:text-xs md:normal-case md:tracking-normal">{label}</p>
-      <p className={clsx("mt-1.5 break-words font-display text-xl font-semibold leading-tight md:mt-2 md:text-3xl", toneClass)}>{value}</p>
+      <p className={clsx("mt-1.5 truncate font-display text-xl font-semibold leading-tight md:mt-2 md:text-2xl", toneClass)} title={String(value)}>{value}</p>
     </div>
   );
 }

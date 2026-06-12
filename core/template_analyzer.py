@@ -27,15 +27,20 @@ _LOG = logging.getLogger(__name__)
 class TemplateAnalyzer:
     """分析模板：优先锚点 {{NAME}} 扫描；否则 LLM + 装饰性空位提示。"""
 
-    def __init__(self):
-        self._client = config.openai_client_for_template_analyze()
+    def __init__(self, client: Any | None = None):
+        self._client = client or config.openai_client_for_template_analyze()
         self._parser = DocumentParser()
+        self.last_model: str = ""
+        self.last_usage: Any = None
 
     def analyze(
         self,
         template_path: str,
         vision_profile: Optional[Dict[str, Any]] = None,
+        analyze_model: Optional[str] = None,
     ) -> List[FillTask]:
+        self.last_model = ""
+        self.last_usage = None
         anchor_tasks = scan_anchor_tasks(template_path)
         if anchor_tasks:
             doc = self._parser.parse(template_path)
@@ -108,8 +113,14 @@ class TemplateAnalyzer:
 
 只输出 JSON 数组，不要其他内容。"""
 
-        analyze_model = config.TEMPLATE_ANALYZE_MODEL
-        analyze_temp = config.TEMP_TEMPLATE_ANALYZE
+        from core.model_router import TEMPLATE_PLANNER, resolve_model_profile
+
+        planner_profile = resolve_model_profile(
+            TEMPLATE_PLANNER,
+            routing_reason="template planning",
+        )
+        analyze_model = (analyze_model or planner_profile.model or config.TEMPLATE_ANALYZE_MODEL).strip()
+        analyze_temp = planner_profile.temperature if planner_profile.temperature is not None else config.TEMP_TEMPLATE_ANALYZE
         analyze_timeout = float(getattr(config, "TEMPLATE_ANALYZE_TIMEOUT", 90))
         prompt_chars = len(prompt)
         _LOG.info(
@@ -120,7 +131,7 @@ class TemplateAnalyzer:
         )
 
         def _call_analyze(model: str):
-            return chat_completions_create(
+            response = chat_completions_create(
                 self._client,
                 model=model,
                 messages=[
@@ -134,14 +145,19 @@ class TemplateAnalyzer:
                 max_tokens=8192,
                 timeout=analyze_timeout,
             )
+            self.last_model = str(getattr(response, "model", None) or model)
+            self.last_usage = getattr(response, "usage", None)
+            return response
 
         response = _call_analyze(analyze_model)
         content = (response.choices[0].message.content or "").strip()
         if not content:
-            fallback = getattr(config, "TEMPLATE_ANALYZE_FALLBACK_MODEL", "") or (
-                config.FALLBACK_LLM_MODEL_1
-            )
-            if fallback and fallback != analyze_model:
+            fallback_chain = planner_profile.model_chain[1:] or [
+                getattr(config, "TEMPLATE_ANALYZE_FALLBACK_MODEL", ""),
+                config.FALLBACK_LLM_MODEL_1,
+            ]
+            fallback = next((item for item in fallback_chain if item and item != analyze_model), "")
+            if fallback:
                 _LOG.warning(
                     "template_analyze 空回复，改用 %s 重试", fallback
                 )

@@ -425,14 +425,19 @@ def parse_vision_profile_json(raw: str) -> Dict[str, Any]:
         return {"error": "json_parse", "raw_prefix": s[:400]}
 
 
-def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any]:
+def describe_template_pages_with_vision(
+    png_pages: List[bytes],
+    *,
+    model: str | None = None,
+    client: Any | None = None,
+) -> Dict[str, Any]:
     """多页 PNG → 多模态 → 结构化 profile。"""
-    if not config.chat_llm_configured():
+    if client is None and not config.chat_llm_configured():
         return {"error": "no_api_key"}
     if not png_pages:
         return {"error": "no_images"}
 
-    client = config.openai_client_for_chat()
+    client = client or config.openai_client_for_chat()
 
     content: List[Dict[str, Any]] = [
         {"type": "text", "text": VISION_TEMPLATE_JSON_PROMPT},
@@ -460,7 +465,13 @@ def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            primary_model = getattr(config, "TEMPLATE_VISION_MODEL", None) or config.VISION_WEB_MODEL
+            from core.model_router import VISION_LAYOUT, resolve_model_profile
+
+            vision_profile = resolve_model_profile(
+                VISION_LAYOUT,
+                routing_reason="template vision",
+            )
+            primary_model = (model or vision_profile.model or getattr(config, "TEMPLATE_VISION_MODEL", None) or config.VISION_WEB_MODEL).strip()
             resp = pool.submit(_call, primary_model).result(timeout=timeout)
     except concurrent.futures.TimeoutError:
         _LOG.warning("模板视觉 API 超过 %.0fs 未返回，已中止等待", timeout)
@@ -469,7 +480,11 @@ def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any
     ch0 = resp.choices[0] if resp.choices else None
     raw = (ch0.message.content if ch0 and ch0.message else "") or ""
     if not raw.strip():
-        fallback_model = (getattr(config, "TEMPLATE_VISION_FALLBACK_MODEL", "") or "").strip()
+        try:
+            fallback_model = next((item for item in vision_profile.model_chain[1:] if item and item != primary_model), "")
+        except Exception:
+            fallback_model = ""
+        fallback_model = (fallback_model or getattr(config, "TEMPLATE_VISION_FALLBACK_MODEL", "") or "").strip()
         if fallback_model and fallback_model != primary_model:
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -478,7 +493,12 @@ def describe_template_pages_with_vision(png_pages: List[bytes]) -> Dict[str, Any
                 raw = (ch0.message.content if ch0 and ch0.message else "") or ""
             except concurrent.futures.TimeoutError:
                 _LOG.warning("template_vision fallback timeout model=%s", fallback_model)
-    return parse_vision_profile_json(raw)
+    profile = parse_vision_profile_json(raw)
+    profile["_billing"] = {
+        "model": str(getattr(resp, "model", None) or primary_model),
+        "usage": getattr(resp, "usage", None),
+    }
+    return profile
 
 
 def compact_profile_for_analyzer(profile: Dict[str, Any], max_chars: int = 5000) -> str:
@@ -574,6 +594,8 @@ def get_or_build_template_vision_profile(
     *,
     force_refresh: bool = False,
     skip_vision: bool = False,
+    model: str | None = None,
+    client: Any | None = None,
 ) -> Tuple[Dict[str, Any], str]:
     """
     返回 (profile_dict, 人类可读状态说明)。
@@ -634,6 +656,7 @@ def get_or_build_template_vision_profile(
     }
     status_parts: List[str] = []
     pages_saved: List[bytes] = []
+    runtime_billing: Dict[str, Any] | None = None
 
     skip_multi = bool(skip_vision) or (
         not bool(getattr(config, "TEMPLATE_VISION_ENABLED", True))
@@ -656,7 +679,12 @@ def get_or_build_template_vision_profile(
                 if pages:
                     pages_saved = pages
                     status_parts.append(f"已栅格化 {len(pages)} 页，调用视觉模型…")
-                    vision_prof = describe_template_pages_with_vision(pages)
+                    vision_prof = describe_template_pages_with_vision(
+                        pages,
+                        model=model,
+                        client=client,
+                    )
+                    runtime_billing = vision_prof.pop("_billing", None)
                     if not vision_prof.get("error"):
                         profile.update(vision_prof)
                         status_parts.append("视觉分析完成。")
@@ -711,4 +739,6 @@ def get_or_build_template_vision_profile(
             "或删除 data/.cache/template_vision 下旧缓存。"
         )
 
+    if runtime_billing:
+        profile["_billing"] = runtime_billing
     return profile, " ".join(status_parts) if status_parts else "模板视觉：无额外状态。"

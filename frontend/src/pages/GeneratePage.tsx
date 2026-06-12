@@ -20,7 +20,7 @@ import {
   Sparkles,
   Square,
 } from "lucide-react";
-import { lazy, Suspense, type ReactNode, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   fetchActiveGenerationSession,
@@ -36,7 +36,7 @@ import {
   updateUserPreferences,
 } from "../api";
 import type { OutputBlockData } from "../components/OutputBlock";
-import { Button, EmptyState, ErrorBanner, Input, PageHeader, Panel, Stat } from "../components/ui";
+import { Button, EmptyState, ErrorBanner, Input, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type {
   GenerateEvent,
@@ -64,16 +64,6 @@ const stepOrder: GenerateStep[] = ["idle", "retrieval", "analysis", "generation"
 function formatCny(value?: number | null) {
   if (typeof value !== "number") return "-";
   return `¥${value.toFixed(4)}`;
-}
-
-function normalizeRailQuery(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function filterRailItems(items: RailItem[], query: string) {
-  const normalized = normalizeRailQuery(query);
-  if (!normalized) return items;
-  return items.filter((item) => `${item.title} ${item.meta ?? ""}`.toLowerCase().includes(normalized));
 }
 
 function SectionTitle({
@@ -280,16 +270,18 @@ export default function GeneratePage() {
   const [traceOpen, setTraceOpen] = useState(false);
   const [downloadingDoc, setDownloadingDoc] = useState(false);
   const [downloadingReport, setDownloadingReport] = useState(false);
-  const [knowledgeSearch, setKnowledgeSearch] = useState("");
-  const [templateSearch, setTemplateSearch] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const sectionAbortRef = useRef<AbortController | null>(null);
   const activeSessionIdRef = useRef<string>(workflowState.generate.session?.session_id ?? "");
   const userOverrodeSwitchesRef = useRef(false);
   const visualTarget = 80;
   const busy = running || regeneratingIndex !== null;
-  const deferredKnowledgeSearch = useDeferredValue(knowledgeSearch);
-  const deferredTemplateSearch = useDeferredValue(templateSearch);
+
+  const refreshApiKeyStatus = useCallback(() => {
+    fetchApiKeyStatus()
+      .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
+      .catch(() => setHasApiKey(null));
+  }, []);
 
   const recommendedConfig = useMemo(() => {
     if (!template || !slug) return null;
@@ -322,16 +314,6 @@ export default function GeneratePage() {
         meta: "DOCX",
       })),
     [templates],
-  );
-
-  const filteredKnowledgeItems = useMemo(
-    () => filterRailItems(knowledgeItems, deferredKnowledgeSearch),
-    [knowledgeItems, deferredKnowledgeSearch],
-  );
-
-  const filteredTemplateItems = useMemo(
-    () => filterRailItems(templateItems, deferredTemplateSearch),
-    [templateItems, deferredTemplateSearch],
   );
 
   const readiness = useMemo(
@@ -379,6 +361,7 @@ export default function GeneratePage() {
         text: "",
         model: undefined,
         tier: undefined,
+        role: undefined,
         kbHits: undefined,
         evidenceRefs: [],
         auditVerdict: undefined,
@@ -392,6 +375,7 @@ export default function GeneratePage() {
       updateOutput(event.index, {
         model: event.model,
         tier: event.tier,
+        role: event.role,
         kbHits: event.kb_hits,
         evidenceRefs: event.evidence_refs ?? [],
       });
@@ -480,9 +464,7 @@ export default function GeneratePage() {
       }
     });
 
-    fetchApiKeyStatus()
-      .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
-      .catch(() => setHasApiKey(null));
+    refreshApiKeyStatus();
     fetchUserPreferences()
       .then((prefs) => setModelChoices(prefs.model_choices ?? {}))
       .catch(() => undefined);
@@ -496,7 +478,22 @@ export default function GeneratePage() {
         }
       })
       .catch(() => undefined);
-  }, []);
+  }, [refreshApiKeyStatus]);
+
+  useEffect(() => {
+    const refresh = () => refreshApiKeyStatus();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshApiKeyStatus();
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener("xiangmushu:apikey-status-changed", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("xiangmushu:apikey-status-changed", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshApiKeyStatus]);
 
   useEffect(() => {
     setGenerateSelections({ slug, template, generationBrief, qualityMode });
@@ -514,13 +511,13 @@ export default function GeneratePage() {
 
   useEffect(() => {
     if (!recommendedConfig || busy) return;
-    setQualityMode(recommendedConfig.qualityMode);
+    setQualityMode((current) => (current === recommendedConfig.qualityMode ? current : recommendedConfig.qualityMode));
     if (!userOverrodeSwitchesRef.current) {
-      setEnableWeb(recommendedConfig.enableWeb);
-      setEnableAudit(recommendedConfig.enableAudit);
-      setEnableVisualAudit(true);
+      setEnableWeb((current) => (current === recommendedConfig.enableWeb ? current : recommendedConfig.enableWeb));
+      setEnableAudit((current) => (current === recommendedConfig.enableAudit ? current : recommendedConfig.enableAudit));
+      setEnableVisualAudit((current) => (current ? current : true));
     }
-  }, [recommendedConfig, busy]);
+  }, [busy, recommendedConfig]);
 
   const percent = useMemo(() => {
     if (!progress.total) return 0;
@@ -745,6 +742,7 @@ export default function GeneratePage() {
               text: "",
               model: undefined,
               tier: undefined,
+              role: undefined,
               kbHits: undefined,
               evidenceRefs: [],
               auditVerdict: undefined,
@@ -759,6 +757,7 @@ export default function GeneratePage() {
               chapter: chapters[event.index] || previousBlock.chapter || taskName(index),
               model: event.model,
               tier: event.tier,
+              role: event.role,
               kbHits: event.kb_hits,
               evidenceRefs: event.evidence_refs ?? [],
             });
@@ -832,7 +831,7 @@ export default function GeneratePage() {
           modelLabel={t("generate.modelLabel")}
           kbHitsLabel={t("generate.kbHitsLabel")}
           auditFallbackLabel={t("generate.auditIssueFallback")}
-          busy={regeneratingIndex === index}
+          busy={regeneratingIndex === index || (running && block.chapter === currentTask)}
           busyLabel={t("generate.regenerating")}
           action={
             actionsEnabled ? (
@@ -854,7 +853,36 @@ export default function GeneratePage() {
 
   return (
     <>
-      <PageHeader eyebrow={t("generate.eyebrow")} title={t("generate.title")} description={t("generate.description")} />
+      <header className="mb-4 grid gap-3 border-b border-white/10 pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+        <div className="min-w-0">
+          <p className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-signal-cyan">
+            {t("generate.eyebrow")}
+          </p>
+          <h1 className="mt-1 break-words font-display text-2xl font-semibold leading-tight text-white md:text-3xl">
+            {t("generate.title")}
+          </h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{t("generate.description")}</p>
+        </div>
+        <div className="grid grid-cols-[1fr_auto] gap-2 xl:w-[360px]">
+          <Button
+            className="min-h-12 w-full text-sm font-bold shadow-glow"
+            onClick={requestStart}
+            disabled={!template || !slug || busy || !readiness.ready}
+          >
+            {running ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />}
+            {running ? t("generate.running") : t("generate.start")}
+          </Button>
+          <Button
+            className="min-h-12 w-12 px-0 font-bold"
+            variant="ghost"
+            onClick={stop}
+            disabled={!busy}
+            aria-label={t("generate.stop")}
+          >
+            <Square size={17} />
+          </Button>
+        </div>
+      </header>
 
       {error &&
         (() => {
@@ -926,43 +954,60 @@ export default function GeneratePage() {
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[430px_minmax(0,1fr)]">
+      <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="space-y-5">
           <Panel className="min-w-0">
             <SectionTitle icon={<Sparkles size={18} />} title={t("generate.setupTitle")} hint={t("generate.setupHint")} />
 
             <div className="space-y-3 transition-all duration-200">
               <SetupField label={t("generate.knowledge")} compact={true}>
-                <OptionRail
+                <select
+                  className="min-h-11 w-full border border-white/10 bg-night-950/80 px-3 text-sm font-semibold text-white outline-none transition focus:border-signal-cyan/70 disabled:opacity-50"
                   value={slug}
-                  onChange={setSlug}
-                  empty={t("generate.noKnowledge")}
-                  emptyFiltered={t("generate.noMatchingKnowledgeBase")}
-                  emptyLink={{ to: "/knowledge", label: t("generate.goKnowledge") }}
-                  compact={true}
-                  disabled={busy}
-                  items={filteredKnowledgeItems}
-                  searchValue={knowledgeSearch}
-                  onSearchChange={setKnowledgeSearch}
-                  searchPlaceholder={t("generate.searchKnowledgeBase")}
-                />
+                  onChange={(event) => setSlug(event.target.value)}
+                  disabled={busy || knowledgeItems.length === 0}
+                >
+                  {knowledgeItems.length === 0 ? (
+                    <option value="">{t("generate.noKnowledge")}</option>
+                  ) : (
+                    knowledgeItems.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.title}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <span className="break-words">{slug || t("generate.noKnowledge")}</span>
+                  <Link to="/knowledge" className="font-semibold text-signal-cyan transition hover:text-white">
+                    {t("generate.goKnowledge")}
+                  </Link>
+                </div>
               </SetupField>
 
               <SetupField label={t("generate.template")} compact={true}>
-                <OptionRail
+                <select
+                  className="min-h-11 w-full border border-white/10 bg-night-950/80 px-3 text-sm font-semibold text-white outline-none transition focus:border-signal-cyan/70 disabled:opacity-50"
                   value={template}
-                  onChange={setTemplate}
-                  empty={t("generate.noTemplates")}
-                  emptyFiltered={t("generate.noMatchingTemplate")}
-                  emptyLink={{ to: "/template", label: t("generate.goTemplate") }}
-                  tone="lime"
-                  compact={true}
-                  disabled={busy}
-                  items={filteredTemplateItems}
-                  searchValue={templateSearch}
-                  onSearchChange={setTemplateSearch}
-                  searchPlaceholder={t("generate.searchTemplate")}
-                />
+                  onChange={(event) => setTemplate(event.target.value)}
+                  disabled={busy || templateItems.length === 0}
+                >
+                  {templateItems.length === 0 ? (
+                    <option value="">{t("generate.noTemplates")}</option>
+                  ) : (
+                    templateItems.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.title}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <span className="break-words">{template || t("generate.noTemplates")}</span>
+                  <Link to="/template" className="font-semibold text-signal-lime transition hover:text-white">
+                    {t("generate.goTemplate")}
+                  </Link>
+                </div>
               </SetupField>
 
               {recommendedConfig && !busy && (
@@ -1014,7 +1059,10 @@ export default function GeneratePage() {
                 </div>
               </SetupField>
 
-              <SetupField label={t("generate.controlSwitchesLabel")} compact={true}>
+              <details className="border border-white/10 bg-night-950/55 p-3">
+                <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-[0.12em] text-signal-cyan">
+                  {t("generate.advancedSettings")}
+                </summary>
                 <div className="space-y-2">
                   {([
                     {
@@ -1081,7 +1129,7 @@ export default function GeneratePage() {
                     </button>
                   ))}
                 </div>
-              </SetupField>
+              </details>
 
               <SetupField label={t("generate.instructions")} compact={true}>
                 <TextArea
@@ -1098,22 +1146,6 @@ export default function GeneratePage() {
                   <span className="shrink-0">{generationBrief.length}/1200</span>
                 </div>
               </SetupField>
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-               <Button className="min-h-14 w-full text-base font-bold shadow-glow" onClick={requestStart} disabled={!template || !slug || busy || !readiness.ready}>
-                {running ? <Loader2 className="animate-spin" size={19} /> : <Play size={19} />}
-                {running ? t("generate.running") : t("generate.start")}
-              </Button>
-              <Button
-                className="min-h-14 w-full font-bold sm:w-12 sm:px-0"
-                variant="ghost"
-                onClick={stop}
-                disabled={!busy}
-                aria-label={t("generate.stop")}
-              >
-                <Square size={17} />
-              </Button>
             </div>
           </Panel>
         </div>
@@ -1166,8 +1198,53 @@ export default function GeneratePage() {
               </p>
             ) : null}
 
+            {(downloadPath || reportPath) && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {downloadPath && (
+                  <button
+                    type="button"
+                    disabled={downloadingDoc}
+                    className="inline-flex min-h-10 items-center justify-center gap-2 border border-signal-lime bg-signal-lime px-3 text-xs font-bold text-night-950 transition hover:bg-signal-lime/90 disabled:opacity-60"
+                    onClick={async () => {
+                      setDownloadingDoc(true);
+                      try {
+                        await handleDownload(downloadPath);
+                      } catch {
+                        setError(t("generate.downloadFailed"));
+                      } finally {
+                        setDownloadingDoc(false);
+                      }
+                    }}
+                  >
+                    {downloadingDoc ? <Loader2 className="animate-spin" size={15} /> : <Download size={15} />}
+                    {t("generate.downloadDoc")}
+                  </button>
+                )}
+                {reportPath && (
+                  <button
+                    type="button"
+                    disabled={downloadingReport}
+                    className="inline-flex min-h-10 items-center justify-center gap-2 border border-white/10 bg-white/[0.055] px-3 text-xs font-bold text-slate-100 transition hover:bg-white/10 disabled:opacity-60"
+                    onClick={async () => {
+                      setDownloadingReport(true);
+                      try {
+                        await handleDownload(reportPath);
+                      } catch {
+                        setError(t("generate.downloadFailed"));
+                      } finally {
+                        setDownloadingReport(false);
+                      }
+                    }}
+                  >
+                    {downloadingReport ? <Loader2 className="animate-spin" size={15} /> : <FileText size={15} />}
+                    {t("generate.downloadReport")}
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="mt-5 border border-white/10 bg-night-950 p-1">
-              <div className="h-2 bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all" style={{ width: `${percent}%` }} />
+              <div className="h-2 bg-[linear-gradient(90deg,#36f2e6,#b8ff5e)] transition-all duration-500" style={{ width: `${percent}%` }} />
             </div>
           </Panel>
 
@@ -1176,20 +1253,25 @@ export default function GeneratePage() {
             {outputs.length === 0 ? (
               <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
             ) : (
-              <div className="flex flex-wrap items-center justify-between gap-3 border border-white/10 bg-night-900/60 px-4 py-3 text-sm text-slate-200 md:px-5">
-                <span className="min-w-0 break-words font-semibold">
-                  {running
-                    ? t("generate.streamingStatus").replace("{0}", String(progress.done)).replace("{1}", String(progress.total || 0))
-                    : t("generate.completedSummary").replace("{0}", String(outputs.length))}
-                </span>
-                <Button
-                  variant="ghost"
-                  className="min-h-10 gap-2 border border-white/10 bg-white/[0.035] px-4 text-xs font-semibold text-slate-300 hover:border-white/25 hover:text-white"
-                  onClick={() => setTraceOpen(true)}
-                >
-                  <MessageSquareText size={15} />
-                  {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
-                </Button>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 border border-white/10 bg-night-900/60 px-4 py-3 text-sm text-slate-200 md:px-5">
+                  <span className="min-w-0 break-words font-semibold">
+                    {running
+                      ? t("generate.streamingStatus").replace("{0}", String(progress.done)).replace("{1}", String(progress.total || 0))
+                      : t("generate.completedSummary").replace("{0}", String(outputs.length))}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    className="min-h-10 gap-2 border border-white/10 bg-white/[0.035] px-4 text-xs font-semibold text-slate-300 hover:border-white/25 hover:text-white"
+                    onClick={() => setTraceOpen(true)}
+                  >
+                    <MessageSquareText size={15} />
+                    {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
+                  </Button>
+                </div>
+                <div className="max-h-[620px] space-y-3 overflow-y-auto pr-1">
+                  {renderOutputBlocks(false)}
+                </div>
               </div>
             )}
           </Panel>

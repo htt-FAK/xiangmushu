@@ -3,6 +3,7 @@ from __future__ import annotations
 from core.fill_task import FillTask
 from core.generator import ContentGenerator, QuotaExceededError
 from core.provider_errors import classify_provider_error
+from core.web_search_agent import WebEvidenceResult
 
 
 class DummyVectorStore:
@@ -33,15 +34,7 @@ def _task(task_type: str = "paragraph") -> FillTask:
 
 def test_generation_bundle_uses_user_generation_model(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
-    monkeypatch.setattr(
-        "config.get_user_model_for_user",
-        lambda user_id, module: {
-            "generation": "user-gen-model",
-            "lightweight": "user-light-model",
-            "search": "user-search-model",
-            "vision": "user-vision-model",
-        }[module],
-    )
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"main_writer": "user-gen-model"})
     vs = DummyVectorStore(
         [{"distance": 0.9, "text": "evidence", "metadata": {"source": "a.txt"}}],
         count=1,
@@ -53,36 +46,63 @@ def test_generation_bundle_uses_user_generation_model(monkeypatch):
     assert bundle.model == "user-gen-model"
 
 
+def test_generation_bundle_defaults_to_qwen37_main_writer(monkeypatch):
+    monkeypatch.setattr("config.FULL_RECALL_MODE", False)
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {})
+    vs = DummyVectorStore(
+        [{"distance": 0.9, "text": "evidence", "metadata": {"source": "a.txt"}}],
+        count=1,
+    )
+    generator = ContentGenerator(vs, user_id=7)
+
+    bundle = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=False, retrieval_max_distance=1.0)
+
+    assert bundle.model == "qwen3.7-plus"
+    assert bundle.route_meta["model_role"] == "main_writer"
+
+
 def test_generation_bundle_uses_user_search_model_for_web_route(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
     monkeypatch.setattr(
-        "config.get_user_model_for_user",
-        lambda user_id, module: {
-            "generation": "user-gen-model",
-            "lightweight": "user-light-model",
-            "search": "user-search-model",
-            "vision": "user-vision-model",
-        }[module],
+        "core.model_router._model_choices_for_user",
+        lambda user_id: {"main_writer": "user-gen-model", "web_search": "user-search-model"},
+    )
+    monkeypatch.setattr(
+        "core.generator.fetch_web_evidence",
+        lambda *args, **kwargs: WebEvidenceResult(profile=None),
     )
     vs = DummyVectorStore([], count=1)
     generator = ContentGenerator(vs, user_id=7)
 
     bundle = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=True, retrieval_max_distance=1.0)
 
-    assert bundle.model == "user-search-model"
+    assert bundle.model == "user-gen-model"
+    assert bundle.route_meta["model_role"] == "main_writer"
+    assert bundle.route_meta["native_web_search"] is False
+    assert bundle.route_meta["web_evidence_summary"] == {"fact_count": 0, "gap_count": 0, "model": "", "role": "web_search", "cached": False, "error": ""}
+
+
+def test_generation_bundle_web_enabled_keeps_main_writer(monkeypatch):
+    monkeypatch.setattr("config.FULL_RECALL_MODE", False)
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {})
+    monkeypatch.setattr(
+        "core.generator.fetch_web_evidence",
+        lambda *args, **kwargs: WebEvidenceResult(profile=None),
+    )
+    vs = DummyVectorStore([], count=1)
+    generator = ContentGenerator(vs, user_id=7)
+
+    bundle = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=True, retrieval_max_distance=1.0)
+
+    assert bundle.model == "qwen3.7-plus"
+    assert bundle.route_meta["model_role"] == "main_writer"
+    assert bundle.route_meta["generation_tier"] == "main_writer_web_evidence"
+    assert bundle.route_meta["native_web_search"] is False
 
 
 def test_generation_bundle_uses_user_lightweight_model_for_strong_rag(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
-    monkeypatch.setattr(
-        "config.get_user_model_for_user",
-        lambda user_id, module: {
-            "generation": "user-gen-model",
-            "lightweight": "user-light-model",
-            "search": "user-search-model",
-            "vision": "user-vision-model",
-        }[module],
-    )
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"fast_writer": "user-light-model"})
     vs = DummyVectorStore(
         [{"distance": 0.1, "text": "strong evidence", "metadata": {"source": "a.txt"}}],
         count=1,
@@ -116,7 +136,7 @@ def test_provider_error_classifies_429_quota_message_as_quota():
 
 def test_generate_from_bundle_raises_quota_error_without_fallback(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
-    monkeypatch.setattr("config.get_user_model_for_user", lambda user_id, module: "quota-model")
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"main_writer": "quota-model"})
     vs = DummyVectorStore(
         [{"distance": 0.9, "text": "evidence", "metadata": {"source": "a.txt"}}],
         count=1,
@@ -140,14 +160,16 @@ def test_generate_from_bundle_raises_quota_error_without_fallback(monkeypatch):
         assert False, "QuotaExceededError was not raised"
     except QuotaExceededError as exc:
         assert exc.model == "quota-model"
-        assert exc.module == "generation"
+        assert exc.module == "main_writer"
 
     assert calls == ["quota-model"]
 
 
 def test_generate_from_bundle_keeps_non_quota_fallback(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
-    monkeypatch.setattr("config.get_user_model_for_user", lambda user_id, module: "primary-model")
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"main_writer": "primary-model"})
+    monkeypatch.setattr("config.MAIN_WRITER_FALLBACK_MODEL_1", "fallback-model")
+    monkeypatch.setattr("config.MAIN_WRITER_FALLBACK_MODEL_2", "")
     monkeypatch.setattr("config.FALLBACK_LLM_MODEL_1", "fallback-model")
     monkeypatch.setattr("config.FALLBACK_LLM_MODEL_2", "")
     monkeypatch.setattr("config.FALLBACK_LLM_MODEL_3", "")

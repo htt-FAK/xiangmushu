@@ -17,6 +17,7 @@ from core.dashscope_chat import chat_completions_create
 from core.evidence_planner import Evidence, compress_evidence
 from core.fill_task import FillTask
 from core.generator import _normalize_web_writing_mode, _web_gen_prompt_parts
+from core.model_router import FAST_WRITER, MAIN_WRITER, resolve_model_profile
 from core.table_context import get_column_header_text_from_table
 from core.table_slot_expand import (
     is_innovation_style_table,
@@ -172,9 +173,7 @@ def batch_generate_table_row(
         if fast_mode is not None
         else bool(getattr(config, "BATCH_TABLE_FAST", True))
     )
-    use_plus = enable_web and (evidence.weak_kb or low_similarity)
-    if batch_fast:
-        use_plus = False
+    use_plus = False
     _, system_prompt, _, _, _ = _web_gen_prompt_parts(
         use_plus, web_writing_mode, evidence.kb_hits > 0
     )
@@ -212,14 +211,15 @@ def batch_generate_table_row(
     )
 
     extra_body: Dict[str, Any] = {}
-    if use_plus:
-        extra_body["enable_search"] = True
-        model = config.VISION_WEB_MODEL
-    else:
-        model = config.SMALL_LLM_MODEL if (
-            evidence.best_similarity is not None
-            and evidence.best_similarity >= config.STRONG_RAG_SIMILARITY_FLOOR
-        ) else config.LARGE_LLM_MODEL
+    use_fast_writer = batch_fast or (
+        evidence.best_similarity is not None
+        and evidence.best_similarity >= config.STRONG_RAG_SIMILARITY_FLOOR
+    )
+    writer_profile = resolve_model_profile(
+        FAST_WRITER if use_fast_writer else MAIN_WRITER,
+        routing_reason="batch table fast fill" if use_fast_writer else "batch table quality fill",
+    )
+    model = writer_profile.model
 
     use_mm = (
         not batch_fast
@@ -232,12 +232,17 @@ def batch_generate_table_row(
         else user_msg
     )
     if batch_fast:
-        model = getattr(config, "BATCH_TABLE_FAST_MODEL", config.SMALL_LLM_MODEL)
+        writer_profile = resolve_model_profile(
+            FAST_WRITER,
+            routing_reason="batch table fast mode",
+        )
+        model = writer_profile.model
     elif use_mm and isinstance(user_content, list):
-        if use_plus:
-            model = config.VISION_WEB_MODEL
-        else:
-            model = config.TABLE_CELL_VISION_MODEL
+        writer_profile = resolve_model_profile(
+            MAIN_WRITER,
+            routing_reason="batch table with visual context",
+        )
+        model = writer_profile.model
 
     # 尝试主模型，失败则使用备选模型
     models_to_try = [model]
@@ -277,6 +282,7 @@ def batch_generate_table_row(
                 getattr(config, "TABLE_CELL_FALLBACK_MODEL", ""),
             ]
         )
+    models_to_try = writer_profile.model_chain
     deduped_models: List[str] = []
     seen_models = set()
     for try_model in models_to_try:

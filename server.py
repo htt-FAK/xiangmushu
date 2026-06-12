@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import os
+import shutil
 import threading
 import time
 from dataclasses import asdict
@@ -65,12 +66,16 @@ from core.audit_log import (
     REGISTER_SUCCESS,
     log_audit,
 )
+from core.artifacts import ArtifactError, ArtifactNotFoundError, get_artifact_for_user, local_file_path, put_bytes, put_file
 from core.generation_sessions import (
     ActiveGenerationExistsError,
     GenerationSession,
     session_manager,
 )
+from core.db import ensure_configured_database, mysql_enabled, mysql_transaction
+from core.history import history_summary, list_history_articles
 from core.provider_errors import classify_provider_error, validation_http_status
+from core.provider_registry import model_options_map_for_user
 
 
 def _safe_filename(raw: str) -> str:
@@ -88,16 +93,9 @@ def _safe_filename(raw: str) -> str:
 
 def _get_password_hash(email: str) -> str:
     """Look up password hash from DB for login verification."""
-    import sqlite3
-    db_path = config.AUTH_DB_PATH
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT password_hash FROM users WHERE email = ?",
-            (email.lower().strip(),),
-        ).fetchone()
-    if not row or not row[0]:
-        return ""
-    return row[0]
+    from core.auth import get_password_hash
+
+    return get_password_hash(email)
 from core.chunker import Chunker
 from core.content_auditor import (
     ContentAuditor,
@@ -106,9 +104,26 @@ from core.content_auditor import (
     should_apply_revision,
 )
 from core.filler import WordFiller
-from core.generator import ContentGenerator, QuotaExceededError
+from core.generator import ContentGenerator
+try:
+    from core.generator import QuotaExceededError
+except ImportError:  # Test stubs may provide only ContentGenerator.
+    class QuotaExceededError(Exception):
+        def __init__(self, message: str = "", model: str = "", detail: str = "", route_meta: dict | None = None):
+            super().__init__(message)
+            self.model = model
+            self.detail = detail
+            self.route_meta = route_meta or {}
 from core.kb_extract import is_supported_kb_extension, path_to_parsed_document
-from core.kb_registry import add_kb, load_registry, remove_kb
+from core.knowledge_repo import (
+    create_knowledge_base,
+    delete_knowledge_base,
+    list_knowledge_bases,
+    list_source_stats,
+    remove_source,
+    replace_source_chunks,
+    upsert_knowledge_source,
+)
 from core.post_fill_verifier import verify_filled_document
 from core.reporting import (
     build_generation_trace,
@@ -117,6 +132,11 @@ from core.reporting import (
     save_quality_report,
 )
 from core.template_analyzer import TemplateAnalyzer
+from core.template_vision import (
+    cache_bundle_dir,
+    get_or_build_template_vision_profile,
+    _cache_path as template_vision_cache_path,
+)
 from core.vector_store import VectorStore
 from core.visual_auditor import audit_document_visual
 
@@ -224,6 +244,7 @@ class ResetPasswordRequest(BaseModel):
 
 class ApiKeyRequest(BaseModel):
     api_key: str
+    provider_code: str | None = None
 
 
 class UserPreferencesRequest(BaseModel):
@@ -261,6 +282,7 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_configured_database()
     init_db()
     yield
 
@@ -349,6 +371,175 @@ def _cached_analyze(template_path: str) -> list:
     return tasks
 
 
+def _template_path_for_name(template: str) -> str:
+    name = _safe_filename(template)
+    path = os.path.abspath(os.path.join(config.TEMPLATE_DIR, name))
+    template_dir = os.path.abspath(config.TEMPLATE_DIR)
+    if not path.startswith(template_dir + os.sep) and path != template_dir:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="非法模板名")
+    if not name.lower().endswith(".docx"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 .docx 模板")
+    return path
+
+
+def _vision_model_options() -> list[str]:
+    cfg = config.USER_MODEL_OPTIONS.get("vision") or {}
+    models: list[str] = []
+    seen: set[str] = set()
+    for group in (cfg.get("tiers") or {}).values():
+        for item in group:
+            model = str((item or {}).get("model") or "").strip()
+            if model and model not in seen:
+                seen.add(model)
+                models.append(model)
+    for item in cfg.get("options") or []:
+        model = str((item or {}).get("model") or "").strip()
+        if model and model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
+def _resolve_vision_model(raw: str | None, user_id: int) -> str:
+    allowed = _vision_model_options()
+    selected = (raw or "").strip() or config.get_user_model_for_user(user_id, "vision_layout") or config.TEMPLATE_VISION_MODEL
+    if selected not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"请选择视觉模型：{', '.join(allowed)}",
+        )
+    return selected
+
+
+def _parsed_document_markdown(parsed) -> str:
+    lines: list[str] = [f"# {getattr(parsed, 'filename', 'parsed document')}"]
+    for section in getattr(parsed, "sections", []) or []:
+        title = getattr(section, "title", "") or "Untitled"
+        level = max(1, min(6, int(getattr(section, "level", 1) or 1)))
+        lines.append("")
+        lines.append(f"{'#' * level} {title}")
+        content = getattr(section, "content", "") or ""
+        if content:
+            lines.append(content)
+    for block in getattr(parsed, "blocks", []) or []:
+        text = getattr(block, "text", "") or ""
+        if text:
+            lines.append("")
+            lines.append(text)
+    return "\n".join(lines).strip() + "\n"
+    return selected
+
+
+def _resolve_template_planner_model(raw: str | None, user_id: int) -> str:
+    return (raw or "").strip() or config.get_user_model_for_user(user_id, "template_planner") or config.TEMPLATE_ANALYZE_MODEL
+
+
+def _client_for_user_template_analysis(user_id: int):
+    user_api_key = load_user_api_key(user_id)
+    if not user_api_key:
+        return config.openai_client_for_template_analyze()
+    from openai import OpenAI
+
+    return OpenAI(
+        api_key=user_api_key,
+        base_url=config.DASHSCOPE_COMPAT_BASE,
+        timeout=config.TEMPLATE_ANALYZE_TIMEOUT,
+        max_retries=0,
+    )
+
+
+def _clear_template_caches(template_path: str) -> None:
+    abs_path = os.path.abspath(template_path)
+    for key in list(_template_analysis_cache.keys()):
+        if os.path.abspath(key[0]) == abs_path:
+            del _template_analysis_cache[key]
+    try:
+        mtime = os.path.getmtime(template_path)
+        cache_file = os.path.join(_TEMPLATE_CACHE_DIR, f"{_cache_key_str(template_path, mtime)}.json")
+        if os.path.isfile(cache_file):
+            os.remove(cache_file)
+    except OSError:
+        pass
+    shutil.rmtree(cache_bundle_dir(template_path), ignore_errors=True)
+    try:
+        flat_cache = template_vision_cache_path(template_path)
+        if os.path.isfile(flat_cache):
+            os.remove(flat_cache)
+    except OSError:
+        pass
+
+
+def _billing_total(records: list[dict | None]) -> dict[str, object]:
+    clean = [r for r in records if r]
+    return {
+        "records": clean,
+        "input_tokens": sum(int(r.get("input_tokens") or 0) for r in clean),
+        "output_tokens": sum(int(r.get("output_tokens") or 0) for r in clean),
+        "cost_cny": round(sum(float(r.get("cost_cny") or 0) for r in clean), 8),
+    }
+
+
+def _analyze_template_now(
+    template_path: str,
+    current_user: User,
+    *,
+    vision_model: str,
+    planner_model: str,
+    force_refresh: bool,
+) -> dict[str, object]:
+    if force_refresh:
+        _clear_template_caches(template_path)
+    client = _client_for_user_template_analysis(current_user.id)
+
+    vision_profile, vision_status = get_or_build_template_vision_profile(
+        template_path,
+        force_refresh=force_refresh,
+        model=vision_model,
+        client=client,
+    )
+    vision_billing = vision_profile.pop("_billing", None) if isinstance(vision_profile, dict) else None
+    billing_records: list[dict | None] = []
+    if isinstance(vision_billing, dict):
+        billing_records.append(
+            record_billing(
+                current_user.id,
+                str(vision_billing.get("model") or vision_model),
+                normalize_usage(vision_billing.get("usage")),
+            )
+        )
+
+    analyzer = TemplateAnalyzer(client=client)
+    tasks = analyzer.analyze(template_path, vision_profile=vision_profile, analyze_model=planner_model)
+    billing_records.append(
+        record_billing(
+            current_user.id,
+            analyzer.last_model or planner_model,
+            normalize_usage(analyzer.last_usage),
+        )
+    )
+
+    mtime = os.path.getmtime(template_path)
+    key = (template_path, mtime)
+    while len(_template_analysis_cache) >= _TEMPLATE_CACHE_MAX:
+        oldest = next(iter(_template_analysis_cache))
+        del _template_analysis_cache[oldest]
+    _template_analysis_cache[key] = tasks
+    _save_cached_tasks(os.path.join(_TEMPLATE_CACHE_DIR, f"{_cache_key_str(template_path, mtime)}.json"), tasks)
+
+    mode = "anchor" if tasks and tasks[0].location_hint.get("anchor") else "infer"
+    return {
+        "ok": True,
+        "template": os.path.basename(template_path),
+        "tasks": [asdict(t) for t in tasks],
+        "count": len(tasks),
+        "mode": mode,
+        "vision_model": vision_model,
+        "planner_model": analyzer.last_model or planner_model,
+        "vision_status": vision_status,
+        "billing": _billing_total(billing_records),
+    }
+
+
 def _get_vs(slug: str) -> VectorStore:
     if slug not in _vs_cache:
         _vs_cache[slug] = VectorStore(kb_slug=slug)
@@ -397,6 +588,14 @@ def _serialize_session(session: GenerationSession | None) -> dict[str, object]:
 
 
 def _available_models_for_module(module: str) -> list[str]:
+    try:
+        from core.model_router import available_models_for_role
+
+        role_models = available_models_for_role(module)
+        if role_models:
+            return role_models
+    except Exception:
+        pass
     module_config = config.USER_MODEL_OPTIONS.get(module) or {}
     models: list[str] = []
     seen: set[str] = set()
@@ -419,7 +618,13 @@ def _available_models_for_module(module: str) -> list[str]:
 def _quota_alert_event(user_id: int, exc: QuotaExceededError) -> dict[str, object]:
     module = str(exc.module or "").strip()
     current_model = (config.get_user_model_for_user(user_id, module) if module else exc.model).strip() or exc.model
-    message = exc.detail.strip() or f"Quota exceeded for model: {current_model}"
+    provider_error = getattr(exc, "provider_error", {}) or {}
+    if provider_error.get("code") == "quota_exceeded":
+        message = "当前 API Key 的模型额度已用尽，或已开启仅使用免费额度模式。请切换模型，或到百炼控制台关闭“仅使用免费额度”。"
+    else:
+        message = str(provider_error.get("message") or "").strip()
+    if not message:
+        message = exc.detail.strip() or f"Quota exceeded for model: {current_model}"
     return {
         "type": "quota_alert",
         "module": module,
@@ -517,6 +722,7 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                 "index": i,
                 "model": gen_bundle.model,
                 "tier": gen_bundle.route_meta.get("generation_tier"),
+                "role": gen_bundle.route_meta.get("model_role"),
                 "kb_hits": gen_bundle.route_meta.get("kb_hits", 0),
                 "evidence_refs": gen_bundle.evidence_refs[:5],
             }
@@ -654,12 +860,46 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
             visual_audit=visual_payload,
         )
         report_path = save_quality_report(output_path, report)
+        legacy_download = f"/api/download/{output_name}"
+        legacy_report_download = f"/api/download/{os.path.basename(report_path)}"
+        download_url = legacy_download
+        report_download_url = legacy_report_download
+        artifact_payload: dict[str, object] = {}
+        if mysql_enabled():
+            try:
+                doc_artifact = put_file(
+                    output_path,
+                    owner_user_id=current_user.id,
+                    artifact_type="generated_doc",
+                    original_filename=output_name,
+                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    metadata={"session_id": session_id, "template": template},
+                )
+                report_artifact = put_file(
+                    report_path,
+                    owner_user_id=current_user.id,
+                    artifact_type="quality_report",
+                    original_filename=os.path.basename(report_path),
+                    content_type="application/json",
+                    metadata={"session_id": session_id, "template": template},
+                )
+                download_url = f"/api/artifacts/{doc_artifact.artifact_uuid}/download"
+                report_download_url = f"/api/artifacts/{report_artifact.artifact_uuid}/download"
+                artifact_payload = {
+                    "artifact_id": doc_artifact.artifact_uuid,
+                    "report_artifact_id": report_artifact.artifact_uuid,
+                    "legacy_download": legacy_download,
+                    "legacy_report_download": legacy_report_download,
+                }
+            except Exception:
+                logger.exception("Failed to store generation artifacts; falling back to legacy downloads")
         emit(
             {
                 "type": "done",
                 "filename": output_name,
-                "download": f"/api/download/{output_name}",
-                "report_download": f"/api/download/{os.path.basename(report_path)}",
+                "download": download_url,
+                "report_download": report_download_url,
+                **artifact_payload,
                 "report_summary": quality_report_summary(report),
                 "post_fill_checks": post_fill_checks,
                 "visual_score": visual_payload.get("score"),
@@ -890,7 +1130,7 @@ async def auth_me(current_user: User = Depends(get_current_user)):
 @app.get("/api/user/model-options")
 async def user_model_options(current_user: User = Depends(get_current_user)):
     """返回 USER_MODEL_OPTIONS 注册表，供前端渲染模型选择下拉框。"""
-    return config.USER_MODEL_OPTIONS
+    return model_options_map_for_user(current_user.id)
 
 
 @app.get("/api/user/preferences")
@@ -923,7 +1163,10 @@ async def user_apikey_validate(
     payload: ApiKeyRequest,
     current_user: User = Depends(get_current_user),
 ):
-    result = validate_user_api_key(payload.api_key)
+    try:
+        result = validate_user_api_key(payload.api_key, payload.provider_code or "dashscope")
+    except TypeError:
+        result = validate_user_api_key(payload.api_key)
     if result.get("ok"):
         return result
     return JSONResponse(result, status_code=validation_http_status(result))
@@ -935,11 +1178,15 @@ async def user_apikey_save(
     request: Request,
     current_user: User = Depends(get_current_user),
 ):
-    validation = validate_user_api_key(payload.api_key)
+    provider_code = payload.provider_code or "dashscope"
+    try:
+        validation = validate_user_api_key(payload.api_key, provider_code)
+    except TypeError:
+        validation = validate_user_api_key(payload.api_key)
     if not validation.get("ok"):
         return JSONResponse(validation, status_code=validation_http_status(validation))
     try:
-        save_user_api_key(current_user.id, payload.api_key)
+        save_user_api_key(current_user.id, payload.api_key, validation=validation, provider_code=provider_code)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     log_audit(
@@ -973,9 +1220,34 @@ async def api_billing_summary(current_user: User = Depends(get_current_user)):
     return billing_summary(current_user.id)
 
 
+@app.get("/api/history/articles")
+async def history_articles(
+    status_filter: str = "all",
+    query: str = "",
+    current_user: User = Depends(get_current_user),
+):
+    status_value = (status_filter or "all").strip()
+    if status_value not in {"all", "completed", "review", "failed"}:
+        status_value = "all"
+    articles = list_history_articles(current_user.id, status=status_value, query=(query or "").strip())
+    return {"articles": articles, "summary": history_summary(articles)}
+
+
+@app.get("/api/history/articles/{article_id}")
+async def history_article_detail(
+    article_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    articles = list_history_articles(current_user.id)
+    article = next((item for item in articles if str(item.get("id")) == str(article_id)), None)
+    if article is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="History article not found")
+    return article
+
+
 @app.get("/api/kb/list")
 async def kb_list(current_user: User = Depends(get_current_user)):
-    return load_registry()
+    return list_knowledge_bases(current_user.id)
 
 
 @app.post("/api/kb/create")
@@ -985,7 +1257,7 @@ async def kb_create(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        created = add_kb(label.strip(), slug.strip() or None)
+        created = create_knowledge_base(current_user.id, label.strip(), slug.strip() or None)
         return {"ok": True, "slug": created}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -997,7 +1269,7 @@ async def kb_delete(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        remove_kb(slug)
+        delete_knowledge_base(current_user.id, slug)
         vs = VectorStore(kb_slug=slug)
         vs.delete_entire_collection()
         _vs_cache.pop(slug, None)
@@ -1011,10 +1283,17 @@ async def kb_sources(
     slug: str = "kb1",
     current_user: User = Depends(get_current_user),
 ):
+    if not mysql_enabled():
+        vs = _get_vs(slug)
+        sources = vs.list_sources()
+        count = vs.get_collection_count()
+        return {"sources": sources, "chunk_count": count, "source_count": len(sources)}
+    inspector = VectorStore(kb_slug=slug, create_collection=False)
+    collection_exists = inspector.collection_exists()
     vs = _get_vs(slug)
-    sources = vs.list_sources()
-    count = vs.get_collection_count()
-    return {"sources": sources, "chunk_count": count, "source_count": len(sources)}
+    count = vs.get_collection_count() if collection_exists else 0
+    metadata_summary = vs.knowledge_metadata_summary() if collection_exists else {"source_ids": [], "chunk_keys": []}
+    return list_source_stats(current_user.id, slug, collection_exists, count, metadata_summary)
 
 
 @app.post("/api/kb/upload")
@@ -1044,8 +1323,59 @@ async def kb_upload(
             out.write(content)
         try:
             parsed = path_to_parsed_document(save_path, original_name=fname)
+            artifact_info: dict[str, object] = {}
+            source_record: dict[str, object] | None = None
+            if mysql_enabled():
+                try:
+                    source_artifact = put_file(
+                        save_path,
+                        owner_user_id=current_user.id,
+                        artifact_type="uploaded_source",
+                        original_filename=fname,
+                        content_type=f.content_type,
+                        metadata={"slug": slug},
+                    )
+                    parsed_artifact = put_bytes(
+                        _parsed_document_markdown(parsed),
+                        owner_user_id=current_user.id,
+                        artifact_type="source_markdown",
+                        original_filename=f"{os.path.splitext(fname)[0]}.md",
+                        content_type="text/markdown; charset=utf-8",
+                        metadata={"slug": slug, "source_filename": fname},
+                    )
+                    artifact_info = {
+                        "artifact_id": source_artifact.artifact_uuid,
+                        "parsed_artifact_id": parsed_artifact.artifact_uuid,
+                    }
+                    source_record = upsert_knowledge_source(
+                        current_user.id,
+                        slug,
+                        fname,
+                        original_artifact_uuid=source_artifact.artifact_uuid,
+                        parsed_artifact_uuid=parsed_artifact.artifact_uuid,
+                        content_type=f.content_type,
+                        byte_size=len(content),
+                        status="uploaded",
+                        metadata={"slug": slug},
+                    )
+                except Exception:
+                    logger.exception("Failed to store KB upload artifacts")
             chunks = _chunker.chunk(parsed)
+            if source_record:
+                for index, chunk in enumerate(chunks):
+                    chunk.metadata["knowledge_base_id"] = int(source_record["knowledge_base_id"])
+                    chunk.metadata["knowledge_source_id"] = int(source_record["id"])
+                    if source_record.get("vector_collection_id") is not None:
+                        chunk.metadata["vector_collection_id"] = int(source_record["vector_collection_id"])
+                    chunk.metadata["knowledge_chunk_key"] = f"{source_record['id']}:{index}"
             vs.add_documents(chunks)
+            if source_record:
+                replace_source_chunks(
+                    int(source_record["id"]),
+                    int(source_record["knowledge_base_id"]),
+                    int(source_record["vector_collection_id"]) if source_record.get("vector_collection_id") else None,
+                    chunks,
+                )
             log_audit(
                 FILE_UPLOADED,
                 user_id=current_user.id,
@@ -1054,7 +1384,7 @@ async def kb_upload(
                 ua=_user_agent(request),
                 detail={"filename": fname, "chunks": len(chunks)},
             )
-            results.append({"file": fname, "ok": True, "chunks": len(chunks)})
+            results.append({"file": fname, "ok": True, "chunks": len(chunks), **artifact_info})
         except Exception as e:
             results.append({"file": fname, "ok": False, "error": str(e)})
     return {"results": results}
@@ -1067,7 +1397,11 @@ async def kb_remove_source(
     current_user: User = Depends(get_current_user),
 ):
     vs = _get_vs(slug)
-    vs.delete_by_source(source)
+    removal = remove_source(current_user.id, slug, source)
+    if removal and removal.get("source_id"):
+        vs.delete_by_source(source, int(removal["source_id"]))
+    else:
+        vs.delete_by_source(source)
     return {"ok": True}
 
 
@@ -1094,22 +1428,98 @@ async def template_list(current_user: User = Depends(get_current_user)):
 @app.post("/api/template/analyze")
 async def template_analyze(
     file: UploadFile = File(...),
+    vision_model: str = Form(""),
+    planner_model: str = Form(""),
+    force_refresh: bool = Form(True),
     current_user: User = Depends(get_current_user),
 ):
     fname = _safe_filename(file.filename or getattr(file, "name", "unknown"))
     save_path = os.path.join(config.TEMPLATE_DIR, fname)
     content = await file.read()
     _raise_if_upload_too_large(content)
+    os.makedirs(config.TEMPLATE_DIR, exist_ok=True)
     with open(save_path, "wb") as out:
         out.write(content)
     try:
-        tasks = _cached_analyze(save_path)
-        task_dicts = [asdict(t) for t in tasks]
-        mode = "anchor" if tasks and tasks[0].location_hint.get(
-            "anchor") else "infer"
-        return {"ok": True, "tasks": task_dicts, "count": len(tasks), "mode": mode}
+        selected_model = _resolve_vision_model(vision_model, current_user.id)
+        selected_planner_model = _resolve_template_planner_model(planner_model, current_user.id)
+        result = _analyze_template_now(
+            save_path,
+            current_user,
+            vision_model=selected_model,
+            planner_model=selected_planner_model,
+            force_refresh=force_refresh,
+        )
+        if mysql_enabled() and isinstance(result, dict) and result.get("ok", True):
+            try:
+                template_artifact = put_file(
+                    save_path,
+                    owner_user_id=current_user.id,
+                    artifact_type="uploaded_source",
+                    original_filename=fname,
+                    content_type=file.content_type,
+                    metadata={"surface": "template_analyze"},
+                )
+                preview_ids: list[str] = []
+                bundle = cache_bundle_dir(save_path)
+                if os.path.isdir(bundle):
+                    for preview_name in sorted(os.listdir(bundle)):
+                        if preview_name.lower().endswith(".png"):
+                            preview_artifact = put_file(
+                                os.path.join(bundle, preview_name),
+                                owner_user_id=current_user.id,
+                                artifact_type="preview_image",
+                                original_filename=preview_name,
+                                content_type="image/png",
+                                metadata={"template": fname},
+                            )
+                            preview_ids.append(preview_artifact.artifact_uuid)
+                result["artifact_id"] = template_artifact.artifact_uuid
+                result["preview_artifact_ids"] = preview_ids
+            except Exception:
+                logger.exception("Failed to store template analysis artifacts")
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/template/reanalyze")
+async def template_reanalyze(
+    template: str = Form(...),
+    vision_model: str = Form(""),
+    planner_model: str = Form(""),
+    current_user: User = Depends(get_current_user),
+):
+    save_path = _template_path_for_name(template)
+    if not os.path.isfile(save_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="模板不存在")
+    try:
+        selected_model = _resolve_vision_model(vision_model, current_user.id)
+        selected_planner_model = _resolve_template_planner_model(planner_model, current_user.id)
+        return _analyze_template_now(
+            save_path,
+            current_user,
+            vision_model=selected_model,
+            planner_model=selected_planner_model,
+            force_refresh=True,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/template/delete")
+async def template_delete(
+    template: str = Form(...),
+    current_user: User = Depends(get_current_user),
+):
+    save_path = _template_path_for_name(template)
+    if not os.path.isfile(save_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="模板不存在")
+    _clear_template_caches(save_path)
+    os.remove(save_path)
+    return {"ok": True, "template": os.path.basename(save_path)}
 
 
 # ---------------------------------------------------------------------------
@@ -1274,6 +1684,27 @@ async def download(
     )
 
 
+@app.get("/api/artifacts/{artifact_uuid}/download")
+async def download_artifact(
+    artifact_uuid: str,
+    current_user: User = Depends(get_current_user),
+):
+    artifact = get_artifact_for_user(artifact_uuid, current_user.id)
+    if artifact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+    try:
+        path = local_file_path(artifact)
+    except ArtifactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact file is missing") from exc
+    except ArtifactError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+    return FileResponse(
+        path,
+        filename=artifact.original_filename,
+        media_type=artifact.content_type or "application/octet-stream",
+    )
+
+
 @app.get("/api/admin/stats")
 async def admin_stats(
     request: Request,
@@ -1286,6 +1717,71 @@ async def admin_stats(
         ip=_client_ip(request),
         ua=_user_agent(request),
     )
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS count FROM users")
+                total_users = int(cur.fetchone()["count"] or 0)
+                cur.execute("SELECT COUNT(*) AS count FROM billing_records")
+                total_generations = int(cur.fetchone()["count"] or 0)
+                cur.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(cost_cny), 0) AS cost,
+                        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                        COALESCE(SUM(output_tokens), 0) AS output_tokens
+                    FROM billing_records
+                    """
+                )
+                totals = cur.fetchone()
+                total_cost = float(totals["cost"] or 0)
+                total_input = int(totals["input_tokens"] or 0)
+                total_output = int(totals["output_tokens"] or 0)
+                cur.execute(
+                    """
+                    SELECT DATE(created_at) AS day, COUNT(*) AS gens, SUM(cost_cny) AS cost,
+                           SUM(input_tokens) AS inp, SUM(output_tokens) AS outp
+                    FROM billing_records
+                    WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+                    GROUP BY DATE(created_at)
+                    ORDER BY day
+                    """
+                )
+                daily_rows = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT model, COUNT(*) AS cnt, SUM(cost_cny) AS cost
+                    FROM billing_records
+                    GROUP BY model
+                    ORDER BY cnt DESC
+                    LIMIT 5
+                    """
+                )
+                model_rows = cur.fetchall()
+                cur.execute("SELECT COUNT(*) AS count FROM provider_credentials WHERE owner_user_id IS NOT NULL")
+                users_with_key = int(cur.fetchone()["count"] or 0)
+        return {
+            "total_users": total_users,
+            "total_generations": total_generations,
+            "total_cost_cny": round(total_cost, 4),
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "users_with_api_key": users_with_key,
+            "daily": [
+                {
+                    "day": str(r["day"]),
+                    "generations": int(r["gens"] or 0),
+                    "cost": round(float(r["cost"] or 0), 4),
+                    "input_tokens": int(r["inp"] or 0),
+                    "output_tokens": int(r["outp"] or 0),
+                }
+                for r in daily_rows
+            ],
+            "top_models": [
+                {"model": r["model"], "count": int(r["cnt"] or 0), "cost": round(float(r["cost"] or 0), 4)}
+                for r in model_rows
+            ],
+        }
     import sqlite3 as _sqlite3
     db = config.AUTH_DB_PATH
     with _sqlite3.connect(db) as conn:

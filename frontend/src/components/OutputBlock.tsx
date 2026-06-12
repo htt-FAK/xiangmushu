@@ -6,6 +6,7 @@ export type OutputBlockData = {
   text: string;
   model?: string;
   tier?: string;
+  role?: string;
   kbHits?: number;
   evidenceRefs?: string[];
   auditVerdict?: string;
@@ -41,7 +42,14 @@ export function OutputBlock({
   busyLabel?: string;
 }) {
   return (
-    <article className="min-w-0 border border-white/10 bg-night-950/70 p-3.5 shadow-[0_14px_48px_rgba(0,0,0,0.22)] md:p-4">
+    <article
+      className={clsx(
+        "min-w-0 border bg-night-950/70 p-3.5 shadow-[0_14px_48px_rgba(0,0,0,0.22)] transition-all duration-300 md:p-4",
+        busy
+          ? "border-signal-cyan/50 shadow-[0_0_0_1px_rgba(54,242,230,0.12),0_18px_52px_rgba(54,242,230,0.10)]"
+          : "border-white/10",
+      )}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
         <div className="min-w-0 flex-1">
           <p className="min-w-0 break-words font-display text-base font-semibold leading-snug text-signal-cyan md:text-lg">
@@ -51,6 +59,11 @@ export function OutputBlock({
             {block.tier && (
               <span className="max-w-full break-all border border-white/10 bg-night-900/70 px-2 py-1 uppercase tracking-[0.08em]">
                 {routeLabel}: {block.tier}
+              </span>
+            )}
+            {block.role && (
+              <span className="max-w-full break-all border border-signal-lime/20 bg-signal-lime/10 px-2 py-1 uppercase tracking-[0.08em] text-lime-100">
+                role: {block.role}
               </span>
             )}
             {block.model && (

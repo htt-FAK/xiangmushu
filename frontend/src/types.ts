@@ -14,11 +14,20 @@ export type KnowledgeSourceStats = {
   sources: string[];
   chunk_count: number;
   source_count: number;
+  integrity?: {
+    collection_exists?: boolean;
+    vector_count?: number;
+    missing_collection?: boolean;
+    count_mismatch?: boolean;
+    missing_source_rows?: number[];
+  };
 };
 
 export type FillTask = {
   target_chapter: string;
-  prompt: string;
+  prompt?: string;
+  description?: string;
+  task_type?: string;
   word_limit: number;
   location_hint?: Record<string, unknown>;
   replace_mode?: string;
@@ -26,9 +35,14 @@ export type FillTask = {
 
 export type AnalyzeResult = {
   ok: boolean;
+  template?: string;
   tasks?: FillTask[];
   count?: number;
   mode?: "anchor" | "infer" | string;
+  vision_model?: string;
+  planner_model?: string;
+  vision_status?: string;
+  billing?: GenerationBilling;
   error?: string;
 };
 
@@ -104,6 +118,9 @@ export type ApiKeyValidationResult = {
 export interface ModelOption {
   model: string;
   recommended?: boolean;
+  label?: string;
+  provider_code?: string;
+  provider_name?: string;
 }
 
 export interface ModelModuleConfig {
@@ -112,6 +129,7 @@ export interface ModelModuleConfig {
   tiers?: Record<string, ModelOption[]>;
   options?: ModelOption[];
   config_keys?: string[];
+  selected_unavailable?: { model: string; reason: string };
 }
 
 export type ModelOptionsMap = Record<string, ModelModuleConfig>;
@@ -128,6 +146,7 @@ export type GenerateEvent =
       index: number;
       model: string;
       tier?: string;
+      role?: string;
       kb_hits?: number;
       evidence_refs?: string[];
     }
@@ -191,6 +210,7 @@ export type OutputBlockSnapshot = {
   text: string;
   model?: string | null;
   tier?: string | null;
+  role?: string | null;
   kbHits?: number | null;
   evidenceRefs?: string[];
   auditVerdict?: string | null;
@@ -221,4 +241,28 @@ export type GenerateParams = {
   useStream: boolean;
   enableAudit: boolean;
   enableVisualAudit: boolean;
+};
+
+export type HistoryArticleStatus = "completed" | "review" | "failed";
+
+export type HistoryModelUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costCny: number;
+};
+
+export type HistoryArticle = {
+  id: string;
+  title: string;
+  template: string;
+  knowledgeBase: string;
+  createdAt: string;
+  status: HistoryArticleStatus;
+  documentUrl?: string;
+  reportUrl?: string;
+  inputTokens: number;
+  outputTokens: number;
+  costCny: number;
+  modelUsage: HistoryModelUsage[];
 };

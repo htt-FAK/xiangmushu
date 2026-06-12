@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Database,
+  History,
   FileSearch,
   Home,
   LogOut,
@@ -30,6 +31,7 @@ import { PullToRefresh } from "./components/PullToRefresh";
 
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const GeneratePage = lazy(() => import("./pages/GeneratePage"));
+const HistoryPage = lazy(() => import("./pages/HistoryPage"));
 const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const TemplateAnalysisPage = lazy(() => import("./pages/TemplateAnalysisPage"));
@@ -38,6 +40,7 @@ const nav = [
   { to: "/", labelKey: "nav.home", icon: Home },
   { to: "/template", labelKey: "nav.template", icon: FileSearch },
   { to: "/generate", labelKey: "nav.generate", icon: Sparkles },
+  { to: "/history", labelKey: "nav.history", icon: History },
   { to: "/knowledge", labelKey: "nav.knowledge", icon: Database },
   { to: "/settings", labelKey: "nav.settings", icon: Settings },
 ];
@@ -213,6 +216,7 @@ function Shell() {
               <Route path="/" element={<HomePage />} />
               <Route path="/template" element={<TemplateAnalysisPage />} />
               <Route path="/generate" element={<GeneratePage />} />
+              <Route path="/history" element={<HistoryPage />} />
               <Route path="/knowledge" element={<KnowledgeBasePage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/admin" element={<AdminPage />} />
@@ -223,7 +227,7 @@ function Shell() {
         </PullToRefresh>
 
         <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-night-950/92 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-1.5 backdrop-blur-md lg:hidden">
-          <div className="grid grid-cols-5 gap-1">
+          <div className="grid grid-cols-6 gap-1">
             {nav.map((item) => {
               const Icon = item.icon;
               return (

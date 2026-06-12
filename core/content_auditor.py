@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import config
 from core.dashscope_chat import chat_completions_create
 from core.fill_task import FillTask
+from core.model_router import AUDIT_TEXT, resolve_model_profile
 
 _LOG = logging.getLogger(__name__)
 
@@ -77,12 +78,11 @@ class ContentAuditor:
 
         raw = ""
         last_error: Optional[Exception] = None
-        model_chain = [
-            config.AUDIT_LLM_MODEL,
-            getattr(config, "AUDIT_FALLBACK_1", ""),
-            getattr(config, "AUDIT_FALLBACK_2", ""),
-            getattr(config, "AUDIT_FALLBACK_3", ""),
-        ]
+        audit_profile = resolve_model_profile(
+            AUDIT_TEXT,
+            routing_reason="content audit",
+        )
+        model_chain = audit_profile.model_chain
         seen_models = set()
         for model in model_chain:
             model = (model or "").strip()
@@ -97,7 +97,7 @@ class ContentAuditor:
                         {"role": "system", "content": AUDIT_SYSTEM},
                         {"role": "user", "content": user_msg},
                     ],
-                    temperature=config.TEMP_AUDIT,
+                    temperature=audit_profile.temperature if audit_profile.temperature is not None else config.TEMP_AUDIT,
                     stream=False,
                 )
                 ch0 = resp.choices[0] if resp.choices else None

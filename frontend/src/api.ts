@@ -7,6 +7,7 @@ import type {
   GenerateParams,
   GenerationSessionEnvelope,
   GenerationSessionStartResult,
+  HistoryArticle,
   KnowledgeBase,
   KnowledgeSourceStats,
   ModelOptionsMap,
@@ -35,12 +36,20 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const raw = await response.text();
+    let message = raw || `HTTP ${response.status}`;
     try {
-      const parsed = JSON.parse(raw) as { message?: string; detail?: string };
-      throw new Error(parsed.message || parsed.detail || raw || `HTTP ${response.status}`);
+      const parsed = JSON.parse(raw) as { message?: string; detail?: string | { reason?: string; message?: string } };
+      if (typeof parsed.detail === "string") {
+        message = parsed.detail;
+      } else if (parsed.detail?.message) {
+        message = parsed.detail.message;
+      } else if (parsed.message) {
+        message = parsed.message;
+      }
     } catch {
-      throw new Error(raw || `HTTP ${response.status}`);
+      // Keep the raw response when the server did not return JSON.
     }
+    throw new Error(message);
   }
   return (await response.json()) as T;
 }
@@ -71,10 +80,33 @@ export async function fetchTemplates(): Promise<TemplateItem[]> {
   return data.templates ?? [];
 }
 
-export async function analyzeTemplate(file: File): Promise<AnalyzeResult> {
+export async function analyzeTemplate(file: File, visionModel?: string, plannerModel?: string): Promise<AnalyzeResult> {
   const form = new FormData();
   form.append("file", file);
+  form.append("vision_model", visionModel ?? "");
+  form.append("planner_model", plannerModel ?? "");
+  form.append("force_refresh", "true");
   return requestJson<AnalyzeResult>("/api/template/analyze", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function reanalyzeTemplate(template: string, visionModel?: string, plannerModel?: string): Promise<AnalyzeResult> {
+  const form = new FormData();
+  form.append("template", template);
+  form.append("vision_model", visionModel ?? "");
+  form.append("planner_model", plannerModel ?? "");
+  return requestJson<AnalyzeResult>("/api/template/reanalyze", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function deleteTemplate(template: string): Promise<{ ok: boolean; template: string }> {
+  const form = new FormData();
+  form.append("template", template);
+  return requestJson<{ ok: boolean; template: string }>("/api/template/delete", {
     method: "POST",
     body: form,
   });
@@ -145,7 +177,7 @@ export async function validateApiKey(apiKey: string): Promise<ApiKeyValidationRe
 }
 
 export async function saveApiKey(apiKey: string): Promise<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }> {
-  return requestJson<ApiKeyStatus & { ok: boolean }>("/api/user/apikey", {
+  return requestJson<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }>("/api/user/apikey", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key: apiKey }),
@@ -183,6 +215,11 @@ export async function saveUserPreferences(language: UserPreferences["language"])
 
 export async function fetchBillingSummary(): Promise<BillingSummary> {
   return requestJson<BillingSummary>("/api/billing/summary");
+}
+
+export async function fetchHistoryArticles(): Promise<HistoryArticle[]> {
+  const data = await requestJson<{ articles: HistoryArticle[] }>("/api/history/articles");
+  return data.articles ?? [];
 }
 
 export function downloadUrl(path: string) {

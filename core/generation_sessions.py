@@ -4,7 +4,11 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+import logging
 from typing import Any
+
+
+LOG = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -25,6 +29,8 @@ class GenerationSession:
     outputs: list[dict[str, Any]] = field(default_factory=list)
     download: str = ""
     report_download: str = ""
+    artifact_id: str = ""
+    report_artifact_id: str = ""
     report_summary: str = ""
     post_fill_checks: dict[str, Any] | None = None
     visual_score: int | float | None = None
@@ -92,6 +98,7 @@ class GenerationSession:
                 {
                     "model": event.get("model"),
                     "tier": event.get("tier"),
+                    "role": event.get("role"),
                     "kbHits": event.get("kb_hits"),
                     "evidenceRefs": event.get("evidence_refs") or [],
                 }
@@ -129,6 +136,8 @@ class GenerationSession:
             self.current_step = "done"
             self.download = str(event.get("download") or "")
             self.report_download = str(event.get("report_download") or "")
+            self.artifact_id = str(event.get("artifact_id") or "")
+            self.report_artifact_id = str(event.get("report_artifact_id") or "")
             self.report_summary = str(event.get("report_summary") or "")
             self.post_fill_checks = event.get("post_fill_checks")
             self.visual_score = event.get("visual_score")
@@ -164,6 +173,8 @@ class GenerationSession:
                 "outputs": [dict(item) for item in self.outputs],
                 "download": self.download,
                 "report_download": self.report_download,
+                "artifact_id": self.artifact_id,
+                "report_artifact_id": self.report_artifact_id,
                 "report_summary": self.report_summary,
                 "post_fill_checks": self.post_fill_checks,
                 "visual_score": self.visual_score,
@@ -228,10 +239,19 @@ class GenerationSessionManager:
             self._sessions[session_id] = session
             self._active_by_user[user_id] = session_id
             self._latest_by_user[user_id] = session_id
+            _persist_session_created(session)
             return session
 
     def get_session_for_user(self, user_id: int, session_id: str) -> GenerationSession | None:
         session = self._sessions.get(session_id)
+        if session is None:
+            session = _load_persisted_session(user_id, session_id)
+            if session is not None:
+                with self._lock:
+                    self._sessions[session_id] = session
+                    self._latest_by_user[user_id] = session_id
+                    if session.status == "running":
+                        self._active_by_user[user_id] = session_id
         if session is None or session.user_id != user_id:
             return None
         return session
@@ -248,15 +268,15 @@ class GenerationSessionManager:
     def get_latest_session(self, user_id: int) -> GenerationSession | None:
         latest_id = self._latest_by_user.get(user_id)
         if not latest_id:
+            latest_id = _latest_persisted_session_key(user_id)
+        if not latest_id:
             return None
-        session = self._sessions.get(latest_id)
-        if session is None or session.user_id != user_id:
-            return None
-        return session
+        return self.get_session_for_user(user_id, latest_id)
 
     def append_event(self, session_id: str, event: dict[str, Any]) -> dict[str, Any]:
         session = self._sessions[session_id]
         payload = session.append_event(event)
+        _persist_session_snapshot(session)
         if session.status in {"done", "error"}:
             with self._lock:
                 if self._active_by_user.get(session.user_id) == session_id:
@@ -265,3 +285,67 @@ class GenerationSessionManager:
 
 
 session_manager = GenerationSessionManager()
+
+
+def _persist_session_created(session: GenerationSession) -> None:
+    try:
+        from core.history import persist_session_created
+
+        persist_session_created(session)
+    except Exception:
+        LOG.exception("Failed to persist generation session creation")
+
+
+def _persist_session_snapshot(session: GenerationSession) -> None:
+    try:
+        from core.history import persist_session_snapshot
+
+        persist_session_snapshot(session)
+    except Exception:
+        LOG.exception("Failed to persist generation session snapshot")
+
+
+def _load_persisted_session(user_id: int, session_id: str) -> GenerationSession | None:
+    try:
+        from core.history import load_session_snapshot
+
+        snapshot = load_session_snapshot(user_id, session_id)
+    except Exception:
+        LOG.exception("Failed to load persisted generation session")
+        return None
+    if not snapshot:
+        return None
+    session = GenerationSession(
+        session_id=str(snapshot.get("session_id") or session_id),
+        user_id=int(snapshot.get("user_id") or user_id),
+        params=dict(snapshot.get("params") or {}),
+        created_at=str(snapshot.get("created_at") or _now_iso()),
+        updated_at=str(snapshot.get("updated_at") or _now_iso()),
+        status=str(snapshot.get("status") or "running"),
+        current_step=str(snapshot.get("currentStep") or "idle"),
+        current_task=str(snapshot.get("currentTask") or ""),
+        progress=dict(snapshot.get("progress") or {"done": 0, "total": 0}),
+        outputs=list(snapshot.get("outputs") or []),
+        download=str(snapshot.get("download") or ""),
+        report_download=str(snapshot.get("report_download") or ""),
+        artifact_id=str(snapshot.get("artifact_id") or ""),
+        report_artifact_id=str(snapshot.get("report_artifact_id") or ""),
+        report_summary=str(snapshot.get("report_summary") or ""),
+        post_fill_checks=snapshot.get("post_fill_checks"),
+        visual_score=snapshot.get("visual_score"),
+        billing=snapshot.get("billing"),
+        billing_summary=snapshot.get("billing_summary"),
+        last_error=snapshot.get("last_error"),
+    )
+    session.next_seq = int(snapshot.get("last_seq") or 0)
+    return session
+
+
+def _latest_persisted_session_key(user_id: int) -> str | None:
+    try:
+        from core.history import latest_session_key
+
+        return latest_session_key(user_id)
+    except Exception:
+        LOG.exception("Failed to load latest persisted generation session")
+        return None

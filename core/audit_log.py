@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+from core.db import mysql_enabled, mysql_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,10 @@ def init_audit_db(db_path: str | None = None) -> None:
         conn.commit()
 
 
+def _use_mysql(db_path: str | None = None) -> bool:
+    return db_path is None and mysql_enabled()
+
+
 def log_audit(
     action: str,
     user_id: int | None = None,
@@ -78,6 +83,17 @@ def log_audit(
         detail_text,
     )
     try:
+        if _use_mysql():
+            with mysql_transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO audit_events(owner_user_id, email, action, ip_address, user_agent, detail_json, created_at)
+                        VALUES(%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (user_id, email, action, ip, ua, detail_text, datetime.now(timezone.utc).replace(tzinfo=None)),
+                    )
+            return
         init_audit_db()
         with sqlite3.connect(config.AUTH_DB_PATH) as conn:
             conn.execute(

@@ -27,10 +27,15 @@ class GenerationTrace:
     task_type: str
     model: str
     generation_tier: str
+    model_role: str = ""
+    model_route: Dict[str, Any] = field(default_factory=dict)
     kb_hits: int = 0
     weak_kb: bool = False
     low_similarity: bool = False
     native_web_search: bool = False
+    web_evidence_used: bool = False
+    web_evidence_summary: Dict[str, Any] = field(default_factory=dict)
+    evidence_pack: Dict[str, Any] = field(default_factory=dict)
     evidence_refs: List[str] = field(default_factory=list)
     audit_verdict: str = ""
     audit_issues: List[str] = field(default_factory=list)

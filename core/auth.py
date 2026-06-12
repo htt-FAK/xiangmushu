@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import config
+from core.db import ensure_configured_database, mysql_enabled, mysql_transaction
+from core.provider_registry import load_user_model_choices, save_user_model_choices
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,8 @@ def _json_b64(payload: dict[str, Any]) -> str:
 
 
 def init_db(db_path: str | None = None) -> None:
+    if _use_mysql(db_path):
+        ensure_configured_database()
     path = Path(db_path or config.AUTH_DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
@@ -210,6 +214,10 @@ def _connect(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _use_mysql(db_path: str | None = None) -> bool:
+    return db_path is None and mysql_enabled()
+
+
 def _row_to_user(row: sqlite3.Row) -> User:
     return User(
         id=int(row["id"]),
@@ -217,6 +225,40 @@ def _row_to_user(row: sqlite3.Row) -> User:
         created_at=str(row["created_at"]),
         last_login_at=row["last_login_at"],
     )
+
+
+def _mysql_row_to_user(row: dict[str, Any]) -> User:
+    created_at = row.get("created_at")
+    last_login_at = row.get("last_login_at")
+    return User(
+        id=int(row["id"]),
+        email=str(row["email"]),
+        created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+        last_login_at=(
+            last_login_at.isoformat() if hasattr(last_login_at, "isoformat") else (str(last_login_at) if last_login_at else None)
+        ),
+    )
+
+
+def _mysql_json(value: Any) -> dict:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+
+
+def _mysql_timestamp(dt: datetime) -> datetime:
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _parse_db_time(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+    return parse_iso(str(value))
 
 
 def _normalize_language(language: str) -> str:
@@ -228,12 +270,58 @@ def _normalize_language(language: str) -> str:
 
 def get_user_by_email(email: str, db_path: str | None = None) -> User | None:
     normalized = normalize_email(email)
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM users WHERE email = %s", (normalized,))
+                row = cur.fetchone()
+        return _mysql_row_to_user(row) if row else None
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
     return _row_to_user(row) if row else None
 
 
+def get_password_hash(email: str, db_path: str | None = None) -> str:
+    normalized = normalize_email(email)
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT password_hash FROM users WHERE email = %s", (normalized,))
+                row = cur.fetchone()
+        return str(row["password_hash"] or "") if row else ""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT password_hash FROM users WHERE email = ?",
+            (normalized,),
+        ).fetchone()
+    return str(row["password_hash"] or "") if row else ""
+
+
 def get_user_preferences(user_id: int, db_path: str | None = None) -> dict:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(p.preferred_language, u.preferred_language, 'zh') AS preferred_language,
+                           COALESCE(p.model_choices_json, u.model_choices_json) AS model_choices_json
+                    FROM users u
+                    LEFT JOIN user_preferences p ON p.user_id = u.id
+                    WHERE u.id = %s
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise AuthError("User not found")
+        language = str(row.get("preferred_language") or "zh")
+        if language not in {"zh", "en"}:
+            language = "zh"
+        model_choices = _mysql_json(row.get("model_choices_json"))
+        registry_choices = load_user_model_choices(user_id)
+        if registry_choices:
+            model_choices = registry_choices
+        return {"language": language, "model_choices": model_choices}
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT preferred_language, model_choices FROM users WHERE id = ?",
@@ -262,6 +350,47 @@ def update_user_preferences(
     model_choices: dict | None = None,
     db_path: str | None = None,
 ) -> dict:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(p.preferred_language, u.preferred_language, 'zh') AS preferred_language,
+                           COALESCE(p.model_choices_json, u.model_choices_json) AS model_choices_json
+                    FROM users u
+                    LEFT JOIN user_preferences p ON p.user_id = u.id
+                    WHERE u.id = %s
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise AuthError("User not found")
+                new_lang = _normalize_language(language) if language else str(row.get("preferred_language") or "zh")
+                warnings: dict[str, str] = {}
+                if model_choices is not None:
+                    new_mc, warnings = save_user_model_choices(user_id, model_choices)
+                else:
+                    new_mc = _mysql_json(row.get("model_choices_json"))
+                encoded = json.dumps(new_mc, ensure_ascii=False)
+                cur.execute(
+                    """
+                    INSERT INTO user_preferences(user_id, preferred_language, model_choices_json)
+                    VALUES(%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        preferred_language = VALUES(preferred_language),
+                        model_choices_json = VALUES(model_choices_json)
+                    """,
+                    (user_id, new_lang, encoded),
+                )
+                cur.execute(
+                    "UPDATE users SET preferred_language = %s, model_choices_json = %s WHERE id = %s",
+                    (new_lang, encoded, user_id),
+                )
+        result = {"language": new_lang, "model_choices": new_mc}
+        if warnings:
+            result["warnings"] = warnings
+        return result
     with _connect(db_path) as conn:
         # Fetch current values
         row = conn.execute(
@@ -285,6 +414,12 @@ def update_user_preferences(
 
 
 def get_user_by_id(user_id: int, db_path: str | None = None) -> User | None:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+        return _mysql_row_to_user(row) if row else None
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return _row_to_user(row) if row else None
@@ -293,6 +428,23 @@ def get_user_by_id(user_id: int, db_path: str | None = None) -> User | None:
 def get_or_create_user(email: str, db_path: str | None = None) -> User:
     normalized = normalize_email(email)
     now = iso(utc_now())
+    if _use_mysql(db_path):
+        now_dt = _mysql_timestamp(utc_now())
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users(email, preferred_language, created_at, last_login_at)
+                    VALUES(%s, 'zh', %s, %s)
+                    ON DUPLICATE KEY UPDATE last_login_at = VALUES(last_login_at)
+                    """,
+                    (normalized, now_dt, now_dt),
+                )
+                cur.execute("SELECT * FROM users WHERE email = %s", (normalized,))
+                row = cur.fetchone()
+        if row is None:
+            raise AuthError("Failed to load authenticated user")
+        return _mysql_row_to_user(row)
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -316,6 +468,22 @@ def _create_user_with_password(
 ) -> User:
     normalized = normalize_email(email)
     now = iso(utc_now())
+    if _use_mysql(db_path):
+        now_dt = _mysql_timestamp(utc_now())
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users(email, password_hash, preferred_language, is_verified, created_at, last_login_at)
+                    VALUES(%s, %s, 'zh', 1, %s, %s)
+                    """,
+                    (normalized, password_hash, now_dt, now_dt),
+                )
+                cur.execute("SELECT * FROM users WHERE email = %s", (normalized,))
+                row = cur.fetchone()
+        if row is None:
+            raise AuthError("Failed to load authenticated user")
+        return _mysql_row_to_user(row)
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -345,6 +513,25 @@ def create_verification_code(
         raise InvalidCodeError("Verification code must be six digits")
     pending_password_hash = set_password(password) if password is not None else None
     expires_at = utc_now() + timedelta(minutes=ttl_minutes or config.AUTH_CODE_TTL_MINUTES)
+    if _use_mysql(db_path):
+        now_dt = _mysql_timestamp(utc_now())
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO email_verification_codes(email, code_hash, password_hash, purpose, expires_at, created_at)
+                    VALUES(%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        normalized,
+                        _code_hash(normalized, code_value),
+                        pending_password_hash,
+                        "register" if pending_password_hash else "login",
+                        _mysql_timestamp(expires_at),
+                        now_dt,
+                    ),
+                )
+        return VerificationCode(email=normalized, code=code_value, expires_at=iso(expires_at))
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -373,6 +560,55 @@ def consume_verification_code(
     if not CODE_RE.match(code or ""):
         raise InvalidCodeError("Invalid verification code")
     pending_password_hash: str | None = None
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM email_verification_codes
+                    WHERE email = %s
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (normalized,),
+                )
+                row = cur.fetchone()
+                if row is None or row.get("consumed_at") is not None:
+                    raise InvalidCodeError("Invalid verification code")
+                if _parse_db_time(row["expires_at"]) <= utc_now():
+                    raise InvalidCodeError("Invalid verification code")
+                expected = str(row["code_hash"])
+                actual = _code_hash(normalized, code)
+                if not hmac.compare_digest(expected, actual):
+                    raise InvalidCodeError("Invalid verification code")
+                pending_password_hash = row.get("password_hash")
+                cur.execute(
+                    "UPDATE email_verification_codes SET consumed_at = %s WHERE id = %s",
+                    (_mysql_timestamp(utc_now()), row["id"]),
+                )
+
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM users WHERE email = %s", (normalized,))
+                user_row = cur.fetchone()
+                if user_row is not None:
+                    stored_password_hash = user_row.get("password_hash")
+                    if not verify_password(password or "", stored_password_hash):
+                        raise InvalidCodeError("Invalid verification code")
+                    cur.execute(
+                        "UPDATE users SET last_login_at = %s WHERE id = %s",
+                        (_mysql_timestamp(utc_now()), user_row["id"]),
+                    )
+                    cur.execute("SELECT * FROM users WHERE id = %s", (user_row["id"],))
+                    updated = cur.fetchone()
+                    if updated is None:
+                        raise AuthError("Failed to load authenticated user")
+                    return _mysql_row_to_user(updated)
+
+        if not pending_password_hash or not verify_password(password or "", pending_password_hash):
+            raise InvalidCodeError("Invalid verification code")
+        return _create_user_with_password(normalized, pending_password_hash, db_path)
+
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -428,6 +664,51 @@ def reset_password_with_code(
     normalized = normalize_email(email)
     if not CODE_RE.match(code or ""):
         raise InvalidCodeError("Invalid verification code")
+
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM email_verification_codes
+                    WHERE email = %s AND consumed_at IS NULL
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (normalized,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise InvalidCodeError("Invalid verification code")
+                if _parse_db_time(row["expires_at"]) <= utc_now():
+                    raise InvalidCodeError("Invalid verification code")
+                expected = str(row["code_hash"])
+                actual = _code_hash(normalized, code)
+                if not hmac.compare_digest(expected, actual):
+                    raise InvalidCodeError("Invalid verification code")
+
+                cur.execute("SELECT * FROM users WHERE email = %s", (normalized,))
+                user_row = cur.fetchone()
+                if user_row is None:
+                    raise InvalidCodeError("Invalid verification code")
+
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = %s, is_verified = 1, last_login_at = %s
+                    WHERE id = %s
+                    """,
+                    (set_password(new_password), _mysql_timestamp(utc_now()), user_row["id"]),
+                )
+                cur.execute(
+                    "UPDATE email_verification_codes SET consumed_at = %s WHERE id = %s",
+                    (_mysql_timestamp(utc_now()), row["id"]),
+                )
+                cur.execute("SELECT * FROM users WHERE id = %s", (user_row["id"],))
+                updated = cur.fetchone()
+        if updated is None:
+            raise AuthError("Failed to load authenticated user")
+        return _mysql_row_to_user(updated)
 
     with _connect(db_path) as conn:
         row = conn.execute(

@@ -147,12 +147,16 @@ def _chat_content_empty(response: Any) -> bool:
         return True
 
 
+def _error_response_content(response: Any) -> str:
+    try:
+        return (response.choices[0].message.content or "").strip()
+    except (AttributeError, IndexError, TypeError, KeyError):
+        return ""
+
+
 def _is_error_response(response: Any) -> bool:
     """检测响应内容是否为 API 错误信息。"""
-    try:
-        content = (response.choices[0].message.content or "").strip()
-    except (AttributeError, IndexError, TypeError, KeyError):
-        return False
+    content = _error_response_content(response)
     if not content:
         return False
     error_markers = [
@@ -219,6 +223,9 @@ def chat_completions_create(client: Any, **kwargs: Any):
         resp = _create_on_client(client, kwargs, extra)
         # 检测错误内容
         if _is_error_response(resp):
+            error_content = _error_response_content(resp)
+            if error_content:
+                raise RuntimeError(error_content)
             _LOG.error("主通道返回错误内容，尝试切换备用通道")
             if backup is not None and backup is not client:
                 try:

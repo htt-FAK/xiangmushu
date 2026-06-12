@@ -64,7 +64,7 @@ def _first_row(val: Any) -> Optional[Any]:
 class VectorStore:
     """ChromaDB：按 kb_slug 隔离 collection（plan_kb__{slug}）。"""
 
-    def __init__(self, persist_dir: str = None, kb_slug: str = "kb1"):
+    def __init__(self, persist_dir: str = None, kb_slug: str = "kb1", create_collection: bool = True):
         persist_dir = persist_dir or config.CHROMA_DIR
         self.kb_slug = kb_slug
         self._collection_name = collection_name_for_slug(kb_slug)
@@ -78,10 +78,20 @@ class VectorStore:
             timeout=config.OPENAI_TIMEOUT,
             max_retries=config.OPENAI_MAX_RETRIES,
         )
-        self._collection = self._client.get_or_create_collection(
-            name=self._collection_name,
-            embedding_function=self._embedding_fn,
-        )
+        self._collection = None
+        if create_collection:
+            self._collection = self._client.get_or_create_collection(
+                name=self._collection_name,
+                embedding_function=self._embedding_fn,
+            )
+        else:
+            try:
+                self._collection = self._client.get_collection(
+                    name=self._collection_name,
+                    embedding_function=self._embedding_fn,
+                )
+            except Exception:
+                self._collection = None
         self._search_cache: Dict[str, tuple[float, List[Dict]]] = {}
         self._search_cache_max_size = int(config.VECTOR_CACHE_MAX_SIZE)
         self._search_cache_ttl_seconds = int(config.VECTOR_CACHE_TTL_SECONDS)
@@ -129,6 +139,11 @@ class VectorStore:
     def add_documents(self, chunks: List[Chunk]):
         if not chunks:
             return
+        if self._collection is None:
+            self._collection = self._client.get_or_create_collection(
+                name=self._collection_name,
+                embedding_function=self._embedding_fn,
+            )
         self.cache_clear()
         sources = set(c.metadata.get("source", "") for c in chunks)
         for src in sources:
@@ -175,6 +190,8 @@ class VectorStore:
             kwargs["where"] = filter_dict
 
         try:
+            if self._collection is None:
+                return []
             results = self._collection.query(**kwargs)
         except Exception:
             return []
@@ -229,6 +246,8 @@ class VectorStore:
     def source_chunk_counts(self) -> Dict[str, int]:
         """每个来源文件名对应的向量片段条数。"""
         try:
+            if self._collection is None:
+                return {}
             results = self._collection.get()
         except Exception:
             return {}
@@ -244,15 +263,21 @@ class VectorStore:
             c[src] += 1
         return dict(c)
 
-    def delete_by_source(self, source: str):
+    def delete_by_source(self, source: str, knowledge_source_id: int | None = None):
         self.cache_clear()
         try:
+            if self._collection is None:
+                return
+            if knowledge_source_id is not None:
+                self._collection.delete(where={"knowledge_source_id": knowledge_source_id})
             self._collection.delete(where={"source": source})
         except Exception:
             pass
 
     def get_collection_count(self) -> int:
         try:
+            if self._collection is None:
+                return 0
             return self._collection.count()
         except Exception:
             return 0
@@ -264,6 +289,8 @@ class VectorStore:
             max_chars: 最大总字符数，0 表示不限制。
         """
         try:
+            if self._collection is None:
+                return []
             results = self._collection.get()
         except Exception:
             return []
@@ -291,6 +318,35 @@ class VectorStore:
             self._client.delete_collection(self._collection_name)
         except Exception:
             pass
+
+        self._collection = None
+
+    def collection_exists(self) -> bool:
+        return self._collection_name in self.list_kb_collection_names()
+
+    def knowledge_metadata_summary(self) -> Dict[str, List[Any]]:
+        try:
+            if self._collection is None:
+                return {"source_ids": [], "chunk_keys": []}
+            results = self._collection.get()
+        except Exception:
+            return {"source_ids": [], "chunk_keys": []}
+        metadatas = results.get("metadatas") or []
+        source_ids: list[int] = []
+        chunk_keys: list[str] = []
+        for meta in metadatas:
+            if not isinstance(meta, dict):
+                continue
+            source_id = meta.get("knowledge_source_id")
+            chunk_key = meta.get("knowledge_chunk_key")
+            if source_id is not None:
+                try:
+                    source_ids.append(int(source_id))
+                except (TypeError, ValueError):
+                    pass
+            if chunk_key:
+                chunk_keys.append(str(chunk_key))
+        return {"source_ids": sorted(set(source_ids)), "chunk_keys": sorted(set(chunk_keys))}
 
     @staticmethod
     def list_kb_collection_names(persist_dir: str = None) -> List[str]:

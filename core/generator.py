@@ -4,12 +4,15 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import config
 from core.dashscope_chat import chat_completions_create
+from core.evidence_pack import build_task_evidence_pack
 from core.fill_task import FillTask
+from core.model_router import FAST_WRITER, MAIN_WRITER, resolve_model_profile
 from core.provider_errors import classify_provider_error
 from core.reporting import evidence_refs_from_results
 from core.template_vision import build_table_cell_user_content
 from core.query_expander import expand_query
 from core.vector_store import VectorStore
+from core.web_search_agent import SessionWebEvidenceCache, fetch_web_evidence
 
 # Lazy import to avoid circular: evidence_planner imports VectorStore too
 # import inside method when needed
@@ -221,6 +224,7 @@ class ContentGenerator:
         self._vs = vector_store
         self._client = self._client_for_api_key(api_key) if api_key else config.openai_client_for_chat()
         self._user_id = user_id
+        self._web_cache = SessionWebEvidenceCache()
         self.last_usage: Any = None
         self.last_model: str = ""
 
@@ -258,6 +262,18 @@ class ContentGenerator:
         route_meta: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Return the ordered fallback chain for the current route."""
+        explicit = (route_meta or {}).get("model_fallbacks")
+        if isinstance(explicit, list):
+            models = [default_model] + [str(item) for item in explicit]
+            seen = set()
+            ordered: List[str] = []
+            for model in models:
+                mid = (model or "").strip()
+                if not mid or mid in seen:
+                    continue
+                seen.add(mid)
+                ordered.append(mid)
+            return ordered
         models = [default_model]
         tier = str((route_meta or {}).get("generation_tier") or "")
         if tier == "large":
@@ -310,7 +326,7 @@ class ContentGenerator:
             return None
         return QuotaExceededError(
             model=model,
-            module=str((route_meta or {}).get("model_module") or ""),
+            module=str((route_meta or {}).get("model_role") or (route_meta or {}).get("model_module") or ""),
             detail=str(provider_error.get("detail") or raw_error),
             provider_error=provider_error,
         )
@@ -376,17 +392,45 @@ class ContentGenerator:
 
             ref_texts = self._format_kb(results)
         evidence_refs = evidence_refs_from_results(results)
+        evidence_pack = build_task_evidence_pack(
+            self._vs,
+            task,
+            top_k=top_k,
+            max_distance=max_d,
+            table_context=table_context,
+            budget_chars=config.RAG_SNIPPET_MAX_CHARS,
+        )
+        results = evidence_pack.raw_results
+        weak_kb = evidence_pack.weak_kb
+        best_similarity_est = evidence_pack.best_similarity
+        low_similarity = (
+            best_similarity_est is not None
+            and best_similarity_est < config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD
+        )
+        use_web_branch = bool(enable_web and (weak_kb or low_similarity) and not fast_mode)
+        web_result = None
+        if use_web_branch:
+            web_result = fetch_web_evidence(
+                self._get_client(),
+                task,
+                user_id=self._user_id,
+                cache=self._web_cache,
+            )
+            evidence_pack.web_facts = list(web_result.facts)
+            evidence_pack.gaps.extend(web_result.gaps)
+            if web_result.error:
+                evidence_pack.gaps.append(f"联网证据获取失败：{web_result.error}")
+        ref_texts = evidence_pack.facts_text()
+        evidence_refs = list(evidence_pack.evidence_refs)
 
         word_limit = task.word_limit
         if task.task_type == "table_cell":
             word_limit = min(word_limit, 120)
 
         has_kb_hit = len(results) > 0
-        use_plus = enable_web and (weak_kb or low_similarity)
-        if fast_mode:
-            use_plus = False
+        use_plus = False
         web_creative, system_prompt, kb_note, para_closing, table_closing = (
-            _web_gen_prompt_parts(use_plus, web_writing_mode, has_kb_hit, language)
+            _web_gen_prompt_parts(False, web_writing_mode, has_kb_hit, language)
         )
 
         hint_block = (
@@ -459,22 +503,23 @@ class ContentGenerator:
             and not fast_mode
         )
 
-        if use_plus:
-            extra_body["enable_search"] = True
-            model = self._model_for_module("search", config.VISION_WEB_MODEL)
-            temperature = config.TEMP_WEB_GEN
-            generation_tier = "vision_web"
-            model_module = "search"
-        elif use_small_rag:
-            model = self._model_for_module("lightweight", config.SMALL_LLM_MODEL)
-            temperature = config.TEMP_SMALL_LLM
-            generation_tier = "small_rag"
-            model_module = "lightweight"
+        if use_small_rag:
+            writer_profile = resolve_model_profile(
+                FAST_WRITER,
+                user_id=self._user_id,
+                routing_reason="strong compact evidence",
+            )
+            generation_tier = "fast_writer"
         else:
-            model = self._model_for_module("generation", config.LARGE_LLM_MODEL)
-            temperature = config.TEMP_LARGE_LLM
-            generation_tier = "large"
-            model_module = "generation"
+            writer_profile = resolve_model_profile(
+                MAIN_WRITER,
+                user_id=self._user_id,
+                routing_reason="web evidence" if use_web_branch else "quality writer",
+            )
+            generation_tier = "main_writer_web_evidence" if use_web_branch else "main_writer"
+        model = writer_profile.model
+        temperature = float(writer_profile.temperature if writer_profile.temperature is not None else config.TEMP_LARGE_LLM)
+        model_module = writer_profile.legacy_module or writer_profile.role
 
         table_cell_mm = (
             task.task_type == "table_cell"
@@ -485,19 +530,26 @@ class ContentGenerator:
         if table_cell_mm:
             generation_tier = "table_cell_vision"
             if not use_plus:
-                model = self._model_for_module("vision", config.TABLE_CELL_VISION_MODEL)
-                temperature = float(getattr(config, "TEMP_VISION", 0.25))
-                model_module = "vision"
+                writer_profile = resolve_model_profile(
+                    MAIN_WRITER,
+                    user_id=self._user_id,
+                    routing_reason="table cell with visual context",
+                )
+                model = writer_profile.model
+                temperature = float(writer_profile.temperature if writer_profile.temperature is not None else config.TEMP_LARGE_LLM)
+                model_module = writer_profile.legacy_module or writer_profile.role
         if _fast_table_cell_route(task, fast_mode):
             extra_body.pop("enable_search", None)
             table_cell_mm = False
-            model = self._model_for_module(
-                "lightweight",
-                getattr(config, "BATCH_TABLE_FAST_MODEL", config.TABLE_CELL_VISION_MODEL),
+            writer_profile = resolve_model_profile(
+                FAST_WRITER,
+                user_id=self._user_id,
+                routing_reason="fast table cell",
             )
+            model = writer_profile.model
             temperature = 0.1
             generation_tier = "table_cell_fast"
-            model_module = "lightweight"
+            model_module = writer_profile.legacy_module or writer_profile.role
 
         gen_max_out = _max_output_tokens(word_limit, task.task_type)
         route_meta: Dict[str, Any] = {
@@ -511,9 +563,15 @@ class ContentGenerator:
             "best_similarity_est": best_similarity_est,
             "retrieval_web_similarity_threshold": config.RETRIEVAL_WEB_SIMILARITY_THRESHOLD,
             "enable_web_requested": enable_web,
-            "native_web_search": bool(extra_body.get("enable_search")),
+            "native_web_search": False,
+            "web_evidence_used": bool(use_web_branch and web_result and web_result.facts),
+            "web_evidence_cached": bool(web_result.cached) if web_result is not None else False,
+            "web_evidence_summary": web_result.summary() if web_result is not None else {},
             "model": model,
             "model_module": model_module,
+            "model_role": writer_profile.role,
+            "model_fallbacks": list(writer_profile.fallback_models),
+            "model_route": writer_profile.trace(),
             "temperature": temperature,
             "top_k": top_k,
             "retrieval_max_distance": max_d,
@@ -528,6 +586,7 @@ class ContentGenerator:
             "table_vision_n_images": len(table_cell_vision_pngs or []),
             "fast_mode": bool(fast_mode),
             "full_recall_mode": bool(config.FULL_RECALL_MODE),
+            "evidence_pack": evidence_pack.summary(),
             "evidence_refs": evidence_refs,
         }
         _ensure_gen_logger()

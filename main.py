@@ -14,8 +14,40 @@ import threading
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 URL = "http://localhost:8502"
+PORT = 8502
 
 _backend_proc: subprocess.Popen | None = None
+
+
+def _find_listening_pid(port: int) -> str | None:
+    result = subprocess.run(
+        ["netstat", "-ano"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=False,
+    )
+    needle = f":{port}"
+    for line in result.stdout.splitlines():
+        if needle in line and "LISTENING" in line:
+            parts = line.split()
+            if parts:
+                return parts[-1]
+    return None
+
+
+def _release_port(port: int) -> None:
+    existing_pid = _find_listening_pid(port)
+    if not existing_pid or existing_pid == str(os.getpid()):
+        return
+    print(f"[main] Port {port} is in use by PID {existing_pid}; terminating it...")
+    subprocess.run(
+        ["taskkill", "/F", "/PID", existing_pid],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    time.sleep(1)
 
 
 def _cleanup() -> None:
@@ -46,6 +78,7 @@ def main() -> None:
     global _backend_proc
 
     atexit.register(_cleanup)
+    _release_port(PORT)
 
     print(f"[main] 启动 FastAPI 后端 ({URL}) ...")
     _backend_proc = subprocess.Popen(

@@ -7,6 +7,8 @@ import { useI18n } from "../i18n";
 import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap } from "../types";
 
 const BAILIAN_KEY_URL = "https://bailian.console.aliyun.com/#/key";
+const MODEL_ROLE_ORDER = ["main_writer", "web_search", "fast_writer", "vision_layout", "template_planner", "audit_text"];
+type ApiKeyStage = "idle" | "validating" | "saving" | "saved" | "failed";
 
 // ---------------------------------------------------------------------------
 // Model Selector Component
@@ -61,7 +63,7 @@ function ModelSelector({
   const isRecommended = flatOptions.find((o) => o.model === selected)?.recommended;
 
   return (
-    <div className="relative" ref={ref}>
+    <div className={`relative ${open ? "z-[90]" : "z-0"}`} ref={ref}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <span className="text-sm font-medium text-slate-200">{config.label}</span>
@@ -88,7 +90,7 @@ function ModelSelector({
       </div>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-1 w-full min-w-[240px] max-w-[320px] border border-white/15 bg-night-900 shadow-xl">
+        <div className="absolute right-0 z-[100] mt-1 max-h-[360px] w-full min-w-[240px] max-w-[320px] overflow-y-auto border border-white/15 bg-night-900 shadow-xl">
           {config.tiers ? (
             Object.entries(config.tiers).map(([tierName, models]) => (
               <div key={tierName}>
@@ -164,10 +166,12 @@ export default function SettingsPage() {
   const [languageSaving, setLanguageSaving] = useState(false);
   const [error, setError] = useState("");
   const [validation, setValidation] = useState<ApiKeyValidationResult | null>(null);
+  const [apiKeyStage, setApiKeyStage] = useState<ApiKeyStage>("idle");
 
   // Model selection state
   const [modelOptions, setModelOptions] = useState<ModelOptionsMap | null>(null);
   const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
+  const [modelWarnings, setModelWarnings] = useState<Record<string, string>>({});
   const [modelLoading, setModelLoading] = useState(true);
   const [modelSaving, setModelSaving] = useState(false);
   const modelSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -181,14 +185,22 @@ export default function SettingsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Default models per module (matches backend _DEFAULT_MODEL_OVERRIDES)
+  // Default models per role (matches backend role router defaults)
   const DEFAULT_MODELS: Record<string, string> = useMemo(() => ({
-    generation: "qwen3.7-max",
-    lightweight: "qwen3.6-flash",
-    vision: "qwen3.7-plus",
-    search: "qwen3.7-plus",
-    audit: "qwen3.6-flash",
+    main_writer: "qwen3.7-plus",
+    web_search: "qwen3.7-plus",
+    fast_writer: "qwen3.6-flash",
+    vision_layout: "qwen3.7-plus",
+    template_planner: "qwen3.6-flash",
+    audit_text: "qwen3.6-flash",
   }), []);
+
+  const visibleModelOptions = useMemo(() => {
+    if (!modelOptions) return [];
+    return MODEL_ROLE_ORDER
+      .filter((key) => modelOptions[key])
+      .map((key) => [key, modelOptions[key]] as const);
+  }, [modelOptions]);
 
   // Load model options + current choices
   useEffect(() => {
@@ -198,12 +210,25 @@ export default function SettingsPage() {
         // Merge saved choices with defaults for modules without saved choice
         const saved = prefs.model_choices ?? {};
         const merged: Record<string, string> = { ...saved };
-        for (const key of Object.keys(options)) {
+        const warnings: Record<string, string> = {};
+        for (const key of MODEL_ROLE_ORDER) {
+          const cfg = options[key];
+          const availableModels = [
+            ...(cfg?.options ?? []),
+            ...Object.values(cfg?.tiers ?? {}).flat(),
+          ].map((item) => item.model);
+          const savedChoice = merged[key];
+          if (savedChoice && availableModels.length > 0 && !availableModels.includes(savedChoice)) {
+            const fallbackModel = availableModels[0] ?? DEFAULT_MODELS[key] ?? "";
+            merged[key] = fallbackModel;
+            warnings[key] = cfg?.selected_unavailable?.reason ?? `${savedChoice} unavailable, switched to ${fallbackModel}`;
+          }
           if (!merged[key]) {
             merged[key] = DEFAULT_MODELS[key] || "";
           }
         }
         setModelChoices(merged);
+        setModelWarnings(warnings);
       })
       .catch((err: unknown) => {
         console.error("Failed to load model options", err);
@@ -213,6 +238,11 @@ export default function SettingsPage() {
 
   const handleModelSelect = useCallback(
     (moduleKey: string, model: string) => {
+      setModelWarnings((prev) => {
+        const next = { ...prev };
+        delete next[moduleKey];
+        return next;
+      });
       setModelChoices((prev) => ({ ...prev, [moduleKey]: model }));
       // Debounced save
       if (modelSaveTimer.current) clearTimeout(modelSaveTimer.current);
@@ -239,6 +269,8 @@ export default function SettingsPage() {
 
   function openDialog() {
     setError("");
+    setValidation(null);
+    setApiKeyStage("idle");
     setAgreeChecked(false);
     setAgreeText("");
     setDialogOpen(true);
@@ -249,18 +281,24 @@ export default function SettingsPage() {
     setSaving(true);
     setError("");
     setValidation(null);
+    setApiKeyStage("validating");
     try {
       const checked = await validateApiKey(apiKey);
       setValidation(checked);
       if (!checked.ok) {
+        setApiKeyStage("failed");
         setError(checked.message);
         return;
       }
+      setApiKeyStage("saving");
       const next = await saveApiKey(apiKey);
       setStatus(next);
+      setValidation(next.validation ?? checked);
       setApiKey("");
-      setDialogOpen(false);
+      setApiKeyStage("saved");
+      window.dispatchEvent(new CustomEvent("xiangmushu:apikey-status-changed", { detail: next }));
     } catch (err) {
+      setApiKeyStage("failed");
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
@@ -273,6 +311,7 @@ export default function SettingsPage() {
     try {
       const next = await deleteApiKey();
       setStatus(next);
+      window.dispatchEvent(new CustomEvent("xiangmushu:apikey-status-changed", { detail: next }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -302,7 +341,7 @@ export default function SettingsPage() {
       />
       <ErrorBanner message={error} />
 
-      <Panel className="hidden mb-5 md:mb-6 md:block">
+      <Panel className="relative z-30 overflow-visible mb-5 md:mb-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-3">
@@ -352,7 +391,7 @@ export default function SettingsPage() {
 
       {/* Model Selection Panel — desktop only, requires API Key */}
       {status?.has_key && (
-      <Panel className="hidden mb-5 md:mb-6 md:block">
+      <Panel className="relative z-40 overflow-visible mb-5 md:mb-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime md:h-11 md:w-11">
             <Cpu size={20} />
@@ -381,22 +420,26 @@ export default function SettingsPage() {
           </div>
         ) : modelOptions ? (
           <div className="space-y-3">
-            {Object.entries(modelOptions).map(([key, cfg]) => (
-              <ModelSelector
-                key={key}
-                moduleKey={key}
-                config={cfg}
-                selected={modelChoices[key] || ""}
-                onSelect={handleModelSelect}
-                saving={modelSaving}
-              />
+            {visibleModelOptions.map(([key, cfg]) => (
+              <div key={key} className="space-y-2">
+                <ModelSelector
+                  moduleKey={key}
+                  config={cfg}
+                  selected={modelChoices[key] || ""}
+                  onSelect={handleModelSelect}
+                  saving={modelSaving}
+                />
+                {modelWarnings[key] ? (
+                  <p className="text-xs text-signal-amber">{modelWarnings[key]}</p>
+                ) : null}
+              </div>
             ))}
           </div>
         ) : null}
       </Panel>
       )}
 
-      <div className="grid gap-5 md:gap-6 lg:grid-cols-[1fr_360px]">
+      <div className="relative z-0 grid gap-5 md:gap-6 lg:grid-cols-[1fr_360px]">
         <Panel className="min-w-0">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
@@ -501,17 +544,62 @@ export default function SettingsPage() {
                   placeholder={t("settings.apiKeyPlaceholder")}
                   type="password"
                   autoComplete="off"
+                  disabled={saving || apiKeyStage === "saved"}
                 />
               </label>
             </div>
 
+            <div className="mt-4 border border-white/10 bg-night-950/65 p-3 text-sm">
+              {apiKeyStage === "idle" && (
+                <p className="text-slate-400">点击确认后会先测试 API Key，再保存到本地账号。</p>
+              )}
+              {apiKeyStage === "validating" && (
+                <p className="inline-flex items-center gap-2 text-signal-cyan">
+                  <Loader2 className="animate-spin" size={16} />
+                  正在测试 API Key 和可用模型...
+                </p>
+              )}
+              {apiKeyStage === "saving" && (
+                <p className="inline-flex items-center gap-2 text-signal-cyan">
+                  <Loader2 className="animate-spin" size={16} />
+                  验证通过，正在保存...
+                </p>
+              )}
+              {apiKeyStage === "saved" && (
+                <p className="inline-flex items-center gap-2 text-signal-lime">
+                  <Check size={16} />
+                  验证通过，API Key 已保存。现在可以正常使用模型选择和生成。
+                </p>
+              )}
+              {apiKeyStage === "failed" && validation && (
+                <p className="text-signal-amber">{validation.message || "API Key 验证失败，请检查 Key 或模型额度。"}</p>
+              )}
+              {validation?.probes?.length ? (
+                <div className="mt-3 space-y-2">
+                  {validation.probes.map((probe) => (
+                    <div
+                      key={`${probe.model}-${probe.code}`}
+                      className={`flex flex-col gap-1 border px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between ${
+                        probe.ok
+                          ? "border-signal-lime/25 bg-signal-lime/5 text-signal-lime"
+                          : "border-signal-amber/30 bg-signal-amber/5 text-signal-amber"
+                      }`}
+                    >
+                      <span className="font-mono">{probe.model}</span>
+                      <span className="break-words sm:text-right">{probe.ok ? "可用" : probe.message}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
             <div className="mt-6 grid gap-3 sm:flex sm:flex-wrap sm:justify-end">
               <Button className="min-h-12 w-full sm:w-auto" variant="ghost" onClick={() => setDialogOpen(false)} disabled={saving}>
-                {t("settings.cancel")}
+                {apiKeyStage === "saved" ? "完成" : t("settings.cancel")}
               </Button>
-              <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={confirmSave} disabled={!canConfirm || saving}>
+              <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={confirmSave} disabled={!canConfirm || saving || apiKeyStage === "saved"}>
                 {saving ? <Loader2 className="animate-spin" size={17} /> : <KeyRound size={17} />}
-                {t("settings.confirm")}
+                {apiKeyStage === "validating" ? "测试中" : apiKeyStage === "saving" ? "保存中" : apiKeyStage === "saved" ? "已保存" : t("settings.confirm")}
               </Button>
             </div>
           </div>

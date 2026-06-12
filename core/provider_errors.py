@@ -34,8 +34,12 @@ def classify_provider_error(exc: BaseException | str | None) -> dict[str, Any]:
     quota_markers = (
         "quota",
         "allocationquota",
+        "allocationquota.freetieronly",
+        "freetieronly",
         "exhausted",
         "free tier",
+        "free tier only",
+        "paid basis",
         "insufficient_quota",
         "insufficient quota",
         "余额",
