@@ -938,6 +938,15 @@ BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 FRONTEND_DIST_DIR = os.path.join(BASE_DIR, "frontend", "dist")
 FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIST_DIR, "assets")
+BLOCKED_PATH_PARTS = {
+    ".env",
+    ".git",
+    ".svn",
+    ".hg",
+    "_ignition",
+    "vendor",
+    "phpunit",
+}
 
 
 def _spa_index_path() -> str:
@@ -949,6 +958,24 @@ def _spa_index_path() -> str:
     raise FileNotFoundError(
         "Frontend not built. Run 'cd frontend && npm run build' first."
     )
+
+
+def _should_serve_spa(full_path: str) -> bool:
+    normalized = full_path.strip().strip("/")
+    if not normalized:
+        return True
+
+    parts = [part for part in normalized.split("/") if part]
+    if any(part.startswith(".") for part in parts):
+        return False
+    if any(part.lower() in BLOCKED_PATH_PARTS for part in parts):
+        return False
+
+    basename = parts[-1]
+    if "." in basename:
+        return False
+
+    return True
 
 
 if os.path.isdir(FRONTEND_ASSETS_DIR):
@@ -1825,10 +1852,13 @@ async def spa_fallback(full_path: str):
         candidate = os.path.normpath(os.path.join(FRONTEND_DIST_DIR, full_path))
         dist_dir = os.path.normpath(FRONTEND_DIST_DIR)
         if not candidate.startswith(dist_dir + os.sep) and candidate != dist_dir:
-            return FileResponse(_spa_index_path(), media_type="text/html")
+            return JSONResponse({"error": "not found"}, status_code=404)
         if os.path.isfile(candidate):
             media_type, _ = mimetypes.guess_type(candidate)
             return FileResponse(candidate, media_type=media_type)
+
+    if not _should_serve_spa(full_path):
+        return JSONResponse({"error": "not found"}, status_code=404)
 
     return FileResponse(_spa_index_path(), media_type="text/html")
 
