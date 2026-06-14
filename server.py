@@ -16,6 +16,7 @@ from dataclasses import asdict
 
 from contextlib import asynccontextmanager
 
+from fastapi import BackgroundTasks
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -24,23 +25,44 @@ from pydantic import BaseModel
 
 import config
 from core.auth import (
+    ACTIVE_ACCOUNT,
+    AccountNotVerifiedError,
+    AccountRestrictedError,
     AuthError,
+    ChallengeConsumedError,
+    ChallengeExpiredError,
+    ChallengeSupersededError,
+    EmailExistsError,
+    EmailNotFoundError,
     InvalidCodeError,
     InvalidEmailError,
     InvalidLanguageError,
     InvalidPasswordError,
     InvalidTokenError,
+    RecoveryTokenError,
+    RECOVERY_CHALLENGE,
+    SIGNUP_CHALLENGE,
+    UNKNOWN_ACCOUNT,
+    UNVERIFIED_ACCOUNT,
     User,
+    authenticate_user,
     consume_verification_code,
     create_access_token,
     create_verification_code,
+    get_account_state,
     get_user_preferences,
     get_or_create_user,
     init_db,
     reset_password_with_code,
+    reset_password_with_token,
     send_verification_email,
+    resend_signup_verification,
+    start_password_recovery,
+    start_signup,
     update_user_preferences,
     user_from_token,
+    verify_password_recovery_code,
+    verify_signup_code,
     verify_password,
 )
 from core.billing import (
@@ -66,7 +88,14 @@ from core.audit_log import (
     REGISTER_SUCCESS,
     log_audit,
 )
-from core.artifacts import ArtifactError, ArtifactNotFoundError, get_artifact_for_user, local_file_path, put_bytes, put_file
+from core.artifacts import (
+    ArtifactError,
+    ArtifactNotFoundError,
+    get_artifact_for_user,
+    materialize_artifact,
+    put_bytes,
+    put_file,
+)
 from core.generation_sessions import (
     ActiveGenerationExistsError,
     GenerationSession,
@@ -225,6 +254,10 @@ class EmailRequest(BaseModel):
     password: str | None = None
 
 
+class AuthIdentifyRequest(BaseModel):
+    email: str
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -233,13 +266,51 @@ class LoginRequest(BaseModel):
 class VerifyCodeRequest(BaseModel):
     email: str
     code: str
-    password: str
+    password: str | None = None
 
 
 class ResetPasswordRequest(BaseModel):
     email: str
     code: str
     new_password: str
+
+
+class RecoveryResetTokenRequest(BaseModel):
+    email: str
+    recovery_token: str
+    new_password: str
+
+
+def _auth_error(reason: str, message: str, *, status_code: int = status.HTTP_401_UNAUTHORIZED) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"reason": reason, "message": message})
+
+
+def _raise_auth_http(exc: Exception) -> None:
+    if isinstance(exc, InvalidEmailError):
+        raise _auth_error("invalid_email", str(exc), status_code=status.HTTP_422_UNPROCESSABLE_ENTITY) from exc
+    if isinstance(exc, InvalidPasswordError):
+        raise _auth_error("invalid_password", str(exc)) from exc
+    if isinstance(exc, EmailExistsError):
+        raise _auth_error("email_exists", "该邮箱已注册，请直接登录") from exc
+    if isinstance(exc, EmailNotFoundError):
+        raise _auth_error("email_not_found", "该邮箱尚未注册，请先创建账号") from exc
+    if isinstance(exc, AccountNotVerifiedError):
+        raise _auth_error("account_unverified", "该账号尚未完成邮箱验证，请继续验证") from exc
+    if isinstance(exc, AccountRestrictedError):
+        raise _auth_error("account_restricted", "该账号当前无法继续登录，请联系管理员") from exc
+    if isinstance(exc, ChallengeExpiredError):
+        raise _auth_error("challenge_expired", "验证码已过期，请重新发送") from exc
+    if isinstance(exc, ChallengeSupersededError):
+        raise _auth_error("challenge_superseded", "旧验证码已失效，请使用最新验证码") from exc
+    if isinstance(exc, ChallengeConsumedError):
+        raise _auth_error("challenge_consumed", "验证码已被使用，请重新发送") from exc
+    if isinstance(exc, InvalidCodeError):
+        raise _auth_error("invalid_code", "验证码不正确，请检查后重试") from exc
+    if isinstance(exc, RecoveryTokenError):
+        raise _auth_error("invalid_recovery_token", "重置凭证无效或已过期，请重新发起重置") from exc
+    if isinstance(exc, AuthError):
+        raise _auth_error("auth_error", str(exc), status_code=status.HTTP_400_BAD_REQUEST) from exc
+    raise exc
 
 
 class ApiKeyRequest(BaseModel):
@@ -334,7 +405,7 @@ def _save_cached_tasks(cache_file: str, tasks: list) -> None:
         logger.warning("Failed to save template cache: %s", e)
 
 
-def _cached_analyze(template_path: str) -> list:
+def _cached_analyze(template_path: str, analyzer: TemplateAnalyzer | None = None) -> list:
     """Analyze template with memory + disk cache keyed by path + mtime."""
     mtime = os.path.getmtime(template_path)
     key = (template_path, mtime)
@@ -357,7 +428,7 @@ def _cached_analyze(template_path: str) -> list:
             return tasks
 
     # 3. Cache miss — analyze
-    tasks = _analyzer.analyze(template_path)
+    tasks = (analyzer or _analyzer).analyze(template_path)
 
     # Save to memory
     while len(_template_analysis_cache) >= _TEMPLATE_CACHE_MAX:
@@ -434,10 +505,26 @@ def _resolve_template_planner_model(raw: str | None, user_id: int) -> str:
     return (raw or "").strip() or config.get_user_model_for_user(user_id, "template_planner") or config.TEMPLATE_ANALYZE_MODEL
 
 
-def _client_for_user_template_analysis(user_id: int):
-    user_api_key = load_user_api_key(user_id)
+def _require_user_api_key(current_user: User | int) -> str:
+    user_id = current_user.id if isinstance(current_user, User) else int(current_user)
+    try:
+        user_api_key = load_user_api_key(user_id)
+    except Exception as exc:
+        logger.exception("Failed to decrypt user API key")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load saved API Key: {exc}",
+        ) from exc
     if not user_api_key:
-        return config.openai_client_for_template_analyze()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Strict BYOK is enabled. Please save your own API Key in Settings before analyzing templates or generating content.",
+        )
+    return user_api_key
+
+
+def _client_for_user_template_analysis(user_id: int):
+    user_api_key = _require_user_api_key(user_id)
     from openai import OpenAI
 
     return OpenAI(
@@ -639,19 +726,18 @@ def _resolve_generation_request(current_user: User, params: dict[str, object]) -
     template = str(params["template"])
     vs = _get_vs(slug)
     template_path = os.path.join(config.TEMPLATE_DIR, template)
+    user_api_key = _require_user_api_key(current_user)
     if not os.path.isfile(template_path):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="模板不存在")
     try:
-        tasks = _cached_analyze(template_path)
+        tasks = _cached_analyze(
+            template_path,
+            analyzer=TemplateAnalyzer(client=_client_for_user_template_analysis(current_user.id)),
+        )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"模板分析失败: {exc}") from exc
     if not tasks:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="未找到待填位置")
-    try:
-        user_api_key = load_user_api_key(current_user.id)
-    except Exception as exc:
-        logger.exception("Failed to decrypt user API key")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to load saved API Key: {exc}") from exc
     language = get_user_preferences(current_user.id)["language"]
     return {
         "vs": vs,
@@ -1001,8 +1087,12 @@ async def auth_request_code(payload: EmailRequest, request: Request):
     if not rate_limiter.allow(f"request-code:{email_key}", [(1, 60), (5, 3600)]):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
     try:
-        verification = create_verification_code(payload.email, password=payload.password)
-        purpose = "reset_password" if payload.password is None else "register"
+        if payload.password is None:
+            verification = start_password_recovery(payload.email)
+            purpose = "reset_password"
+        else:
+            verification = start_signup(payload.email, payload.password)
+            purpose = "register"
         send_verification_email(verification.email, verification.code, purpose=purpose)
         log_audit(
             CODE_REQUESTED,
@@ -1012,38 +1102,72 @@ async def auth_request_code(payload: EmailRequest, request: Request):
             detail={"purpose": purpose},
         )
         return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
-    except (InvalidEmailError, InvalidPasswordError) as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except (InvalidEmailError, InvalidPasswordError, EmailExistsError, EmailNotFoundError, AccountNotVerifiedError, AccountRestrictedError) as exc:
+        _raise_auth_http(exc)
     except AuthError as exc:
         logger.exception("Failed to request verification code")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
-@app.post("/api/auth/verify-code")
-async def auth_verify_code(payload: VerifyCodeRequest, request: Request):
+@app.post("/api/auth/identify")
+async def auth_identify(payload: AuthIdentifyRequest):
+    try:
+        state = get_account_state(payload.email)
+        return {"email": payload.email.strip().lower(), "account_state": state}
+    except InvalidEmailError as exc:
+        _raise_auth_http(exc)
+
+
+@app.post("/api/auth/signup/start")
+async def auth_signup_start(payload: EmailRequest, request: Request):
+    email_key = payload.email.lower().strip()
+    if not rate_limiter.allow(f"signup-start:{email_key}", [(1, 60), (5, 3600)]):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
+    if not payload.password:
+        raise _auth_error("invalid_password", "Password is required")
     password_ok, password_message = validate_password(payload.password)
     if not password_ok:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_message)
+        raise _auth_error("invalid_password", password_message, status_code=status.HTTP_400_BAD_REQUEST)
     try:
-        user = consume_verification_code(payload.email, payload.code, payload.password)
+        verification = start_signup(payload.email, payload.password)
+        send_verification_email(verification.email, verification.code, purpose="register")
+        log_audit(CODE_REQUESTED, email=verification.email, ip=_client_ip(request), ua=_user_agent(request), detail={"purpose": "signup"})
+        return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
+    except (InvalidEmailError, InvalidPasswordError, EmailExistsError, AccountRestrictedError) as exc:
+        _raise_auth_http(exc)
+
+
+@app.post("/api/auth/signup/resend")
+async def auth_signup_resend(payload: AuthIdentifyRequest, request: Request):
+    email_key = payload.email.lower().strip()
+    if not rate_limiter.allow(f"signup-resend:{email_key}", [(1, 60), (5, 3600)]):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
+    try:
+        verification = resend_signup_verification(payload.email)
+        send_verification_email(verification.email, verification.code, purpose="register")
+        log_audit(CODE_REQUESTED, email=verification.email, ip=_client_ip(request), ua=_user_agent(request), detail={"purpose": "signup_resend"})
+        return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
+    except (InvalidEmailError, EmailExistsError, EmailNotFoundError, AccountRestrictedError) as exc:
+        _raise_auth_http(exc)
+
+
+@app.post("/api/auth/signup/verify")
+async def auth_signup_verify(payload: VerifyCodeRequest, request: Request):
+    try:
+        user = verify_signup_code(payload.email, payload.code)
         token = create_access_token(user)
-        log_audit(
-            REGISTER_SUCCESS,
-            user_id=user.id,
-            email=user.email,
-            ip=_client_ip(request),
-            ua=_user_agent(request),
-        )
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "user": {"id": user.id, "email": user.email},
-        }
-    except (InvalidEmailError, InvalidCodeError, InvalidPasswordError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid verification code",
-        ) from exc
+        log_audit(REGISTER_SUCCESS, user_id=user.id, email=user.email, ip=_client_ip(request), ua=_user_agent(request))
+        return {"access_token": token, "token_type": "bearer", "user": {"id": user.id, "email": user.email}}
+    except (InvalidEmailError, InvalidCodeError, EmailExistsError, EmailNotFoundError, AccountRestrictedError) as exc:
+        _raise_auth_http(exc)
+
+
+@app.post("/api/auth/verify-code")
+async def auth_verify_code(payload: VerifyCodeRequest, request: Request):
+    try:
+        return await auth_signup_verify(payload, request)
+    except HTTPException:
+        raise
 
 
 @app.post("/api/auth/reset-password")
@@ -1059,7 +1183,8 @@ async def auth_reset_password(payload: ResetPasswordRequest, request: Request):
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_message)
     try:
-        user = reset_password_with_code(payload.email, payload.code, payload.new_password)
+        recovery_token = verify_password_recovery_code(payload.email, payload.code)
+        user = reset_password_with_token(payload.email, recovery_token, payload.new_password)
         token = create_access_token(user)
         log_audit(
             PASSWORD_RESET_SUCCESS,
@@ -1073,7 +1198,7 @@ async def auth_reset_password(payload: ResetPasswordRequest, request: Request):
             "token_type": "bearer",
             "user": {"id": user.id, "email": user.email},
         }
-    except (InvalidEmailError, InvalidCodeError) as exc:
+    except (InvalidEmailError, InvalidCodeError, EmailNotFoundError, AccountNotVerifiedError, AccountRestrictedError, RecoveryTokenError) as exc:
         log_audit(
             PASSWORD_RESET_FAILED,
             email=payload.email,
@@ -1081,10 +1206,7 @@ async def auth_reset_password(payload: ResetPasswordRequest, request: Request):
             ua=_user_agent(request),
             detail={"reason": "invalid_code"},
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid verification code",
-        ) from exc
+        _raise_auth_http(exc)
     except AuthError as exc:
         log_audit(
             PASSWORD_RESET_FAILED,
@@ -1095,8 +1217,46 @@ async def auth_reset_password(payload: ResetPasswordRequest, request: Request):
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid verification code",
+            detail={"reason": "auth_error", "message": str(exc)},
         ) from exc
+
+
+@app.post("/api/auth/recovery/start")
+async def auth_recovery_start(payload: AuthIdentifyRequest, request: Request):
+    email_key = payload.email.lower().strip()
+    if not rate_limiter.allow(f"recovery-start:{email_key}", [(1, 60), (5, 3600)]):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
+    try:
+        verification = start_password_recovery(payload.email)
+        send_verification_email(verification.email, verification.code, purpose="reset_password")
+        log_audit(CODE_REQUESTED, email=verification.email, ip=_client_ip(request), ua=_user_agent(request), detail={"purpose": "recovery"})
+        return {"ok": True, "email": verification.email, "expires_at": verification.expires_at}
+    except (InvalidEmailError, EmailNotFoundError, AccountNotVerifiedError, AccountRestrictedError) as exc:
+        _raise_auth_http(exc)
+
+
+@app.post("/api/auth/recovery/verify")
+async def auth_recovery_verify(payload: VerifyCodeRequest):
+    try:
+        recovery_token = verify_password_recovery_code(payload.email, payload.code)
+        return {"ok": True, "email": payload.email.strip().lower(), "recovery_token": recovery_token}
+    except (InvalidEmailError, InvalidCodeError, EmailNotFoundError, AccountNotVerifiedError, AccountRestrictedError) as exc:
+        _raise_auth_http(exc)
+
+
+@app.post("/api/auth/recovery/complete")
+async def auth_recovery_complete(payload: RecoveryResetTokenRequest, request: Request):
+    password_ok, password_message = validate_password(payload.new_password)
+    if not password_ok:
+        raise _auth_error("invalid_password", password_message, status_code=status.HTTP_400_BAD_REQUEST)
+    try:
+        user = reset_password_with_token(payload.email, payload.recovery_token, payload.new_password)
+        token = create_access_token(user)
+        log_audit(PASSWORD_RESET_SUCCESS, user_id=user.id, email=user.email, ip=_client_ip(request), ua=_user_agent(request))
+        return {"access_token": token, "token_type": "bearer", "user": {"id": user.id, "email": user.email}}
+    except (InvalidEmailError, EmailNotFoundError, RecoveryTokenError, AccountRestrictedError) as exc:
+        log_audit(PASSWORD_RESET_FAILED, email=payload.email, ip=_client_ip(request), ua=_user_agent(request), detail={"reason": "recovery_complete_failed"})
+        _raise_auth_http(exc)
 
 
 @app.post("/api/auth/login")
@@ -1112,9 +1272,7 @@ async def auth_login(payload: LoginRequest, request: Request):
         )
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=RATE_LIMIT_MESSAGE)
     try:
-        user = get_or_create_user(payload.email)
-        if not verify_password(payload.password, _get_password_hash(user.email)):
-            raise InvalidPasswordError("Email or password is incorrect")
+        user = authenticate_user(payload.email, payload.password)
         token = create_access_token(user)
         log_audit(
             LOGIN_SUCCESS,
@@ -1128,7 +1286,7 @@ async def auth_login(payload: LoginRequest, request: Request):
             "token_type": "bearer",
             "user": {"id": user.id, "email": user.email},
         }
-    except InvalidPasswordError as exc:
+    except (InvalidPasswordError, EmailNotFoundError, AccountNotVerifiedError, AccountRestrictedError, InvalidEmailError) as exc:
         log_audit(
             LOGIN_FAILED,
             email=payload.email,
@@ -1136,7 +1294,7 @@ async def auth_login(payload: LoginRequest, request: Request):
             ua=_user_agent(request),
             detail={"reason": "invalid_credentials"},
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        _raise_auth_http(exc)
     except AuthError as exc:
         log_audit(
             LOGIN_FAILED,
@@ -1593,6 +1751,16 @@ async def generate_session_start(
             },
             status_code=409,
         )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "request_blocked",
+                "message": detail,
+            },
+            status_code=exc.status_code,
+        )
     return {
         "ok": True,
         "session_id": session.session_id,
@@ -1672,6 +1840,16 @@ async def generate(
             },
             status_code=409,
         )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "request_blocked",
+                "message": detail,
+            },
+            status_code=exc.status_code,
+        )
 
     def event_stream():
         for event in session.stream_events(after_seq=0):
@@ -1714,17 +1892,20 @@ async def download(
 @app.get("/api/artifacts/{artifact_uuid}/download")
 async def download_artifact(
     artifact_uuid: str,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
 ):
     artifact = get_artifact_for_user(artifact_uuid, current_user.id)
     if artifact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
     try:
-        path = local_file_path(artifact)
+        path, should_cleanup = materialize_artifact(artifact)
     except ArtifactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact file is missing") from exc
     except ArtifactError as exc:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+    if should_cleanup:
+        background_tasks.add_task(path.unlink, missing_ok=True)
     return FileResponse(
         path,
         filename=artifact.original_filename,

@@ -57,7 +57,7 @@ function ProtectedRoute({ children }: { children: ReactElement }) {
   }
   if (!auth.isAuthenticated) {
     const next = `${location.pathname}${location.search}`;
-    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
+    return <Navigate to={`/auth?next=${encodeURIComponent(next)}`} replace />;
   }
   return children;
 }
@@ -93,7 +93,7 @@ function Shell() {
 
   function handleLogout() {
     auth.logout();
-    navigate("/login", { replace: true });
+    navigate("/auth", { replace: true });
   }
 
   return (
@@ -259,7 +259,7 @@ function Shell() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/*" element={<LoginPage />} />
       <Route
         path="/*"
         element={

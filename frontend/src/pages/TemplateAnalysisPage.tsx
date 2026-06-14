@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   analyzeTemplate,
   deleteTemplate,
+  fetchApiKeyStatus,
   fetchModelOptions,
   fetchTemplates,
   reanalyzeTemplate,
@@ -10,6 +11,7 @@ import {
 import { Button, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type { AnalyzeResult, BillingRecord, FillTask, ModelOption, TemplateItem } from "../types";
+import { Link } from "react-router-dom";
 
 function taskLabel(task: FillTask, index: number, fallback: string) {
   return task.target_chapter || `${fallback} ${index + 1}`;
@@ -103,6 +105,7 @@ export default function TemplateAnalysisPage() {
   const [listLoading, setListLoading] = useState(true);
   const [deleting, setDeleting] = useState("");
   const [error, setError] = useState("");
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
 
   const totalWords = useMemo(
     () => tasks.reduce((sum, task) => sum + Math.max(0, task.word_limit || 0), 0),
@@ -124,6 +127,9 @@ export default function TemplateAnalysisPage() {
 
   useEffect(() => {
     void refreshTemplates();
+    fetchApiKeyStatus()
+      .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
+      .catch(() => setHasApiKey(null));
     fetchModelOptions()
       .then((options) => {
         const models = flattenModelOptions(options.vision_layout ?? options.vision);
@@ -209,6 +215,19 @@ export default function TemplateAnalysisPage() {
         description={t("template.description")}
       />
       <ErrorBanner message={error} />
+      {hasApiKey === false && (
+        <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
+          <p className="min-w-0 break-words text-sm font-semibold text-amber-100">
+            模板分析已启用严格 BYOK。请先在设置页保存你自己的 API Key。
+          </p>
+          <Link
+            to="/settings"
+            className="inline-flex min-h-11 items-center justify-center border border-signal-amber bg-signal-amber px-4 text-xs font-bold text-night-950 transition hover:bg-white sm:w-auto"
+          >
+            去设置
+          </Link>
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
         <div className="space-y-6">
@@ -254,7 +273,7 @@ export default function TemplateAnalysisPage() {
               <Button
                 className="w-full"
                 onClick={onAnalyzeUpload}
-                disabled={!file || !visionModel || !plannerModel || loading}
+                disabled={!file || !visionModel || !plannerModel || loading || hasApiKey === false}
               >
                 {loading ? <Loader2 className="animate-spin" size={17} /> : <ListChecks size={17} />}
                 上传并分析
@@ -328,7 +347,7 @@ export default function TemplateAnalysisPage() {
                         <button
                           type="button"
                           onClick={() => void onReanalyze(template.name)}
-                          disabled={loading || !visionModel || !plannerModel}
+                          disabled={loading || !visionModel || !plannerModel || hasApiKey === false}
                           className="inline-flex h-10 items-center gap-2 border border-white/10 px-3 text-sm text-slate-300 hover:border-signal-cyan/50 hover:text-signal-cyan disabled:opacity-50"
                           title="重新分析"
                         >

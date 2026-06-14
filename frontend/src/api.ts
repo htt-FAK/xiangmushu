@@ -18,6 +18,26 @@ import type {
 import { apiUrl } from "./apiBase";
 import { buildAuthHeaders } from "./auth";
 
+function parseErrorMessage(raw: string, fallback: string): string {
+  let message = raw || fallback;
+  try {
+    const parsed = JSON.parse(raw) as {
+      message?: string;
+      detail?: string | { reason?: string; message?: string };
+    };
+    if (typeof parsed.detail === "string") {
+      message = parsed.detail;
+    } else if (parsed.detail?.message) {
+      message = parsed.detail.message;
+    } else if (parsed.message) {
+      message = parsed.message;
+    }
+  } catch {
+    // Keep the raw response when the server did not return JSON.
+  }
+  return message;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
@@ -29,26 +49,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 401) {
     window.localStorage.removeItem("xiangmushu.auth.token");
     const currentPath = window.location.pathname;
-    if (currentPath !== "/login") {
-      window.location.href = `/login?next=${encodeURIComponent(currentPath)}`;
+    if (!currentPath.startsWith("/auth")) {
+      window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
     }
     throw new Error("Session expired");
   }
   if (!response.ok) {
     const raw = await response.text();
-    let message = raw || `HTTP ${response.status}`;
-    try {
-      const parsed = JSON.parse(raw) as { message?: string; detail?: string | { reason?: string; message?: string } };
-      if (typeof parsed.detail === "string") {
-        message = parsed.detail;
-      } else if (parsed.detail?.message) {
-        message = parsed.detail.message;
-      } else if (parsed.message) {
-        message = parsed.message;
-      }
-    } catch {
-      // Keep the raw response when the server did not return JSON.
-    }
+    const message = parseErrorMessage(raw, `HTTP ${response.status}`);
     throw new Error(message);
   }
   return (await response.json()) as T;
@@ -65,8 +73,8 @@ async function requestJsonAllowError<T>(path: string, init?: RequestInit): Promi
   if (response.status === 401) {
     window.localStorage.removeItem("xiangmushu.auth.token");
     const currentPath = window.location.pathname;
-    if (currentPath !== "/login") {
-      window.location.href = `/login?next=${encodeURIComponent(currentPath)}`;
+    if (!currentPath.startsWith("/auth")) {
+      window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
     }
     throw new Error("Session expired");
   }
@@ -267,7 +275,7 @@ export async function streamGenerate(
   });
   if (!response.ok || !response.body) {
     const message = await response.text();
-    throw new Error(message || `HTTP ${response.status}`);
+    throw new Error(parseErrorMessage(message, `HTTP ${response.status}`));
   }
 
   const reader = response.body.getReader();
@@ -299,7 +307,7 @@ async function streamSession(path: string, onEvent: (event: GenerateEvent) => vo
   });
   if (!response.ok || !response.body) {
     const message = await response.text();
-    throw new Error(message || `HTTP ${response.status}`);
+    throw new Error(parseErrorMessage(message, `HTTP ${response.status}`));
   }
 
   const reader = response.body.getReader();

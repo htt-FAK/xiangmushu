@@ -1,19 +1,73 @@
 import { AtSign, CheckCircle2, KeyRound, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { loginWithPassword, requestLoginCode, resetPassword, useAuth, verifyLoginCode } from "../auth";
+import {
+  completeRecovery,
+  identifyAccount,
+  loginWithPassword,
+  resendSignup,
+  startRecovery,
+  startSignup,
+  useAuth,
+  verifyRecovery,
+  verifySignup,
+  type AccountState,
+} from "../auth";
 import { Button, ErrorBanner, Field, Input } from "../components/ui";
 import { useI18n } from "../i18n";
 import { clsx } from "../utils";
 
-type AuthMode = "login" | "register" | "forgotPassword";
+type AuthStep = "entry" | "login" | "signup" | "signupVerify" | "verifyAccount" | "recovery" | "recoveryVerify" | "recoveryReset";
+
+function routeStep(pathname: string): AuthStep {
+  if (pathname.endsWith("/login")) return "login";
+  if (pathname.endsWith("/signup/verify")) return "signupVerify";
+  if (pathname.endsWith("/signup")) return "signup";
+  if (pathname.endsWith("/verify-account")) return "verifyAccount";
+  if (pathname.endsWith("/recovery/verify")) return "recoveryVerify";
+  if (pathname.endsWith("/recovery/reset")) return "recoveryReset";
+  if (pathname.endsWith("/recovery")) return "recovery";
+  return "entry";
+}
+
+function stepPath(step: AuthStep): string {
+  switch (step) {
+    case "login":
+      return "/auth/login";
+    case "signup":
+      return "/auth/signup";
+    case "signupVerify":
+      return "/auth/signup/verify";
+    case "verifyAccount":
+      return "/auth/verify-account";
+    case "recovery":
+      return "/auth/recovery";
+    case "recoveryVerify":
+      return "/auth/recovery/verify";
+    case "recoveryReset":
+      return "/auth/recovery/reset";
+    default:
+      return "/auth";
+  }
+}
+
+function parseAuthError(value: unknown, fallback: string): string {
+  if (!(value instanceof Error)) return fallback;
+  try {
+    const parsed = JSON.parse(value.message) as { detail?: string | { message?: string } };
+    if (typeof parsed.detail === "string") return parsed.detail;
+    if (parsed.detail?.message) return parsed.detail.message;
+  } catch {
+    // Plain text error.
+  }
+  return value.message || fallback;
+}
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
-  const [sent, setSent] = useState(false);
+  const [recoveryToken, setRecoveryToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [cooldown, setCooldown] = useState(0);
@@ -23,8 +77,12 @@ export default function LoginPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
+  const step = routeStep(location.pathname);
+  const params = new URLSearchParams(location.search);
+  const rawNext = params.get("next") || "/";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
+  const isPasswordValid = password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
 
-  // Countdown timer: decrement cooldown every second
   useEffect(() => {
     if (cooldown <= 0) return;
     cooldownRef.current = setInterval(() => {
@@ -39,93 +97,156 @@ export default function LoginPage() {
     return () => {
       if (cooldownRef.current) clearInterval(cooldownRef.current);
     };
-  }, [cooldown > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cooldown > 0]);
 
   const startCooldown = useCallback(() => setCooldown(60), []);
 
-  const params = new URLSearchParams(location.search);
-  const rawNext = params.get("next") || "/";
-  // Prevent open redirect: only allow relative paths starting with /
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
-  const isPasswordValid = password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
-
-  function switchMode(nextMode: AuthMode) {
-    setMode(nextMode);
-    setSent(false);
-    setCode("");
+  function go(stepName: AuthStep) {
+    navigate(`${stepPath(stepName)}?next=${encodeURIComponent(next)}`, { replace: true });
     setError("");
-    setCooldown(0);
     setResendMsg("");
   }
 
-  async function handleSubmit(event: FormEvent) {
+  async function handleEntry(event: FormEvent) {
     event.preventDefault();
-    setError("");
     setLoading(true);
+    setError("");
     try {
-      if (mode === "login") {
-        // Login: email + password only, no verification code
-        const result = await loginWithPassword(email, password);
-        auth.setToken(result.access_token);
-        navigate(next, { replace: true });
-      } else if (mode === "register") {
-        // Register: send verification code first
-        const result = await requestLoginCode(email, password);
-        setEmail(result.email);
-        setSent(true);
-        startCooldown();
+      const result = await identifyAccount(email);
+      const accountState: AccountState = result.account_state;
+      if (accountState === "existing_verified") {
+        go("login");
+      } else if (accountState === "existing_unverified") {
+        go("verifyAccount");
+      } else if (accountState === "restricted") {
+        setError("该账号当前无法继续登录，请联系管理员");
       } else {
-        const result = await requestLoginCode(email);
-        setEmail(result.email);
-        setSent(true);
-        startCooldown();
+        go("signup");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : (mode === "login" ? t("login.verifyError") : t("login.sendError")));
+      setError(parseAuthError(err, t("login.sendError")));
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleVerifyCode(event: FormEvent) {
+  async function handleLogin(event: FormEvent) {
     event.preventDefault();
-    setError("");
     setLoading(true);
+    setError("");
     try {
-      const result =
-        mode === "forgotPassword"
-          ? await resetPassword(email, code, password)
-          : await verifyLoginCode(email, password, code);
+      const result = await loginWithPassword(email, password);
       auth.setToken(result.access_token);
       navigate(next, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("login.verifyError"));
+      setError(parseAuthError(err, t("login.verifyError")));
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleResend() {
-    if (cooldown > 0 || loading) return;
-    setError("");
-    setResendMsg("");
+  async function handleSignupStart(event: FormEvent) {
+    event.preventDefault();
     setLoading(true);
+    setError("");
     try {
-      if (mode === "register") {
-        await requestLoginCode(email, password);
-      } else {
-        await requestLoginCode(email);
-      }
+      const result = await startSignup(email, password);
+      setEmail(result.email);
       startCooldown();
-      setCode(""); // clear old code so user enters the new one
-      setResendMsg(t("login.resendSuccess"));
-      setTimeout(() => setResendMsg(""), 4000);
+      go("signupVerify");
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("login.resendFailed"));
+      setError(parseAuthError(err, t("login.sendError")));
     } finally {
       setLoading(false);
     }
   }
+
+  async function handleSignupVerify(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const result = await verifySignup(email, code);
+      auth.setToken(result.access_token);
+      navigate(next, { replace: true });
+    } catch (err) {
+      setError(parseAuthError(err, t("login.verifyError")));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSignupResend() {
+    if (cooldown > 0 || loading) return;
+    setLoading(true);
+    setError("");
+    setResendMsg("");
+    try {
+      await resendSignup(email);
+      setCode("");
+      startCooldown();
+      setResendMsg(t("login.resendSuccess"));
+    } catch (err) {
+      setError(parseAuthError(err, t("login.resendFailed")));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecoveryStart(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const result = await startRecovery(email);
+      setEmail(result.email);
+      startCooldown();
+      go("recoveryVerify");
+    } catch (err) {
+      setError(parseAuthError(err, t("login.sendError")));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecoveryVerify(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const result = await verifyRecovery(email, code);
+      setRecoveryToken(result.recovery_token);
+      go("recoveryReset");
+    } catch (err) {
+      setError(parseAuthError(err, t("login.verifyError")));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecoveryComplete(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const result = await completeRecovery(email, recoveryToken, password);
+      auth.setToken(result.access_token);
+      navigate(next, { replace: true });
+    } catch (err) {
+      setError(parseAuthError(err, t("login.verifyError")));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const intro =
+    step === "login"
+      ? t("login.loginHint")
+      : step === "signup" || step === "signupVerify" || step === "verifyAccount"
+        ? t("login.registerHint")
+        : step === "recovery" || step === "recoveryVerify" || step === "recoveryReset"
+          ? t("login.forgotPasswordHint")
+          : t("login.description");
 
   return (
     <div className="min-h-screen overflow-hidden bg-night-950 text-slate-100">
@@ -146,39 +267,13 @@ export default function LoginPage() {
             <h1 className="mt-3 max-w-2xl font-display text-3xl font-semibold leading-tight text-white md:mt-4 md:text-5xl">
               {t("login.title")}
             </h1>
-            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-300 md:mt-5 md:leading-7">
-              {t("login.description")}
-            </p>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-300 md:mt-5 md:leading-7">{intro}</p>
           </section>
 
           <section className="w-full max-w-xl justify-self-end border border-white/12 bg-night-900/72 p-4 shadow-[0_24px_90px_rgba(0,0,0,0.46)] backdrop-blur-2xl sm:p-5 md:p-8">
-            <div className="mb-4 grid grid-cols-2 border border-white/10 bg-night-950/70 p-1 md:mb-6">
-              {(["login", "register"] as const).map((item) => (
-                <button
-                  key={item}
-                  className={clsx(
-                    "min-h-11 text-sm font-semibold transition",
-                    mode === item
-                      ? "bg-signal-cyan text-night-950 shadow-glow"
-                      : "text-slate-400 hover:text-white",
-                  )}
-                  onClick={() => switchMode(item)}
-                  type="button"
-                >
-                  {t(`login.${item}`)}
-                </button>
-              ))}
-            </div>
-
             <div className="mb-4 flex items-start gap-3 border border-white/10 bg-white/[0.035] p-3.5 md:mb-5 md:p-4">
               <Sparkles className="mt-0.5 shrink-0 text-signal-lime" size={18} />
-              <p className="text-sm leading-6 text-slate-300">
-                {mode === "register"
-                  ? t("login.registerHint")
-                  : mode === "forgotPassword"
-                    ? t("login.forgotPasswordHint")
-                    : t("login.loginHint")}
-              </p>
+              <p className="text-sm leading-6 text-slate-300">{intro}</p>
             </div>
 
             <ErrorBanner message={error} />
@@ -189,194 +284,144 @@ export default function LoginPage() {
               </div>
             )}
 
-            <form className="space-y-4 md:space-y-5" onSubmit={sent ? handleVerifyCode : handleSubmit}>
-              <Field label={t("login.email")}>
-                <div className="group relative">
-                  <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
-                  <Input
-                    className="pl-10"
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder={t("login.emailPlaceholder")}
-                    required
-                  />
-                </div>
-              </Field>
-
-              {mode === "forgotPassword" && sent && (
-                <Field label={t("login.code")}>
+            {step === "entry" && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleEntry}>
+                <Field label={t("login.email")}>
                   <div className="group relative">
-                    <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
-                    <Input
-                      className="pl-10 tracking-[0.24em]"
-                      inputMode="numeric"
-                      maxLength={6}
-                      pattern="[0-9]{6}"
-                      value={code}
-                      onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                      placeholder={t("login.codePlaceholder")}
-                      required
-                    />
+                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
                   </div>
                 </Field>
-              )}
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading}>
+                  <Mail size={17} />
+                  {loading ? t("login.sending") : t("login.sendCode")}
+                </Button>
+              </form>
+            )}
 
-              {(mode !== "forgotPassword" || sent) && (
-                <Field label={mode === "forgotPassword" ? t("login.newPassword") : t("login.password")}>
+            {step === "login" && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleLogin}>
+                <Field label={t("login.email")}>
+                  <div className="group relative">
+                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
+                  </div>
+                </Field>
+                <Field label={t("login.password")}>
                   <div className="group relative">
                     <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
-                    <Input
-                      className="pl-10"
-                      type="password"
-                      autoComplete={mode === "login" ? "current-password" : "new-password"}
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      placeholder={mode === "forgotPassword" ? t("login.newPasswordPlaceholder") : t("login.passwordPlaceholder")}
-                      required
-                    />
+                    <Input className="pl-10" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} required />
                   </div>
-                  {(mode === "register" || mode === "forgotPassword") && (
-                    <p
-                      className={clsx(
-                        "mt-2 flex items-center gap-2 text-xs font-semibold",
-                        isPasswordValid ? "text-signal-lime" : "text-signal-rose",
-                      )}
-                    >
-                      {isPasswordValid && <CheckCircle2 size={14} />}
-                      {isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}
-                    </p>
-                  )}
                 </Field>
-              )}
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading}>
+                  <LockKeyhole size={17} />
+                  {loading ? t("login.verifying") : t("login.login")}
+                </Button>
+                <div className="flex justify-between text-sm font-semibold">
+                  <button className="text-signal-cyan transition hover:text-white" onClick={() => go("signup")} type="button">{t("login.needRegister")}</button>
+                  <button className="text-slate-400 transition hover:text-signal-cyan" onClick={() => go("recovery")} type="button">{t("login.forgotPassword")}</button>
+                </div>
+              </form>
+            )}
 
-              {mode === "register" && sent && (
+            {(step === "signup" || step === "verifyAccount") && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleSignupStart}>
+                <Field label={t("login.email")}>
+                  <div className="group relative">
+                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
+                  </div>
+                </Field>
+                <Field label={t("login.password")}>
+                  <div className="group relative">
+                    <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} required />
+                  </div>
+                  <p className={clsx("mt-2 flex items-center gap-2 text-xs font-semibold", isPasswordValid ? "text-signal-lime" : "text-signal-rose")}>{isPasswordValid && <CheckCircle2 size={14} />}{isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}</p>
+                </Field>
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || !isPasswordValid}>
+                  <Mail size={17} />
+                  {loading ? t("login.sending") : t("login.sendCode")}
+                </Button>
+                <div className="flex justify-between text-sm font-semibold">
+                  <button className="text-signal-cyan transition hover:text-white" onClick={() => go("login")} type="button">{t("login.needLogin")}</button>
+                  {step === "verifyAccount" && <button className="text-slate-400 transition hover:text-signal-cyan" onClick={() => go("signupVerify")} type="button">{t("login.verify")}</button>}
+                </div>
+              </form>
+            )}
+
+            {step === "signupVerify" && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleSignupVerify}>
+                <Field label={t("login.email")}>
+                  <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
+                </Field>
                 <Field label={t("login.code")}>
                   <div className="group relative">
                     <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
-                    <Input
-                      className="pl-10 tracking-[0.24em]"
-                      inputMode="numeric"
-                      maxLength={6}
-                      pattern="[0-9]{6}"
-                      value={code}
-                      onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                      placeholder={t("login.codePlaceholder")}
-                      required
-                    />
+                    <Input className="pl-10 tracking-[0.24em]" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder={t("login.codePlaceholder")} required />
                   </div>
                 </Field>
-              )}
-
-              {mode !== "login" && sent && (
                 <div className="flex items-center justify-between">
-                  <button
-                    className={clsx(
-                      "text-sm font-semibold transition",
-                      cooldown > 0
-                        ? "cursor-not-allowed text-slate-500"
-                        : "text-signal-cyan hover:text-white",
-                    )}
-                    disabled={cooldown > 0 || loading}
-                    onClick={handleResend}
-                    type="button"
-                  >
-                    {cooldown > 0
-                      ? t("login.resendCooldown").replace("{n}", String(cooldown))
-                      : t("login.resendCode")}
+                  <button className={clsx("text-sm font-semibold transition", cooldown > 0 ? "cursor-not-allowed text-slate-500" : "text-signal-cyan hover:text-white")} disabled={cooldown > 0 || loading} onClick={handleSignupResend} type="button">
+                    {cooldown > 0 ? t("login.resendCooldown").replace("{n}", String(cooldown)) : t("login.resendCode")}
                   </button>
                 </div>
-              )}
-
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <Button
-                  className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]"
-                  type="submit"
-                  disabled={
-                    loading ||
-                    (mode === "register" && !sent && !isPasswordValid) ||
-                    (mode !== "login" && sent && code.length !== 6) ||
-                    (mode === "forgotPassword" && sent && !isPasswordValid)
-                  }
-                >
-                  {mode === "login" ? (
-                    <LockKeyhole size={17} />
-                  ) : mode === "forgotPassword" && sent ? (
-                    <ShieldCheck size={17} />
-                  ) : sent ? (
-                    <ShieldCheck size={17} />
-                  ) : (
-                    <Mail size={17} />
-                  )}
-                  {mode === "login"
-                    ? loading
-                      ? t("login.verifying")
-                      : t("login.login")
-                    : mode === "forgotPassword"
-                      ? loading
-                        ? sent
-                          ? t("login.verifying")
-                          : t("login.sending")
-                        : sent
-                          ? t("login.resetPassword")
-                          : t("login.sendResetCode")
-                    : loading
-                      ? sent
-                        ? t("login.verifying")
-                        : t("login.sending")
-                      : sent
-                        ? t("login.verify")
-                        : t("login.sendCode")}
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || code.length !== 6}>
+                  <ShieldCheck size={17} />
+                  {loading ? t("login.verifying") : t("login.verify")}
                 </Button>
-                {mode !== "login" && sent && (
-                  <Button
-                    className="min-h-12 w-full sm:w-auto"
-                    type="button"
-                    variant="ghost"
-                    onClick={() => {
-                      setSent(false);
-                      setCode("");
-                      setError("");
-                      setResendMsg("");
-                      setCooldown(0);
-                    }}
-                  >
-                    {t("login.changeEmail")}
-                  </Button>
-                )}
-              </div>
-            </form>
+              </form>
+            )}
 
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between md:mt-6">
-              {mode !== "forgotPassword" && (
-                <button
-                  className="min-h-11 px-1 text-left text-sm font-semibold text-signal-cyan transition hover:text-white sm:px-0"
-                  onClick={() => switchMode(mode === "login" ? "register" : "login")}
-                  type="button"
-                >
-                  {mode === "login" ? t("login.needRegister") : t("login.needLogin")}
-                </button>
-              )}
-              {mode === "login" && (
-                <button
-                  className="min-h-11 px-1 text-left text-sm font-semibold text-slate-400 transition hover:text-signal-cyan sm:px-0 sm:text-right"
-                  onClick={() => switchMode("forgotPassword")}
-                  type="button"
-                >
-                  {t("login.forgotPassword")}
-                </button>
-              )}
-              {mode === "forgotPassword" && (
-                <button
-                  className="min-h-11 px-1 text-left text-sm font-semibold text-slate-400 transition hover:text-signal-cyan sm:px-0 sm:text-right"
-                  onClick={() => switchMode("login")}
-                  type="button"
-                >
-                  {t("login.backToLogin")}
-                </button>
-              )}
-            </div>
+            {step === "recovery" && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleRecoveryStart}>
+                <Field label={t("login.email")}>
+                  <div className="group relative">
+                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
+                  </div>
+                </Field>
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading}>
+                  <Mail size={17} />
+                  {loading ? t("login.sending") : t("login.sendResetCode")}
+                </Button>
+                <button className="text-sm font-semibold text-slate-400 transition hover:text-signal-cyan" onClick={() => go("login")} type="button">{t("login.backToLogin")}</button>
+              </form>
+            )}
+
+            {step === "recoveryVerify" && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleRecoveryVerify}>
+                <Field label={t("login.email")}>
+                  <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
+                </Field>
+                <Field label={t("login.code")}>
+                  <div className="group relative">
+                    <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10 tracking-[0.24em]" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder={t("login.codePlaceholder")} required />
+                  </div>
+                </Field>
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || code.length !== 6}>
+                  <ShieldCheck size={17} />
+                  {loading ? t("login.verifying") : t("login.verify")}
+                </Button>
+              </form>
+            )}
+
+            {step === "recoveryReset" && (
+              <form className="space-y-4 md:space-y-5" onSubmit={handleRecoveryComplete}>
+                <Field label={t("login.newPassword")}>
+                  <div className="group relative">
+                    <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={17} />
+                    <Input className="pl-10" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.newPasswordPlaceholder")} required />
+                  </div>
+                  <p className={clsx("mt-2 flex items-center gap-2 text-xs font-semibold", isPasswordValid ? "text-signal-lime" : "text-signal-rose")}>{isPasswordValid && <CheckCircle2 size={14} />}{isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}</p>
+                </Field>
+                <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || !isPasswordValid || !recoveryToken}>
+                  <ShieldCheck size={17} />
+                  {loading ? t("login.verifying") : t("login.resetPassword")}
+                </Button>
+              </form>
+            )}
           </section>
         </div>
       </main>

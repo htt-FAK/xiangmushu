@@ -24,6 +24,19 @@ type VerifyCodeResponse = {
   user: AuthUser;
 };
 
+export type AccountState = "unknown_email" | "existing_verified" | "existing_unverified" | "restricted";
+
+type AuthIdentifyResponse = {
+  email: string;
+  account_state: AccountState;
+};
+
+type RecoveryVerifyResponse = {
+  ok: boolean;
+  email: string;
+  recovery_token: string;
+};
+
 type AuthContextValue = {
   token: string;
   isAuthenticated: boolean;
@@ -215,6 +228,22 @@ export async function requestLoginCode(email: string, password?: string) {
   );
 }
 
+export async function identifyAccount(email: string) {
+  return authRequest<AuthIdentifyResponse>("/api/auth/identify", { email });
+}
+
+export async function startSignup(email: string, password: string) {
+  return authRequest<{ ok: boolean; email: string; expires_at: string }>("/api/auth/signup/start", { email, password });
+}
+
+export async function resendSignup(email: string) {
+  return authRequest<{ ok: boolean; email: string; expires_at: string }>("/api/auth/signup/resend", { email });
+}
+
+export async function verifySignup(email: string, code: string) {
+  return authRequest<VerifyCodeResponse>("/api/auth/signup/verify", { email, code });
+}
+
 export async function verifyLoginCode(email: string, password: string, code: string) {
   return authRequest<VerifyCodeResponse>("/api/auth/verify-code", { email, password, code });
 }
@@ -227,6 +256,22 @@ export async function resetPassword(email: string, code: string, newPassword: st
   return authRequest<VerifyCodeResponse>("/api/auth/reset-password", {
     email,
     code,
+    new_password: newPassword,
+  });
+}
+
+export async function startRecovery(email: string) {
+  return authRequest<{ ok: boolean; email: string; expires_at: string }>("/api/auth/recovery/start", { email });
+}
+
+export async function verifyRecovery(email: string, code: string) {
+  return authRequest<RecoveryVerifyResponse>("/api/auth/recovery/verify", { email, code });
+}
+
+export async function completeRecovery(email: string, recoveryToken: string, newPassword: string) {
+  return authRequest<VerifyCodeResponse>("/api/auth/recovery/complete", {
+    email,
+    recovery_token: recoveryToken,
     new_password: newPassword,
   });
 }

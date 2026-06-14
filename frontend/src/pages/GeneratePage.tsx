@@ -935,7 +935,7 @@ export default function GeneratePage() {
             <ShieldCheck className="shrink-0 text-signal-amber" size={20} />
             <p className="min-w-0 break-words text-sm font-semibold text-amber-100">
               {readiness.reason === "missing_key"
-                ? t("generate.noApiKeyHint")
+                ? "严格 BYOK 已启用。请先在设置页保存你自己的 API Key，然后再开始生成。"
                 : readiness.reason === "missing_knowledge"
                   ? t("generate.missingKnowledgeHint")
                   : t("generate.missingTemplateHint")}
