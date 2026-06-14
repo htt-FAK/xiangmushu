@@ -1664,6 +1664,13 @@ async def template_analyze(
             except Exception:
                 logger.exception("Failed to store template analysis artifacts")
         return result
+    except HTTPException as e:
+        detail = e.detail
+        if isinstance(detail, dict):
+            message = str(detail.get("message") or detail.get("detail") or detail)
+        else:
+            message = str(detail)
+        return {"ok": False, "error": message}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -1688,8 +1695,13 @@ async def template_reanalyze(
             planner_model=selected_planner_model,
             force_refresh=True,
         )
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        detail = e.detail
+        if isinstance(detail, dict):
+            message = str(detail.get("message") or detail.get("detail") or detail)
+        else:
+            message = str(detail)
+        return {"ok": False, "error": message}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

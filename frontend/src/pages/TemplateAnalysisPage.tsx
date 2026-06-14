@@ -9,6 +9,7 @@ import {
   reanalyzeTemplate,
 } from "../api";
 import { Button, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
+import { normalizeErrorMessage } from "../errors";
 import { useI18n } from "../i18n";
 import type { AnalyzeResult, BillingRecord, FillTask, ModelOption, TemplateItem } from "../types";
 import { Link } from "react-router-dom";
@@ -119,7 +120,7 @@ export default function TemplateAnalysisPage() {
       setTemplates(next);
       if (!selectedTemplate && next[0]) setSelectedTemplate(next[0].name);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(normalizeErrorMessage(err, "模板列表加载失败，请稍后重试"));
     } finally {
       setListLoading(false);
     }
@@ -139,7 +140,7 @@ export default function TemplateAnalysisPage() {
         setPlannerModels(planners);
         setPlannerModel(planners.find((m) => m.recommended)?.model || planners[0]?.model || "");
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setError(normalizeErrorMessage(err, "模型选项加载失败，请稍后重试")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -168,7 +169,7 @@ export default function TemplateAnalysisPage() {
       applyResult(await analyzeTemplate(file, visionModel, plannerModel));
       await refreshTemplates();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(normalizeErrorMessage(err, t("template.analyze")));
     } finally {
       setLoading(false);
     }
@@ -184,7 +185,7 @@ export default function TemplateAnalysisPage() {
       applyResult(await reanalyzeTemplate(template, visionModel, plannerModel));
       await refreshTemplates();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(normalizeErrorMessage(err, t("template.analyze")));
     } finally {
       setLoading(false);
     }
@@ -201,7 +202,7 @@ export default function TemplateAnalysisPage() {
       }
       await refreshTemplates();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(normalizeErrorMessage(err, "模板删除失败，请稍后重试"));
     } finally {
       setDeleting("");
     }
