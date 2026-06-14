@@ -17,26 +17,7 @@ import type {
 } from "./types";
 import { apiUrl } from "./apiBase";
 import { buildAuthHeaders } from "./auth";
-
-function parseErrorMessage(raw: string, fallback: string): string {
-  let message = raw || fallback;
-  try {
-    const parsed = JSON.parse(raw) as {
-      message?: string;
-      detail?: string | { reason?: string; message?: string };
-    };
-    if (typeof parsed.detail === "string") {
-      message = parsed.detail;
-    } else if (parsed.detail?.message) {
-      message = parsed.detail.message;
-    } else if (parsed.message) {
-      message = parsed.message;
-    }
-  } catch {
-    // Keep the raw response when the server did not return JSON.
-  }
-  return message;
-}
+import { parseApiErrorMessage } from "./errors";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
@@ -52,11 +33,11 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     if (!currentPath.startsWith("/auth")) {
       window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
     }
-    throw new Error("Session expired");
+    throw new Error("登录已过期，请重新登录");
   }
   if (!response.ok) {
     const raw = await response.text();
-    const message = parseErrorMessage(raw, `HTTP ${response.status}`);
+    const message = parseApiErrorMessage(raw, `HTTP ${response.status}`);
     throw new Error(message);
   }
   return (await response.json()) as T;
@@ -76,7 +57,7 @@ async function requestJsonAllowError<T>(path: string, init?: RequestInit): Promi
     if (!currentPath.startsWith("/auth")) {
       window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
     }
-    throw new Error("Session expired");
+    throw new Error("登录已过期，请重新登录");
   }
   const text = await response.text();
   if (!text) return {} as T;
@@ -238,7 +219,7 @@ export async function handleDownload(path: string) {
   const response = await fetch(apiUrl(path), {
     headers: buildAuthHeaders(),
   });
-  if (!response.ok) throw new Error("Download failed");
+  if (!response.ok) throw new Error("下载失败，请稍后重试");
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -275,7 +256,7 @@ export async function streamGenerate(
   });
   if (!response.ok || !response.body) {
     const message = await response.text();
-    throw new Error(parseErrorMessage(message, `HTTP ${response.status}`));
+    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
   }
 
   const reader = response.body.getReader();
@@ -307,7 +288,7 @@ async function streamSession(path: string, onEvent: (event: GenerateEvent) => vo
   });
   if (!response.ok || !response.body) {
     const message = await response.text();
-    throw new Error(parseErrorMessage(message, `HTTP ${response.status}`));
+    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
   }
 
   const reader = response.body.getReader();

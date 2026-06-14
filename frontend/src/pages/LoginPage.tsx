@@ -14,6 +14,7 @@ import {
   type AccountState,
 } from "../auth";
 import { Button, ErrorBanner, Field, Input } from "../components/ui";
+import { normalizeErrorMessage } from "../errors";
 import { useI18n } from "../i18n";
 import { clsx } from "../utils";
 
@@ -49,18 +50,6 @@ function stepPath(step: AuthStep): string {
     default:
       return "/auth";
   }
-}
-
-function parseAuthError(value: unknown, fallback: string): string {
-  if (!(value instanceof Error)) return fallback;
-  try {
-    const parsed = JSON.parse(value.message) as { detail?: string | { message?: string } };
-    if (typeof parsed.detail === "string") return parsed.detail;
-    if (parsed.detail?.message) return parsed.detail.message;
-  } catch {
-    // Plain text error.
-  }
-  return value.message || fallback;
 }
 
 export default function LoginPage() {
@@ -124,7 +113,7 @@ export default function LoginPage() {
         go("signup");
       }
     } catch (err) {
-      setError(parseAuthError(err, t("login.sendError")));
+      setError(normalizeErrorMessage(err, t("login.sendError")));
     } finally {
       setLoading(false);
     }
@@ -139,7 +128,7 @@ export default function LoginPage() {
       auth.setToken(result.access_token);
       navigate(next, { replace: true });
     } catch (err) {
-      setError(parseAuthError(err, t("login.verifyError")));
+      setError(normalizeErrorMessage(err, t("login.verifyError")));
     } finally {
       setLoading(false);
     }
@@ -155,7 +144,7 @@ export default function LoginPage() {
       startCooldown();
       go("signupVerify");
     } catch (err) {
-      setError(parseAuthError(err, t("login.sendError")));
+      setError(normalizeErrorMessage(err, t("login.sendError")));
     } finally {
       setLoading(false);
     }
@@ -170,7 +159,7 @@ export default function LoginPage() {
       auth.setToken(result.access_token);
       navigate(next, { replace: true });
     } catch (err) {
-      setError(parseAuthError(err, t("login.verifyError")));
+      setError(normalizeErrorMessage(err, t("login.verifyError")));
     } finally {
       setLoading(false);
     }
@@ -187,7 +176,7 @@ export default function LoginPage() {
       startCooldown();
       setResendMsg(t("login.resendSuccess"));
     } catch (err) {
-      setError(parseAuthError(err, t("login.resendFailed")));
+      setError(normalizeErrorMessage(err, t("login.resendFailed")));
     } finally {
       setLoading(false);
     }
@@ -203,7 +192,7 @@ export default function LoginPage() {
       startCooldown();
       go("recoveryVerify");
     } catch (err) {
-      setError(parseAuthError(err, t("login.sendError")));
+      setError(normalizeErrorMessage(err, t("login.sendError")));
     } finally {
       setLoading(false);
     }
@@ -218,7 +207,7 @@ export default function LoginPage() {
       setRecoveryToken(result.recovery_token);
       go("recoveryReset");
     } catch (err) {
-      setError(parseAuthError(err, t("login.verifyError")));
+      setError(normalizeErrorMessage(err, t("login.verifyError")));
     } finally {
       setLoading(false);
     }
@@ -233,7 +222,7 @@ export default function LoginPage() {
       auth.setToken(result.access_token);
       navigate(next, { replace: true });
     } catch (err) {
-      setError(parseAuthError(err, t("login.verifyError")));
+      setError(normalizeErrorMessage(err, t("login.verifyError")));
     } finally {
       setLoading(false);
     }

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { apiUrl } from "./apiBase";
+import { parseApiErrorMessage } from "./errors";
 
 const TOKEN_KEY = "xiangmushu.auth.token";
 
@@ -215,8 +216,8 @@ async function authRequest<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `HTTP ${response.status}`);
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${response.status}`));
   }
   return (await response.json()) as T;
 }
