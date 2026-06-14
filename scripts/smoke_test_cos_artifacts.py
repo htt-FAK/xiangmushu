@@ -12,6 +12,24 @@ if str(ROOT) not in sys.path:
 
 import config
 from core.artifacts import cos_presigned_download_url, materialize_artifact, put_file
+from core.db import mysql_enabled, mysql_transaction
+
+
+def _owner_user_id() -> int:
+    explicit = os.getenv("COS_SMOKE_OWNER_USER_ID", "").strip()
+    if explicit:
+        return int(explicit)
+    if not mysql_enabled():
+        return 0
+    with mysql_transaction() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users ORDER BY id LIMIT 1")
+            row = cur.fetchone()
+    if not row:
+        raise SystemExit(
+            "No users found in MySQL. Set COS_SMOKE_OWNER_USER_ID to an existing users.id."
+        )
+    return int(row["id"])
 
 
 def main() -> int:
@@ -28,7 +46,7 @@ def main() -> int:
     try:
         artifact = put_file(
             source_path,
-            owner_user_id=0,
+            owner_user_id=_owner_user_id(),
             artifact_type="smoke_test",
             original_filename="cos-smoke-test.txt",
             content_type="text/plain",
