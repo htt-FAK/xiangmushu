@@ -38,7 +38,7 @@ const EXACT_MESSAGE_TRANSLATIONS: Record<string, string> = {
 };
 
 function translateMessage(message: string, reason?: string): string {
-  const trimmed = message.trim();
+  const trimmed = message.trim().replace(/^\d{3}:\s*/, "");
   if (EXACT_MESSAGE_TRANSLATIONS[trimmed]) return EXACT_MESSAGE_TRANSLATIONS[trimmed];
   if (reason === "invalid_password" && /email or password/i.test(trimmed)) {
     return "邮箱或密码不正确";

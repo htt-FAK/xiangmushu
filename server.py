@@ -518,7 +518,7 @@ def _require_user_api_key(current_user: User | int) -> str:
     if not user_api_key:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Strict BYOK is enabled. Please save your own API Key in Settings before analyzing templates or generating content.",
+            detail="请先在设置页保存你自己的 API Key，然后再进行模板分析或内容生成。",
         )
     return user_api_key
 

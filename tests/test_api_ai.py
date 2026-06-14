@@ -60,7 +60,10 @@ def test_api_ai_scenarios():
     )
     assert res.status_code == 200
     data = res.json()
-    byok_blocked = data.get("ok") is False and "Strict BYOK is enabled" in str(data.get("error", ""))
+    error_text = str(data.get("error", ""))
+    byok_blocked = data.get("ok") is False and (
+        "Strict BYOK is enabled" in error_text or "保存你自己的 API Key" in error_text
+    )
     if not byok_blocked:
         assert data["ok"] is True
         assert data["count"] >= 1
