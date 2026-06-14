@@ -94,6 +94,18 @@ def _cos_object_key(object_key: str) -> str:
     return f"{prefix.rstrip('/')}/{cleaned}"
 
 
+def _cos_endpoint() -> str:
+    endpoint = (config.COS_ENDPOINT or "").strip()
+    if not endpoint:
+        return ""
+    endpoint = endpoint.replace("https://", "").replace("http://", "").strip("/")
+    bucket = _cos_bucket_name()
+    bucket_prefix = f"{bucket}."
+    if endpoint.startswith(bucket_prefix):
+        endpoint = endpoint[len(bucket_prefix) :]
+    return endpoint
+
+
 def _cos_client():
     try:
         from qcloud_cos import CosConfig, CosS3Client
@@ -118,9 +130,9 @@ def _cos_client():
         "SecretKey": secret_key,
         "Scheme": "https",
     }
-    endpoint = (config.COS_ENDPOINT or "").strip()
+    endpoint = _cos_endpoint()
     if endpoint:
-        kwargs["Endpoint"] = endpoint.replace("https://", "").replace("http://", "")
+        kwargs["Endpoint"] = endpoint
     return CosS3Client(CosConfig(**kwargs))
 
 

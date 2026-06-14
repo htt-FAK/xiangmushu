@@ -12,6 +12,7 @@ import server
 from core.artifacts import (
     ArtifactNotFoundError,
     ArtifactObject,
+    _cos_endpoint,
     cos_presigned_download_url,
     local_file_path,
     materialize_artifact,
@@ -176,6 +177,13 @@ def test_tencent_cos_storage_roundtrip_and_signed_url(tmp_path, monkeypatch):
     signed = cos_presigned_download_url(artifact, expires=123)
     assert "bucket-123" in signed
     assert artifact.object_key in signed
+
+
+def test_tencent_cos_endpoint_accepts_bucket_domain(monkeypatch):
+    monkeypatch.setattr(config, "COS_BUCKET", "room-1384188484")
+    monkeypatch.setattr(config, "COS_ENDPOINT", "https://room-1384188484.cos.ap-guangzhou.myqcloud.com")
+
+    assert _cos_endpoint() == "cos.ap-guangzhou.myqcloud.com"
 
 
 def test_legacy_download_compatibility_and_path_traversal(tmp_path, monkeypatch):
