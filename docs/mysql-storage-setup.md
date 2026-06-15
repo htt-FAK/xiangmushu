@@ -27,6 +27,20 @@ $env:PERSISTENCE_MODE="mysql"
 python scripts/mysql_migrate.py --migrate
 ```
 
+Preview supported model-catalog backfill:
+
+```powershell
+$env:PERSISTENCE_MODE="mysql"
+python scripts/seed_model_catalog.py --dry-run --json
+```
+
+Apply supported model-catalog backfill:
+
+```powershell
+$env:PERSISTENCE_MODE="mysql"
+python scripts/seed_model_catalog.py --apply
+```
+
 The FastAPI startup path also calls `ensure_configured_database()`. When `MYSQL_AUTO_MIGRATE=1`, pending migrations are applied before the app serves requests.
 
 ## Storage Boundary

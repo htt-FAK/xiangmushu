@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from typing import Any
 
 import config
 from core.db import mysql_enabled, mysql_transaction
+
+LOG = logging.getLogger(__name__)
 
 
 ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -53,6 +57,38 @@ ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
     },
 }
 
+UI_ROLE_KEYS: tuple[str, ...] = (
+    "main_writer",
+    "fast_writer",
+    "web_search",
+    "vision_layout",
+    "template_planner",
+    "audit_text",
+    "embedding",
+)
+
+ROLE_LEGACY_SEED_MODULES: dict[str, str] = {
+    "main_writer": "generation",
+    "fast_writer": "lightweight",
+    "web_search": "search",
+    "vision_layout": "vision",
+    "template_planner": "lightweight",
+    "audit_text": "audit",
+}
+
+KNOWN_MODEL_DISPLAY_NAMES: dict[str, str] = {
+    "qwen3.7-plus": "Qwen 3.7 Plus",
+    "qwen3.7-max": "Qwen 3.7 Max",
+    "qwen3.6-plus": "Qwen 3.6 Plus",
+    "qwen3.6-flash": "Qwen 3.6 Flash",
+    "qwen3.6-35b-a3b": "Qwen 3.6 35B A3B",
+    "qwen3.5-plus": "Qwen 3.5 Plus",
+    "qwen3.5-flash": "Qwen 3.5 Flash",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "text-embedding-v4": "Text Embedding V4",
+}
+
 
 def _json_value(raw: Any) -> Any:
     if raw in (None, "", b""):
@@ -79,6 +115,156 @@ def _role_config_from_legacy(role: str) -> dict[str, Any]:
 
 def _legacy_model_options() -> dict[str, dict[str, Any]]:
     return {str(key): dict(value) for key, value in getattr(config, "USER_MODEL_OPTIONS", {}).items()}
+
+
+def _flatten_option_models(cfg: dict[str, Any] | None) -> list[str]:
+    items = dict(cfg or {})
+    models: list[str] = []
+    seen: set[str] = set()
+    for group in (items.get("tiers") or {}).values():
+        for item in group:
+            model = str((item or {}).get("model") or "").strip()
+            if not model or model in seen:
+                continue
+            seen.add(model)
+            models.append(model)
+    for item in items.get("options") or []:
+        model = str((item or {}).get("model") or "").strip()
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        models.append(model)
+    return models
+
+
+def _provider_code_for_seed_model(model: str) -> str | None:
+    value = str(model or "").strip().lower()
+    if not value:
+        return None
+    if value.startswith("deepseek-"):
+        return "deepseek"
+    if value.startswith("qwen") or value.startswith("text-embedding"):
+        return "dashscope"
+    return None
+
+
+def _title_token(token: str) -> str:
+    if not token:
+        return token
+    if token.lower() in {"v4", "v3", "a3b"}:
+        return token.upper()
+    if re.fullmatch(r"\d+b", token.lower()):
+        return token.upper()
+    if token.lower().startswith("qwen"):
+        suffix = token[4:]
+        return f"Qwen {suffix}".strip()
+    if token.lower() == "deepseek":
+        return "DeepSeek"
+    return token.capitalize()
+
+
+def model_display_name(model: str) -> str:
+    value = str(model or "").strip()
+    if not value:
+        return ""
+    known = KNOWN_MODEL_DISPLAY_NAMES.get(value.lower())
+    if known:
+        return known
+    parts = re.split(r"[-_]+", value)
+    titled = [_title_token(part) for part in parts if part]
+    return " ".join(titled) or value
+
+
+def role_seed_model_ids(role: str) -> list[str]:
+    role_key = str(role or "").strip()
+    direct = _flatten_option_models(_legacy_model_options().get(role_key))
+    if direct:
+        models = list(direct)
+    else:
+        legacy_module = ROLE_LEGACY_SEED_MODULES.get(role_key, "")
+        models = _flatten_option_models(_legacy_model_options().get(legacy_module))
+    default_model = str((ROLE_DEFAULTS.get(role_key) or {}).get("default_model") or "").strip()
+    if default_model and default_model not in models:
+        models.append(default_model)
+    return models
+
+
+def _capabilities_for_seed_role(role: str) -> list[str]:
+    role_key = str(role or "").strip()
+    if role_key == "embedding":
+        return ["embedding"]
+    if role_key == "web_search":
+        return ["text", "search", "streaming"]
+    if role_key == "vision_layout":
+        return ["text", "vision"]
+    if role_key in {"main_writer", "fast_writer"}:
+        return ["text", "streaming"]
+    return ["text"]
+
+
+def catalog_seed_candidates() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for role in UI_ROLE_KEYS:
+        role_cfg = ROLE_DEFAULTS.get(role) or {}
+        role_config = dict(role_cfg.get("extra_body") or {})
+        for model in role_seed_model_ids(role):
+            provider_code = _provider_code_for_seed_model(model)
+            if provider_code is None:
+                continue
+            pricing = dict(getattr(config, "AI_MODEL_PRICING", {}).get(model) or {})
+            rows.append(
+                {
+                    "role": role,
+                    "provider_code": provider_code,
+                    "model": model,
+                    "display_name": model_display_name(model),
+                    "capabilities": _capabilities_for_seed_role(role),
+                    "input_price_per_1k": pricing.get("input"),
+                    "output_price_per_1k": pricing.get("output"),
+                    "context_window": None,
+                    "config": dict(role_config),
+                }
+            )
+    return rows
+
+
+def _known_role_keys() -> set[str]:
+    return set(ROLE_DEFAULTS) | {str(key) for key in getattr(config, "USER_MODEL_OPTIONS", {}).keys()}
+
+
+def _registry_warning(message: str, exc: Exception | None = None) -> str:
+    if exc is not None:
+        LOG.warning("%s: %s", message, exc)
+    return message
+
+
+def _legacy_model_options_with_metadata(warning: str) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for role, cfg in _legacy_model_options().items():
+        payload = dict(cfg)
+        payload.setdefault("label", _role_config_from_legacy(role).get("label") or role)
+        payload.setdefault("description", _role_config_from_legacy(role).get("description") or "")
+        payload["source"] = "legacy_fallback"
+        payload["warning"] = warning
+        result[role] = payload
+    for role, cfg in ROLE_DEFAULTS.items():
+        if role in result:
+            continue
+        result[role] = {
+            "label": cfg.get("label") or role,
+            "description": cfg.get("description") or "",
+            "options": [
+                {
+                    "model": cfg.get("default_model") or "",
+                    "label": cfg.get("default_model") or "",
+                    "provider_code": cfg.get("provider_code") or "dashscope",
+                    "recommended": True,
+                }
+            ],
+            "source": "legacy_fallback",
+            "warning": warning,
+        }
+    return result
 
 
 def registry_enabled() -> bool:
@@ -201,12 +387,22 @@ def available_models_for_role(role: str) -> list[dict[str, Any]]:
 def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str, Any]]:
     if not registry_enabled():
         return _legacy_model_options()
+    try:
+        catalog_rows = list_catalog_rows(include_disabled=False)
+    except Exception as exc:
+        warning = _registry_warning("Model registry is unavailable; falling back to legacy model options.", exc)
+        return _legacy_model_options_with_metadata(warning)
     result: dict[str, dict[str, Any]] = {}
     by_role: dict[str, list[dict[str, Any]]] = {}
-    for item in list_catalog_rows(include_disabled=False):
+    for item in catalog_rows:
         by_role.setdefault(item["role"], []).append(item)
 
-    saved = load_user_model_choices(user_id) if user_id is not None else {}
+    try:
+        saved = load_user_model_choices(user_id) if user_id is not None else {}
+        load_warning = ""
+    except Exception as exc:
+        saved = {}
+        load_warning = _registry_warning("Saved model selections could not be loaded from the registry.", exc)
     for role, cfg in ROLE_DEFAULTS.items():
         role_cfg = _role_config_from_legacy(role)
         models = by_role.get(role, [])
@@ -248,7 +444,10 @@ def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str
             "label": role_cfg["label"],
             "description": role_cfg["description"],
             "options": options,
+            "source": "registry",
         }
+        if load_warning:
+            result[role]["warning"] = load_warning
     return result
 
 
@@ -286,11 +485,24 @@ def load_user_model_choices(user_id: int | None) -> dict[str, str]:
 
 
 def sanitize_user_model_choices(choices: dict[str, str] | None) -> tuple[dict[str, str], dict[str, str]]:
-    raw = {str(k): str(v) for k, v in (choices or {}).items() if str(v or "").strip()}
+    known_roles = _known_role_keys()
+    raw = {
+        str(k): str(v)
+        for k, v in (choices or {}).items()
+        if str(k or "").strip() in known_roles and str(v or "").strip()
+    }
     if not registry_enabled():
         return raw, {}
+    try:
+        catalog_rows = list_catalog_rows(include_disabled=False)
+    except Exception as exc:
+        warning = _registry_warning(
+            "Model registry is unavailable; preserved selected models without validating availability.",
+            exc,
+        )
+        return raw, {role: warning for role in raw}
     available: dict[str, set[str]] = {}
-    for item in list_catalog_rows(include_disabled=False):
+    for item in catalog_rows:
         available.setdefault(str(item["role"]), set()).add(str(item["model"]))
     clean: dict[str, str] = {}
     warnings: dict[str, str] = {}
@@ -311,14 +523,25 @@ def save_user_model_choices(user_id: int, choices: dict[str, str] | None) -> tup
     clean, warnings = sanitize_user_model_choices(choices)
     if not registry_enabled():
         return clean, warnings
-    by_role = {item["role"]: item for item in list_catalog_rows(include_disabled=False)}
+    try:
+        catalog_rows = list_catalog_rows(include_disabled=False)
+    except Exception as exc:
+        warning = _registry_warning(
+            "Model registry is unavailable; saved selections only in JSON preferences.",
+            exc,
+        )
+        merged = dict(warnings)
+        for role in clean:
+            merged.setdefault(role, warning)
+        return clean, merged
+    by_role = {item["role"]: item for item in catalog_rows}
     with mysql_transaction() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM user_model_choices WHERE user_id = %s", (user_id,))
             for role, model in clean.items():
                 catalog = by_role.get(role)
                 if catalog is None or str(catalog["model"]) != model:
-                    for candidate in list_catalog_rows(include_disabled=False):
+                    for candidate in catalog_rows:
                         if candidate["role"] == role and candidate["model"] == model:
                             catalog = candidate
                             break
@@ -396,4 +619,3 @@ def validation_candidate_models(provider_code: str = "dashscope") -> list[str]:
         seen.add(model)
         models.append(model)
     return models
-
