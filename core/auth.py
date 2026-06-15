@@ -425,10 +425,19 @@ def get_user_preferences(user_id: int, db_path: str | None = None) -> dict:
         if language not in {"zh", "en"}:
             language = "zh"
         model_choices = _mysql_json(row.get("model_choices_json"))
-        registry_choices = load_user_model_choices(user_id)
-        if registry_choices:
-            model_choices = registry_choices
-        return {"language": language, "model_choices": model_choices}
+        warnings: dict[str, str] = {}
+        try:
+            registry_choices = load_user_model_choices(user_id)
+            if registry_choices:
+                model_choices = registry_choices
+        except Exception as exc:
+            logger.warning("Falling back to JSON-backed model choices for user %s: %s", user_id, exc)
+            warning = "Model registry is unavailable; showing the last saved preferences without live validation."
+            warnings = {role: warning for role in model_choices}
+        result = {"language": language, "model_choices": model_choices}
+        if warnings:
+            result["warnings"] = warnings
+        return result
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT preferred_language, model_choices FROM users WHERE id = ?",

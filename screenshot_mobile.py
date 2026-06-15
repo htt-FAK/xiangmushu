@@ -5,8 +5,7 @@ out_dir = os.path.join(os.getcwd(), "artifacts", "mobile_screenshots")
 os.makedirs(out_dir, exist_ok=True)
 
 SET_AUTH_JS = """() => {
-    localStorage.setItem("xiangmushu_token", "test-token-for-screenshot");
-    localStorage.setItem("xiangmushu_user", JSON.stringify({id: 1, email: "demo@example.com"}));
+    localStorage.setItem("xiangmushu.auth.token", "test-token-for-screenshot");
 }"""
 
 pages = [
@@ -27,7 +26,7 @@ with sync_playwright() as p:
     page = ctx.new_page()
 
     # Set auth token
-    page.goto("http://localhost:5173/login", wait_until="networkidle", timeout=15000)
+    page.goto("http://localhost:5173/auth", wait_until="networkidle", timeout=15000)
     page.evaluate(SET_AUTH_JS)
 
     for name, path in pages:

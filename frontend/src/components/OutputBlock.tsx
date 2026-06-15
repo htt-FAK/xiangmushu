@@ -27,6 +27,8 @@ export function OutputBlock({
   action,
   busy = false,
   busyLabel = "refreshing",
+  preview = false,
+  previewClassName,
 }: {
   block: OutputBlockData;
   fallbackName: string;
@@ -40,7 +42,11 @@ export function OutputBlock({
   action?: ReactNode;
   busy?: boolean;
   busyLabel?: string;
+  preview?: boolean;
+  previewClassName?: string;
 }) {
+  const visibleEvidence = preview ? block.evidenceRefs?.slice(0, 3) : block.evidenceRefs;
+  const visibleIssues = preview ? block.auditIssues?.slice(0, 2) : block.auditIssues;
   return (
     <article
       className={clsx(
@@ -48,6 +54,7 @@ export function OutputBlock({
         busy
           ? "border-signal-cyan/50 shadow-[0_0_0_1px_rgba(54,242,230,0.12),0_18px_52px_rgba(54,242,230,0.10)]"
           : "border-white/10",
+        previewClassName,
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
@@ -86,9 +93,9 @@ export function OutputBlock({
         {action && <div className="shrink-0">{action}</div>}
       </div>
 
-      {block.evidenceRefs && block.evidenceRefs.length > 0 && (
+      {visibleEvidence && visibleEvidence.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {block.evidenceRefs.slice(0, 5).map((item) => (
+          {visibleEvidence.map((item) => (
             <span
               key={item}
               className="max-w-full break-all border border-signal-cyan/20 bg-signal-cyan/10 px-2 py-1 text-[11px] text-cyan-100 md:text-xs"
@@ -99,21 +106,26 @@ export function OutputBlock({
         </div>
       )}
 
-      {block.auditIssues && block.auditIssues.length > 0 && (
+      {visibleIssues && visibleIssues.length > 0 && (
         <div className="mt-3 min-w-0 border border-signal-amber/30 bg-signal-amber/10 p-3 text-sm text-amber-100">
           <p className="font-semibold">
             {auditResultLabel}: {block.auditVerdict || auditFallbackLabel}
             {block.revised ? revisedLabel : ""}
           </p>
           <div className="mt-2 space-y-1">
-            {block.auditIssues.slice(0, 5).map((issue) => (
+            {visibleIssues.map((issue) => (
               <p className="break-words" key={issue}>{issue}</p>
             ))}
           </div>
         </div>
       )}
 
-      <pre className="mt-3 max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm leading-7 text-slate-300">
+      <pre
+        className={clsx(
+          "mt-3 max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm leading-7 text-slate-300",
+          preview ? "max-h-36 overflow-y-auto" : "",
+        )}
+      >
         {block.text || waitingText}
       </pre>
     </article>

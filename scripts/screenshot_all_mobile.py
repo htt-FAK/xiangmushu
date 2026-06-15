@@ -32,7 +32,7 @@ with open(state_file, "w") as f:
 print(f"Storage state written to {state_file}")
 
 pages = [
-    ("login", "/login"),
+    ("auth", "/auth"),
     ("home", "/"),
     ("generate_simple", "/generate"),
     ("knowledge", "/knowledge"),

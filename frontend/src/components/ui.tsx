@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { clsx } from "../utils";
 
@@ -139,6 +140,51 @@ export function ErrorBanner({ message }: { message: string }) {
   return (
     <div className="mb-5 border border-signal-rose/40 bg-signal-rose/10 px-4 py-3 text-sm text-rose-100">
       {message}
+    </div>
+  );
+}
+
+export function DetailOverlay({
+  title,
+  subtitle,
+  icon,
+  onClose,
+  children,
+  widthClass = "max-w-4xl",
+}: {
+  title: string;
+  subtitle?: string;
+  icon?: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  widthClass?: string;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-night-950/95 backdrop-blur">
+      <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 md:px-6">
+        <div className="flex min-w-0 items-start gap-3">
+          {icon ? (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/10 text-signal-cyan">
+              {icon}
+            </div>
+          ) : null}
+          <div className="min-w-0">
+            <h3 className="break-words font-display text-lg font-semibold text-white">{title}</h3>
+            {subtitle ? <p className="mt-1 break-words text-sm text-slate-400">{subtitle}</p> : null}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
+          aria-label="Close"
+        >
+          <X size={18} />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
+        <div className={clsx("mx-auto w-full space-y-4", widthClass)}>{children}</div>
+      </div>
     </div>
   );
 }

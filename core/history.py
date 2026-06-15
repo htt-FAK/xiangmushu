@@ -254,6 +254,49 @@ def list_history_articles(user_id: int, *, status: str = "all", query: str = "")
     return [_article_from_row(row) for row in rows]
 
 
+def history_availability(*, available: bool, source: str, warning: str = "") -> dict[str, Any]:
+    payload = {
+        "available": bool(available),
+        "source": source,
+    }
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
+def history_articles_payload(user_id: int, *, status: str = "all", query: str = "") -> dict[str, Any]:
+    if not mysql_enabled():
+        articles: list[dict[str, Any]] = []
+        return {
+            "articles": articles,
+            "summary": history_summary(articles),
+            "availability": history_availability(
+                available=False,
+                source="unavailable",
+                warning="History storage is unavailable in the current persistence mode.",
+            ),
+        }
+    try:
+        articles = list_history_articles(user_id, status=status, query=query)
+    except Exception as exc:
+        LOG.warning("History query failed for user %s: %s", user_id, exc)
+        articles = []
+        return {
+            "articles": articles,
+            "summary": history_summary(articles),
+            "availability": history_availability(
+                available=False,
+                source="unavailable",
+                warning="History records are temporarily unavailable. Please try again later.",
+            ),
+        }
+    return {
+        "articles": articles,
+        "summary": history_summary(articles),
+        "availability": history_availability(available=True, source="backend"),
+    }
+
+
 def history_summary(articles: list[dict[str, Any]]) -> dict[str, Any]:
     input_tokens = sum(int(item.get("inputTokens") or 0) for item in articles)
     output_tokens = sum(int(item.get("outputTokens") or 0) for item in articles)

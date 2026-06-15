@@ -10,6 +10,30 @@ const BAILIAN_KEY_URL = "https://bailian.console.aliyun.com/#/key";
 const MODEL_ROLE_ORDER = ["main_writer", "web_search", "fast_writer", "vision_layout", "template_planner", "audit_text"];
 type ApiKeyStage = "idle" | "validating" | "saving" | "saved" | "failed";
 
+function flattenOptions(config?: ModelModuleConfig): ModelOption[] {
+  const seen = new Set<string>();
+  const out: ModelOption[] = [];
+  for (const group of Object.values(config?.tiers ?? {})) {
+    for (const item of group) {
+      if (!item.model || seen.has(item.model)) continue;
+      seen.add(item.model);
+      out.push(item);
+    }
+  }
+  for (const item of config?.options ?? []) {
+    if (!item.model || seen.has(item.model)) continue;
+    seen.add(item.model);
+    out.push(item);
+  }
+  return out;
+}
+
+function preferredModel(config?: ModelModuleConfig, current = "") {
+  const options = flattenOptions(config);
+  if (current && options.some((item) => item.model === current)) return current;
+  return options.find((item) => item.recommended)?.model || options[0]?.model || current;
+}
+
 // ---------------------------------------------------------------------------
 // Model Selector Component
 // ---------------------------------------------------------------------------
@@ -185,16 +209,6 @@ export default function SettingsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Default models per role (matches backend role router defaults)
-  const DEFAULT_MODELS: Record<string, string> = useMemo(() => ({
-    main_writer: "qwen3.7-plus",
-    web_search: "qwen3.7-plus",
-    fast_writer: "qwen3.6-flash",
-    vision_layout: "qwen3.7-plus",
-    template_planner: "qwen3.6-flash",
-    audit_text: "qwen3.6-flash",
-  }), []);
-
   const visibleModelOptions = useMemo(() => {
     if (!modelOptions) return [];
     return MODEL_ROLE_ORDER
@@ -207,24 +221,23 @@ export default function SettingsPage() {
     Promise.all([fetchModelOptions(), fetchUserPreferences()])
       .then(([options, prefs]) => {
         setModelOptions(options);
-        // Merge saved choices with defaults for modules without saved choice
         const saved = prefs.model_choices ?? {};
         const merged: Record<string, string> = { ...saved };
-        const warnings: Record<string, string> = {};
+        const warnings: Record<string, string> = { ...(prefs.warnings ?? {}) };
         for (const key of MODEL_ROLE_ORDER) {
           const cfg = options[key];
-          const availableModels = [
-            ...(cfg?.options ?? []),
-            ...Object.values(cfg?.tiers ?? {}).flat(),
-          ].map((item) => item.model);
+          const availableModels = flattenOptions(cfg).map((item) => item.model);
           const savedChoice = merged[key];
           if (savedChoice && availableModels.length > 0 && !availableModels.includes(savedChoice)) {
-            const fallbackModel = availableModels[0] ?? DEFAULT_MODELS[key] ?? "";
+            const fallbackModel = preferredModel(cfg, savedChoice);
             merged[key] = fallbackModel;
             warnings[key] = cfg?.selected_unavailable?.reason ?? `${savedChoice} unavailable, switched to ${fallbackModel}`;
           }
           if (!merged[key]) {
-            merged[key] = DEFAULT_MODELS[key] || "";
+            merged[key] = preferredModel(cfg);
+          }
+          if (cfg?.warning) {
+            warnings[key] = warnings[key] || cfg.warning;
           }
         }
         setModelChoices(merged);
@@ -243,14 +256,18 @@ export default function SettingsPage() {
         delete next[moduleKey];
         return next;
       });
-      setModelChoices((prev) => ({ ...prev, [moduleKey]: model }));
-      // Debounced save
+      let nextChoices: Record<string, string> = {};
+      setModelChoices((prev) => {
+        nextChoices = { ...prev, [moduleKey]: model };
+        return nextChoices;
+      });
       if (modelSaveTimer.current) clearTimeout(modelSaveTimer.current);
       setModelSaving(true);
       modelSaveTimer.current = setTimeout(() => {
-        updateUserPreferences({ model_choices: { ...modelChoices, [moduleKey]: model } })
+        updateUserPreferences({ model_choices: nextChoices })
           .then((updated) => {
-            setModelChoices(updated.model_choices ?? { ...modelChoices, [moduleKey]: model });
+            setModelChoices(updated.model_choices ?? nextChoices);
+            setModelWarnings((prev) => ({ ...prev, ...(updated.warnings ?? {}) }));
           })
           .catch((err: unknown) => {
             console.error("Failed to save model choice", err);
@@ -258,7 +275,7 @@ export default function SettingsPage() {
           .finally(() => setModelSaving(false));
       }, 400);
     },
-    [modelChoices],
+    [],
   );
 
   const statusText = useMemo(() => {
@@ -429,6 +446,9 @@ export default function SettingsPage() {
                   onSelect={handleModelSelect}
                   saving={modelSaving}
                 />
+                {cfg.source && cfg.source !== "registry" ? (
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{cfg.source}</p>
+                ) : null}
                 {modelWarnings[key] ? (
                   <p className="text-xs text-signal-amber">{modelWarnings[key]}</p>
                 ) : null}

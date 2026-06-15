@@ -5,12 +5,16 @@ import type {
   BillingSummary,
   GenerateEvent,
   GenerateParams,
+  HistoryArticlesResponse,
   GenerationSessionEnvelope,
   GenerationSessionStartResult,
   HistoryArticle,
   KnowledgeBase,
   KnowledgeSourceStats,
   ModelOptionsMap,
+  TemplateAnalysisEvent,
+  TemplateAnalysisSessionEnvelope,
+  TemplateAnalysisSessionStartResult,
   TemplateItem,
   UploadResult,
   UserPreferences,
@@ -99,6 +103,48 @@ export async function deleteTemplate(template: string): Promise<{ ok: boolean; t
     method: "POST",
     body: form,
   });
+}
+
+export async function startTemplateAnalysisSession(
+  file: File,
+  visionModel?: string,
+  plannerModel?: string,
+  forceRefresh = true,
+): Promise<TemplateAnalysisSessionStartResult> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("vision_model", visionModel ?? "");
+  form.append("planner_model", plannerModel ?? "");
+  form.append("force_refresh", String(forceRefresh));
+  return requestJsonAllowError<TemplateAnalysisSessionStartResult>("/api/template/analyze/sessions", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function startTemplateReanalysisSession(
+  template: string,
+  visionModel?: string,
+  plannerModel?: string,
+  forceRefresh = true,
+): Promise<TemplateAnalysisSessionStartResult> {
+  const form = new FormData();
+  form.append("template", template);
+  form.append("vision_model", visionModel ?? "");
+  form.append("planner_model", plannerModel ?? "");
+  form.append("force_refresh", String(forceRefresh));
+  return requestJsonAllowError<TemplateAnalysisSessionStartResult>("/api/template/reanalyze/sessions", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function fetchActiveTemplateAnalysisSession(): Promise<TemplateAnalysisSessionEnvelope> {
+  return requestJson<TemplateAnalysisSessionEnvelope>("/api/template/analyze/sessions/active");
+}
+
+export async function fetchTemplateAnalysisSession(sessionId: string): Promise<TemplateAnalysisSessionEnvelope> {
+  return requestJson<TemplateAnalysisSessionEnvelope>(`/api/template/analyze/sessions/${encodeURIComponent(sessionId)}`);
 }
 
 export async function fetchKnowledgeBases(): Promise<KnowledgeBase[]> {
@@ -206,9 +252,15 @@ export async function fetchBillingSummary(): Promise<BillingSummary> {
   return requestJson<BillingSummary>("/api/billing/summary");
 }
 
-export async function fetchHistoryArticles(): Promise<HistoryArticle[]> {
-  const data = await requestJson<{ articles: HistoryArticle[] }>("/api/history/articles");
-  return data.articles ?? [];
+export async function fetchHistoryArticles(params?: {
+  query?: string;
+  status?: "all" | "completed" | "review" | "failed";
+}): Promise<HistoryArticlesResponse> {
+  const search = new URLSearchParams();
+  if (params?.query) search.set("query", params.query);
+  if (params?.status) search.set("status_filter", params.status);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return requestJson<HistoryArticlesResponse>(`/api/history/articles${suffix}`);
 }
 
 export function downloadUrl(path: string) {
@@ -310,6 +362,40 @@ async function streamSession(path: string, onEvent: (event: GenerateEvent) => vo
   }
 }
 
+async function streamTemplateSession(
+  path: string,
+  onEvent: (event: TemplateAnalysisEvent) => void,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(apiUrl(path), {
+    method: "GET",
+    headers: buildAuthHeaders(),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    const message = await response.text();
+    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const eventText of events) {
+      const line = eventText.split("\n").find((item) => item.startsWith("data:"));
+      if (!line) continue;
+      onEvent(JSON.parse(line.slice(5).trim()) as TemplateAnalysisEvent);
+    }
+  }
+}
+
 export async function startGenerateSession(params: GenerateParams): Promise<GenerationSessionStartResult> {
   const form = new FormData();
   form.append("slug", params.slug);
@@ -344,4 +430,17 @@ export async function streamGenerationSession(
   afterSeq = 0,
 ) {
   return streamSession(`/api/generate/sessions/${encodeURIComponent(sessionId)}/stream?after_seq=${afterSeq}`, onEvent, signal);
+}
+
+export async function streamTemplateAnalysisSession(
+  sessionId: string,
+  onEvent: (event: TemplateAnalysisEvent) => void,
+  signal?: AbortSignal,
+  afterSeq = 0,
+) {
+  return streamTemplateSession(
+    `/api/template/analyze/sessions/${encodeURIComponent(sessionId)}/stream?after_seq=${afterSeq}`,
+    onEvent,
+    signal,
+  );
 }

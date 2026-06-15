@@ -36,7 +36,7 @@ import {
   updateUserPreferences,
 } from "../api";
 import type { OutputBlockData } from "../components/OutputBlock";
-import { Button, EmptyState, ErrorBanner, Input, Panel, Stat } from "../components/ui";
+import { Button, DetailOverlay, EmptyState, ErrorBanner, Input, Panel, Stat } from "../components/ui";
 import { useI18n } from "../i18n";
 import type {
   GenerateEvent,
@@ -815,7 +815,7 @@ export default function GeneratePage() {
     }
   }
 
-  function renderOutputBlocks(actionsEnabled: boolean) {
+  function renderOutputBlocks(actionsEnabled: boolean, preview = false) {
     return outputs.map((block, index) => (
       <Suspense
         key={`${block.chapter}-${index}`}
@@ -833,6 +833,8 @@ export default function GeneratePage() {
           auditFallbackLabel={t("generate.auditIssueFallback")}
           busy={regeneratingIndex === index || (running && block.chapter === currentTask)}
           busyLabel={t("generate.regenerating")}
+          preview={preview}
+          previewClassName={preview ? "shadow-none" : undefined}
           action={
             actionsEnabled ? (
               <Button
@@ -1269,8 +1271,8 @@ export default function GeneratePage() {
                     {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
                   </Button>
                 </div>
-                <div className="max-h-[620px] space-y-3 overflow-y-auto pr-1">
-                  {renderOutputBlocks(false)}
+                <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                  {renderOutputBlocks(false, true)}
                 </div>
               </div>
             )}
@@ -1397,27 +1399,14 @@ export default function GeneratePage() {
       </div>
 
       {traceOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-night-950/95 backdrop-blur">
-          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3 md:px-6">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/10 text-signal-cyan">
-                <MessageSquareText size={18} />
-              </div>
-              <h3 className="font-display text-lg font-semibold text-white">{t("generate.traceTitle")}</h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => setTraceOpen(false)}
-              className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
-              aria-label={t("generate.close")}
-            >
-              <span className="text-xl leading-none">&times;</span>
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
-            <div className="mx-auto max-w-4xl space-y-4">{renderOutputBlocks(true)}</div>
-          </div>
-        </div>
+        <DetailOverlay
+          title={t("generate.traceTitle")}
+          subtitle={running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
+          icon={<MessageSquareText size={18} />}
+          onClose={() => setTraceOpen(false)}
+        >
+          {renderOutputBlocks(true)}
+        </DetailOverlay>
       )}
 
       {confirmOpen && (

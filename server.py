@@ -101,8 +101,13 @@ from core.generation_sessions import (
     GenerationSession,
     session_manager,
 )
+from core.template_analysis_sessions import (
+    ActiveTemplateAnalysisExistsError,
+    TemplateAnalysisSession,
+    template_analysis_session_manager,
+)
 from core.db import ensure_configured_database, mysql_enabled, mysql_transaction
-from core.history import history_summary, list_history_articles
+from core.history import history_articles_payload, list_history_articles
 from core.provider_errors import classify_provider_error, validation_http_status
 from core.provider_registry import model_options_map_for_user
 
@@ -625,6 +630,149 @@ def _analyze_template_now(
         "vision_status": vision_status,
         "billing": _billing_total(billing_records),
     }
+
+
+def _build_template_analysis_params(
+    template: str,
+    vision_model: str,
+    planner_model: str,
+    force_refresh: bool,
+) -> dict[str, object]:
+    return {
+        "template": template,
+        "vision_model": vision_model,
+        "planner_model": planner_model,
+        "force_refresh": force_refresh,
+    }
+
+
+def _serialize_template_analysis_session(session: TemplateAnalysisSession | None) -> dict[str, object]:
+    return {"session": session.snapshot() if session is not None else None}
+
+
+def _ensure_template_analysis_session_owned(session_id: str, current_user: User) -> TemplateAnalysisSession:
+    session = template_analysis_session_manager.get_session_for_user(current_user.id, session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template analysis session not found")
+    return session
+
+
+def _run_template_analysis_session(
+    session_id: str,
+    current_user: User,
+    template_path: str,
+    *,
+    vision_model: str,
+    planner_model: str,
+    force_refresh: bool,
+) -> None:
+    def emit(event: dict[str, object]) -> None:
+        template_analysis_session_manager.append_event(session_id, event)
+
+    emit({"type": "status", "phase": "prepare", "message": f"Preparing template {os.path.basename(template_path)}"})
+    try:
+        if force_refresh:
+            _clear_template_caches(template_path)
+        client = _client_for_user_template_analysis(current_user.id)
+
+        emit({"type": "status", "phase": "vision", "message": f"Running template vision with {vision_model}"})
+        vision_profile, vision_status = get_or_build_template_vision_profile(
+            template_path,
+            force_refresh=force_refresh,
+            model=vision_model,
+            client=client,
+        )
+        if vision_status:
+            emit({"type": "status", "phase": "vision", "message": vision_status})
+        vision_billing = vision_profile.pop("_billing", None) if isinstance(vision_profile, dict) else None
+        billing_records: list[dict | None] = []
+        if isinstance(vision_billing, dict):
+            billing_record = record_billing(
+                current_user.id,
+                str(vision_billing.get("model") or vision_model),
+                normalize_usage(vision_billing.get("usage")),
+            )
+            billing_records.append(billing_record)
+            emit({"type": "billing", "billing": billing_record})
+
+        emit({"type": "status", "phase": "planning", "message": f"Generating fill tasks with {planner_model}"})
+        analyzer = TemplateAnalyzer(client=client)
+        tasks = analyzer.analyze(template_path, vision_profile=vision_profile, analyze_model=planner_model)
+        planner_billing = record_billing(
+            current_user.id,
+            analyzer.last_model or planner_model,
+            normalize_usage(analyzer.last_usage),
+        )
+        billing_records.append(planner_billing)
+        emit({"type": "billing", "billing": planner_billing})
+
+        mtime = os.path.getmtime(template_path)
+        key = (template_path, mtime)
+        while len(_template_analysis_cache) >= _TEMPLATE_CACHE_MAX:
+            oldest = next(iter(_template_analysis_cache))
+            del _template_analysis_cache[oldest]
+        _template_analysis_cache[key] = tasks
+        _save_cached_tasks(os.path.join(_TEMPLATE_CACHE_DIR, f"{_cache_key_str(template_path, mtime)}.json"), tasks)
+
+        mode = "anchor" if tasks and tasks[0].location_hint.get("anchor") else "infer"
+        emit(
+            {
+                "type": "done",
+                "message": f"Analysis complete: {len(tasks)} fill tasks identified",
+                "template": os.path.basename(template_path),
+                "tasks": [asdict(t) for t in tasks],
+                "count": len(tasks),
+                "mode": mode,
+                "vision_model": vision_model,
+                "planner_model": analyzer.last_model or planner_model,
+                "vision_status": vision_status,
+                "billing": _billing_total(billing_records),
+            }
+        )
+    except Exception as exc:
+        logger.exception("Template analysis session %s failed", session_id)
+        emit(
+            {
+                "type": "error",
+                "error": {
+                    "code": "template_analysis_error",
+                    "message": str(exc),
+                    "retryable": True,
+                },
+                "terminal": True,
+            }
+        )
+
+
+def _start_template_analysis_session(
+    current_user: User,
+    template_path: str,
+    *,
+    vision_model: str,
+    planner_model: str,
+    force_refresh: bool,
+) -> TemplateAnalysisSession:
+    session = template_analysis_session_manager.create_session(
+        current_user.id,
+        _build_template_analysis_params(
+            os.path.basename(template_path),
+            vision_model,
+            planner_model,
+            force_refresh,
+        ),
+    )
+    worker = threading.Thread(
+        target=_run_template_analysis_session,
+        args=(session.session_id, current_user, template_path),
+        kwargs={
+            "vision_model": vision_model,
+            "planner_model": planner_model,
+            "force_refresh": force_refresh,
+        },
+        daemon=True,
+    )
+    worker.start()
+    return session
 
 
 def _get_vs(slug: str) -> VectorStore:
@@ -1414,8 +1562,7 @@ async def history_articles(
     status_value = (status_filter or "all").strip()
     if status_value not in {"all", "completed", "review", "failed"}:
         status_value = "all"
-    articles = list_history_articles(current_user.id, status=status_value, query=(query or "").strip())
-    return {"articles": articles, "summary": history_summary(articles)}
+    return history_articles_payload(current_user.id, status=status_value, query=(query or "").strip())
 
 
 @app.get("/api/history/articles/{article_id}")
@@ -1423,7 +1570,13 @@ async def history_article_detail(
     article_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    articles = list_history_articles(current_user.id)
+    payload = history_articles_payload(current_user.id)
+    if not payload["availability"]["available"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(payload["availability"].get("warning") or "History is unavailable"),
+        )
+    articles = payload["articles"]
     article = next((item for item in articles if str(item.get("id")) == str(article_id)), None)
     if article is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="History article not found")
@@ -1608,6 +1761,145 @@ async def template_list(current_user: User = Depends(get_current_user)):
         items.append({"name": f, "mtime": mtime})
     items.sort(key=lambda x: -x["mtime"])
     return {"templates": items}
+
+
+@app.post("/api/template/analyze/sessions")
+async def template_analyze_session_start(
+    file: UploadFile = File(...),
+    vision_model: str = Form(""),
+    planner_model: str = Form(""),
+    force_refresh: bool = Form(True),
+    current_user: User = Depends(get_current_user),
+):
+    fname = _safe_filename(file.filename or getattr(file, "name", "unknown"))
+    save_path = os.path.join(config.TEMPLATE_DIR, fname)
+    content = await file.read()
+    _raise_if_upload_too_large(content)
+    os.makedirs(config.TEMPLATE_DIR, exist_ok=True)
+    with open(save_path, "wb") as out:
+        out.write(content)
+    try:
+        selected_model = _resolve_vision_model(vision_model, current_user.id)
+        selected_planner_model = _resolve_template_planner_model(planner_model, current_user.id)
+        session = _start_template_analysis_session(
+            current_user,
+            save_path,
+            vision_model=selected_model,
+            planner_model=selected_planner_model,
+            force_refresh=force_refresh,
+        )
+    except ActiveTemplateAnalysisExistsError as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "active_template_analysis_exists",
+                "message": "当前已有一个正在进行的模板分析任务，请先查看该任务。",
+                "session_id": exc.session_id,
+                **_serialize_template_analysis_session(
+                    template_analysis_session_manager.get_session_for_user(current_user.id, exc.session_id)
+                ),
+            },
+            status_code=409,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "request_blocked",
+                "message": detail,
+            },
+            status_code=exc.status_code,
+        )
+    return {
+        "ok": True,
+        "session_id": session.session_id,
+        **_serialize_template_analysis_session(session),
+    }
+
+
+@app.post("/api/template/reanalyze/sessions")
+async def template_reanalyze_session_start(
+    template: str = Form(...),
+    vision_model: str = Form(""),
+    planner_model: str = Form(""),
+    force_refresh: bool = Form(True),
+    current_user: User = Depends(get_current_user),
+):
+    save_path = _template_path_for_name(template)
+    if not os.path.isfile(save_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="模板不存在")
+    try:
+        selected_model = _resolve_vision_model(vision_model, current_user.id)
+        selected_planner_model = _resolve_template_planner_model(planner_model, current_user.id)
+        session = _start_template_analysis_session(
+            current_user,
+            save_path,
+            vision_model=selected_model,
+            planner_model=selected_planner_model,
+            force_refresh=force_refresh,
+        )
+    except ActiveTemplateAnalysisExistsError as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "active_template_analysis_exists",
+                "message": "当前已有一个正在进行的模板分析任务，请先查看该任务。",
+                "session_id": exc.session_id,
+                **_serialize_template_analysis_session(
+                    template_analysis_session_manager.get_session_for_user(current_user.id, exc.session_id)
+                ),
+            },
+            status_code=409,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "request_blocked",
+                "message": detail,
+            },
+            status_code=exc.status_code,
+        )
+    return {
+        "ok": True,
+        "session_id": session.session_id,
+        **_serialize_template_analysis_session(session),
+    }
+
+
+@app.get("/api/template/analyze/sessions/active")
+async def template_analyze_session_active(current_user: User = Depends(get_current_user)):
+    session = (
+        template_analysis_session_manager.get_active_session(current_user.id)
+        or template_analysis_session_manager.get_latest_session(current_user.id)
+    )
+    return _serialize_template_analysis_session(session)
+
+
+@app.get("/api/template/analyze/sessions/{session_id}")
+async def template_analyze_session_snapshot(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    session = _ensure_template_analysis_session_owned(session_id, current_user)
+    return _serialize_template_analysis_session(session)
+
+
+@app.get("/api/template/analyze/sessions/{session_id}/stream")
+async def template_analyze_session_stream(
+    session_id: str,
+    after_seq: int = 0,
+    current_user: User = Depends(get_current_user),
+):
+    session = _ensure_template_analysis_session_owned(session_id, current_user)
+
+    def event_stream():
+        for event in session.stream_events(after_seq=after_seq):
+            yield _sse(event)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/template/analyze")

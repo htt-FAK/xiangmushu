@@ -5,12 +5,11 @@ out_dir = os.path.join(os.getcwd(), "artifacts", "page_screenshots")
 os.makedirs(out_dir, exist_ok=True)
 
 SET_AUTH_JS = """() => {
-    localStorage.setItem("xiangmushu_token", "test-token");
-    localStorage.setItem("xiangmushu_user", JSON.stringify({id: 1, email: "demo@example.com"}));
+    localStorage.setItem("xiangmushu.auth.token", "test-token");
 }"""
 
 pages = [
-    ("login", "/login"),
+    ("auth", "/auth"),
     ("home", "/"),
     ("generate", "/generate"),
     ("knowledge", "/knowledge"),
@@ -25,7 +24,7 @@ with sync_playwright() as p:
     print("=== Desktop (1440x900) ===")
     d_ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     d_page = d_ctx.new_page()
-    d_page.goto("http://localhost:5173/login", wait_until="networkidle", timeout=15000)
+    d_page.goto("http://localhost:5173/auth", wait_until="networkidle", timeout=15000)
     d_page.evaluate(SET_AUTH_JS)
     for name, path in pages:
         d_page.goto(f"http://localhost:5173{path}", wait_until="networkidle", timeout=15000)
@@ -43,7 +42,7 @@ with sync_playwright() as p:
         user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
     )
     m_page = m_ctx.new_page()
-    m_page.goto("http://localhost:5173/login", wait_until="networkidle", timeout=15000)
+    m_page.goto("http://localhost:5173/auth", wait_until="networkidle", timeout=15000)
     m_page.evaluate(SET_AUTH_JS)
     for name, path in pages:
         m_page.goto(f"http://localhost:5173{path}", wait_until="networkidle", timeout=15000)

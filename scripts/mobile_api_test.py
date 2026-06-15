@@ -39,15 +39,15 @@ with sync_playwright() as p:
         storage_state=state_file,
     )
 
-    # T01: Login page renders
+    # T01: Auth entry page renders
     page = ctx.new_page()
     try:
-        page.goto(f"{BASE}/login", wait_until="networkidle", timeout=15000)
+        page.goto(f"{BASE}/auth", wait_until="networkidle", timeout=15000)
         has_form = page.locator('input[type="email"], input[placeholder*="mail"]').count() > 0
-        record("T01 login page renders", has_form, f"url={page.url}")
+        record("T01 auth page renders", has_form, f"url={page.url}")
         page.screenshot(path=os.path.join(OUT_DIR, "t01.png"), full_page=True)
     except Exception as e:
-        record("T01 login page renders", False, str(e)[:120])
+        record("T01 auth page renders", False, str(e)[:120])
     finally:
         page.close()
 
@@ -56,7 +56,7 @@ with sync_playwright() as p:
     try:
         page.goto(f"{BASE}/", wait_until="networkidle", timeout=15000)
         page.wait_for_timeout(2000)
-        on_home = "/login" not in page.url
+        on_home = "/auth" not in page.url
         record("T02 home auth pass", on_home, f"url={page.url}")
         page.screenshot(path=os.path.join(OUT_DIR, "t02.png"), full_page=True)
     except Exception as e:
@@ -188,7 +188,7 @@ with sync_playwright() as p:
         t0 = time.time()
         page.goto(f"{BASE}/", wait_until="networkidle", timeout=30000)
         elapsed = time.time() - t0
-        on_home = "/login" not in page.url
+        on_home = "/auth" not in page.url
         record("T11 slow-3g load", on_home, f"elapsed={elapsed:.1f}s")
         page.screenshot(path=os.path.join(OUT_DIR, "t11.png"), full_page=True)
     except Exception as e:

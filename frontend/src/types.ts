@@ -46,6 +46,61 @@ export type AnalyzeResult = {
   error?: string;
 };
 
+export type TemplateAnalysisLog = {
+  phase: string;
+  message: string;
+  created_at: string;
+};
+
+export type TemplateAnalysisSessionSnapshot = {
+  session_id: string;
+  user_id: number;
+  status: "running" | "done" | "error" | string;
+  currentPhase: string;
+  statusMessage: string;
+  template: string;
+  vision_model: string;
+  planner_model: string;
+  mode?: string;
+  vision_status?: string;
+  tasks: FillTask[];
+  billing?: GenerationBilling | null;
+  logs: TemplateAnalysisLog[];
+  last_error?: { code: string; message: string; retryable?: boolean; detail?: string } | null;
+  params: { [key: string]: unknown };
+  created_at: string;
+  updated_at: string;
+  last_seq: number;
+};
+
+export type TemplateAnalysisSessionEnvelope = {
+  session: TemplateAnalysisSessionSnapshot | null;
+};
+
+export type TemplateAnalysisSessionStartResult = {
+  ok: boolean;
+  session_id?: string;
+  session?: TemplateAnalysisSessionSnapshot | null;
+  code?: string;
+  message?: string;
+};
+
+export type TemplateAnalysisEvent =
+  | { type: "status"; seq?: number; phase: string; message: string }
+  | { type: "billing"; seq?: number; billing: BillingRecord }
+  | ({
+      type: "done";
+      seq?: number;
+      message?: string;
+    } & AnalyzeResult)
+  | {
+      type: "error";
+      seq?: number;
+      terminal?: boolean;
+      error: string | { code: string; message: string; retryable?: boolean; detail?: string };
+    }
+  | { type: "heartbeat"; seq?: number };
+
 export type UploadResult = {
   file: string;
   ok: boolean;
@@ -130,6 +185,8 @@ export interface ModelModuleConfig {
   options?: ModelOption[];
   config_keys?: string[];
   selected_unavailable?: { model: string; reason: string };
+  source?: string;
+  warning?: string;
 }
 
 export type ModelOptionsMap = Record<string, ModelModuleConfig>;
@@ -137,6 +194,7 @@ export type ModelOptionsMap = Record<string, ModelModuleConfig>;
 export type UserPreferences = {
   language: "zh" | "en";
   model_choices?: Record<string, string>;
+  warnings?: Record<string, string>;
 };
 
 export type GenerateEvent =
@@ -265,4 +323,25 @@ export type HistoryArticle = {
   outputTokens: number;
   costCny: number;
   modelUsage: HistoryModelUsage[];
+};
+
+export type HistoryAvailability = {
+  available: boolean;
+  source: "backend" | "unavailable" | "legacy_fallback" | string;
+  warning?: string;
+};
+
+export type HistorySummary = {
+  count: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costCny: number;
+  modelUsage: HistoryModelUsage[];
+};
+
+export type HistoryArticlesResponse = {
+  articles: HistoryArticle[];
+  summary: HistorySummary;
+  availability: HistoryAvailability;
 };
