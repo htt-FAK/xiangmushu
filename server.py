@@ -67,10 +67,12 @@ from core.auth import (
 )
 from core.billing import (
     billing_summary,
+    delete_provider_api_key,
     delete_user_api_key,
     get_user_api_key_status,
     load_user_api_key,
     normalize_usage,
+    provider_api_key_status_map,
     record_billing,
     save_user_api_key,
 )
@@ -110,6 +112,7 @@ from core.db import ensure_configured_database, mysql_enabled, mysql_transaction
 from core.history import history_articles_payload, list_history_articles
 from core.provider_errors import classify_provider_error, validation_http_status
 from core.provider_registry import model_options_map_for_user
+from core.provider_clients import client_for_provider
 
 
 def _safe_filename(raw: str) -> str:
@@ -323,6 +326,21 @@ class ApiKeyRequest(BaseModel):
     provider_code: str | None = None
 
 
+SUPPORTED_API_KEY_PROVIDERS: tuple[str, ...] = ("dashscope", "deepseek", "mimo")
+
+
+def _provider_code_or_default(raw: str | None) -> str:
+    code = str(raw or "dashscope").strip().lower() or "dashscope"
+    if code not in SUPPORTED_API_KEY_PROVIDERS:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Unsupported provider_code: {code}")
+    return code
+
+
+def _provider_status_payload(user_id: int) -> dict[str, object]:
+    providers = provider_api_key_status_map(user_id, SUPPORTED_API_KEY_PROVIDERS)
+    return {"providers": providers}
+
+
 class UserPreferencesRequest(BaseModel):
     language: str | None = None
     model_choices: dict[str, str] | None = None
@@ -510,10 +528,14 @@ def _resolve_template_planner_model(raw: str | None, user_id: int) -> str:
     return (raw or "").strip() or config.get_user_model_for_user(user_id, "template_planner") or config.TEMPLATE_ANALYZE_MODEL
 
 
-def _require_user_api_key(current_user: User | int) -> str:
+def _require_user_api_key(current_user: User | int, provider_code: str = "dashscope") -> str:
     user_id = current_user.id if isinstance(current_user, User) else int(current_user)
     try:
-        user_api_key = load_user_api_key(user_id)
+        user_api_key = load_user_api_key(user_id) if provider_code == "dashscope" else None
+        if provider_code != "dashscope":
+            from core.billing import load_provider_api_key
+
+            user_api_key = load_provider_api_key(user_id, provider_code)
     except Exception as exc:
         logger.exception("Failed to decrypt user API key")
         raise HTTPException(
@@ -528,13 +550,12 @@ def _require_user_api_key(current_user: User | int) -> str:
     return user_api_key
 
 
-def _client_for_user_template_analysis(user_id: int):
-    user_api_key = _require_user_api_key(user_id)
-    from openai import OpenAI
-
-    return OpenAI(
-        api_key=user_api_key,
-        base_url=config.DASHSCOPE_COMPAT_BASE,
+def _client_for_user_template_analysis(user_id: int, provider_code: str = "dashscope"):
+    _require_user_api_key(user_id, provider_code)
+    return client_for_provider(
+        provider_code,
+        user_id,
+        purpose="template_analysis",
         timeout=config.TEMPLATE_ANALYZE_TIMEOUT,
         max_retries=0,
     )
@@ -581,7 +602,9 @@ def _analyze_template_now(
 ) -> dict[str, object]:
     if force_refresh:
         _clear_template_caches(template_path)
-    client = _client_for_user_template_analysis(current_user.id)
+    vision_provider = "mimo" if vision_model.startswith("mimo-") else "dashscope"
+    planner_provider = "mimo" if planner_model.startswith("mimo-") else ("deepseek" if planner_model.startswith("deepseek-") else "dashscope")
+    client = _client_for_user_template_analysis(current_user.id, vision_provider)
 
     vision_profile, vision_status = get_or_build_template_vision_profile(
         template_path,
@@ -600,7 +623,7 @@ def _analyze_template_now(
             )
         )
 
-    analyzer = TemplateAnalyzer(client=client)
+    analyzer = TemplateAnalyzer(client=_client_for_user_template_analysis(current_user.id, planner_provider))
     tasks = analyzer.analyze(template_path, vision_profile=vision_profile, analyze_model=planner_model)
     billing_records.append(
         record_billing(
@@ -673,7 +696,9 @@ def _run_template_analysis_session(
     try:
         if force_refresh:
             _clear_template_caches(template_path)
-        client = _client_for_user_template_analysis(current_user.id)
+        vision_provider = "mimo" if vision_model.startswith("mimo-") else "dashscope"
+        planner_provider = "mimo" if planner_model.startswith("mimo-") else ("deepseek" if planner_model.startswith("deepseek-") else "dashscope")
+        client = _client_for_user_template_analysis(current_user.id, vision_provider)
 
         emit({"type": "status", "phase": "vision", "message": f"Running template vision with {vision_model}"})
         vision_profile, vision_status = get_or_build_template_vision_profile(
@@ -696,7 +721,7 @@ def _run_template_analysis_session(
             emit({"type": "billing", "billing": billing_record})
 
         emit({"type": "status", "phase": "planning", "message": f"Generating fill tasks with {planner_model}"})
-        analyzer = TemplateAnalyzer(client=client)
+        analyzer = TemplateAnalyzer(client=_client_for_user_template_analysis(current_user.id, planner_provider))
         tasks = analyzer.analyze(template_path, vision_profile=vision_profile, analyze_model=planner_model)
         planner_billing = record_billing(
             current_user.id,
@@ -930,7 +955,7 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
             api_key=user_api_key,
             user_id=current_user.id,
         )
-        local_auditor = ContentAuditor() if enable_audit else None
+        local_auditor = ContentAuditor(user_id=current_user.id) if enable_audit else None
         result = {
             "index": i,
             "content": "",
@@ -1488,7 +1513,7 @@ async def user_preferences_update(
 
 @app.get("/api/user/apikey")
 async def user_apikey_status(current_user: User = Depends(get_current_user)):
-    return get_user_api_key_status(current_user.id)
+    return _provider_status_payload(current_user.id)
 
 
 @app.post("/api/user/apikey/validate")
@@ -1496,8 +1521,9 @@ async def user_apikey_validate(
     payload: ApiKeyRequest,
     current_user: User = Depends(get_current_user),
 ):
+    provider_code = _provider_code_or_default(payload.provider_code)
     try:
-        result = validate_user_api_key(payload.api_key, payload.provider_code or "dashscope")
+        result = validate_user_api_key(payload.api_key, provider_code)
     except TypeError:
         result = validate_user_api_key(payload.api_key)
     if result.get("ok"):
@@ -1511,7 +1537,7 @@ async def user_apikey_save(
     request: Request,
     current_user: User = Depends(get_current_user),
 ):
-    provider_code = payload.provider_code or "dashscope"
+    provider_code = _provider_code_or_default(payload.provider_code)
     try:
         validation = validate_user_api_key(payload.api_key, provider_code)
     except TypeError:
@@ -1529,15 +1555,20 @@ async def user_apikey_save(
         ip=_client_ip(request),
         ua=_user_agent(request),
     )
-    return {"ok": True, "validation": validation, **get_user_api_key_status(current_user.id)}
+    return {"ok": True, "validation": validation, **_provider_status_payload(current_user.id)}
 
 
 @app.delete("/api/user/apikey")
 async def user_apikey_delete(
     request: Request,
     current_user: User = Depends(get_current_user),
+    provider_code: str = "dashscope",
 ):
-    delete_user_api_key(current_user.id)
+    resolved_provider = _provider_code_or_default(provider_code)
+    if resolved_provider == "dashscope":
+        delete_user_api_key(current_user.id)
+    else:
+        delete_provider_api_key(current_user.id, resolved_provider)
     log_audit(
         API_KEY_DELETED,
         user_id=current_user.id,
@@ -1545,7 +1576,7 @@ async def user_apikey_delete(
         ip=_client_ip(request),
         ua=_user_agent(request),
     )
-    return {"ok": True, **get_user_api_key_status(current_user.id)}
+    return {"ok": True, **_provider_status_payload(current_user.id)}
 
 
 @app.get("/api/billing/summary")

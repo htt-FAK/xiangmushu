@@ -279,7 +279,10 @@ export default function GeneratePage() {
 
   const refreshApiKeyStatus = useCallback(() => {
     fetchApiKeyStatus()
-      .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
+      .then((status) => {
+        const dashscope = status.providers?.dashscope;
+        setHasApiKey(Boolean(dashscope?.has_key && dashscope?.validated));
+      })
       .catch(() => setHasApiKey(null));
   }, []);
 

@@ -5,17 +5,24 @@ from fastapi.testclient import TestClient
 import config
 import server
 from core.auth import create_access_token, get_or_create_user, init_db
-from core.billing import (
-    TokenUsage,
-    calculate_cost_cny,
-    load_user_api_key,
-    record_billing,
-)
+from core.billing import TokenUsage, calculate_cost_cny, load_user_api_key, record_billing
 from core.generation_sessions import GenerationSession, GenerationSessionManager, session_manager
 
 
 def _auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user)}"}
+
+
+def _ok_validation(api_key, provider_code="dashscope"):
+    return {
+        "ok": True,
+        "code": "ok",
+        "message": "ok",
+        "retryable": False,
+        "validated_model": "deepseek-v4-flash" if provider_code == "deepseek" else "qwen3.6-flash",
+        "provider_code": provider_code,
+        "probes": [{"ok": True, "model": "probe", "code": "ok", "message": "ok"}],
+    }
 
 
 def test_billing_calculation_and_summary_scoped_by_user(tmp_path, monkeypatch):
@@ -46,14 +53,7 @@ def test_user_api_key_is_encrypted_statused_and_deleted(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
     monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
     monkeypatch.setattr(config, "USER_API_KEY_ENCRYPTION_KEY", "stable-test-secret")
-    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key: {
-        "ok": True,
-        "code": "ok",
-        "message": "API Key 验证成功，可用于后续生成。",
-        "retryable": False,
-        "validated_model": "qwen3.6-flash",
-        "probes": [{"ok": True, "model": "qwen3.6-flash", "code": "ok", "message": "ok"}],
-    })
+    monkeypatch.setattr(server, "validate_user_api_key", _ok_validation)
     init_db(str(db_path))
     user = get_or_create_user("key@example.com", db_path=str(db_path))
     headers = _auth_headers(user)
@@ -64,10 +64,10 @@ def test_user_api_key_is_encrypted_statused_and_deleted(tmp_path, monkeypatch):
         status = client.get("/api/user/apikey", headers=headers)
 
     assert empty.status_code == 200
-    assert empty.json()["has_key"] is False
+    assert empty.json()["providers"]["dashscope"]["has_key"] is False
     assert saved.status_code == 200
-    assert saved.json()["has_key"] is True
-    assert status.json()["has_key"] is True
+    assert saved.json()["providers"]["dashscope"]["has_key"] is True
+    assert status.json()["providers"]["dashscope"]["has_key"] is True
     assert load_user_api_key(user.id, str(db_path)) == "sk-test-secret"
 
     with sqlite3.connect(db_path) as conn:
@@ -79,8 +79,30 @@ def test_user_api_key_is_encrypted_statused_and_deleted(tmp_path, monkeypatch):
         deleted = client.delete("/api/user/apikey", headers=headers)
 
     assert deleted.status_code == 200
-    assert deleted.json()["has_key"] is False
+    assert deleted.json()["providers"]["dashscope"]["has_key"] is False
     assert load_user_api_key(user.id, str(db_path)) is None
+
+
+def test_provider_specific_api_key_status_and_delete(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setattr(config, "USER_API_KEY_ENCRYPTION_KEY", "stable-test-secret")
+    monkeypatch.setattr(server, "validate_user_api_key", _ok_validation)
+    init_db(str(db_path))
+    user = get_or_create_user("provider@example.com", db_path=str(db_path))
+    headers = _auth_headers(user)
+
+    with TestClient(server.app) as client:
+        saved = client.post("/api/user/apikey", json={"api_key": "sk-deepseek", "provider_code": "deepseek"}, headers=headers)
+        status = client.get("/api/user/apikey", headers=headers)
+        deleted = client.request("DELETE", "/api/user/apikey?provider_code=deepseek", headers=headers)
+
+    assert saved.status_code == 200
+    assert status.json()["providers"]["deepseek"]["has_key"] is True
+    assert status.json()["providers"]["dashscope"]["has_key"] is False
+    assert deleted.status_code == 200
+    assert deleted.json()["providers"]["deepseek"]["has_key"] is False
 
 
 def test_user_api_key_save_requires_validation(tmp_path, monkeypatch):
@@ -92,12 +114,13 @@ def test_user_api_key_save_requires_validation(tmp_path, monkeypatch):
     user = get_or_create_user("validated@example.com", db_path=str(db_path))
     headers = _auth_headers(user)
 
-    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key: {
+    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key, provider_code="dashscope": {
         "ok": False,
         "code": "invalid_api_key",
-        "message": "API Key 无效，请检查是否复制完整或输入错误。",
+        "message": "invalid",
         "retryable": False,
         "validated_model": None,
+        "provider_code": provider_code,
         "probes": [],
     })
 
@@ -117,14 +140,7 @@ def test_user_api_key_validation_endpoint_returns_probe_result(tmp_path, monkeyp
     user = get_or_create_user("probe@example.com", db_path=str(db_path))
     headers = _auth_headers(user)
 
-    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key: {
-        "ok": True,
-        "code": "ok",
-        "message": "API Key 验证成功，可用于后续生成。",
-        "retryable": False,
-        "validated_model": "qwen3.6-flash",
-        "probes": [{"ok": True, "model": "qwen3.6-flash", "code": "ok", "message": "ok"}],
-    })
+    monkeypatch.setattr(server, "validate_user_api_key", _ok_validation)
 
     with TestClient(server.app) as client:
         response = client.post("/api/user/apikey/validate", json={"api_key": "good-key"}, headers=headers)
@@ -143,18 +159,19 @@ def test_user_api_key_validation_endpoint_surfaces_quota_message(tmp_path, monke
     user = get_or_create_user("quota@example.com", db_path=str(db_path))
     headers = _auth_headers(user)
 
-    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key: {
+    monkeypatch.setattr(server, "validate_user_api_key", lambda api_key, provider_code="dashscope": {
         "ok": False,
         "code": "quota_exceeded",
-        "message": "当前 API Key 的模型额度已用完，暂时无法继续调用。",
+        "message": "quota exhausted",
         "retryable": False,
         "validated_model": None,
+        "provider_code": provider_code,
         "probes": [
             {
                 "ok": False,
                 "model": "qwen3.6-flash",
                 "code": "quota_exceeded",
-                "message": "当前 API Key 的模型额度已用完，暂时无法继续调用。",
+                "message": "quota exhausted",
                 "detail": "429 insufficient_quota: balance exhausted",
                 "retryable": False,
             }
@@ -167,7 +184,7 @@ def test_user_api_key_validation_endpoint_surfaces_quota_message(tmp_path, monke
     assert response.status_code == 422
     data = response.json()
     assert data["code"] == "quota_exceeded"
-    assert "额度已用完" in data["message"]
+    assert "quota" in data["message"]
     assert data["retryable"] is False
 
 

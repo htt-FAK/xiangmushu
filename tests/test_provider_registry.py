@@ -71,9 +71,10 @@ def test_resolve_role_choice_uses_registry_backed_provider(monkeypatch):
     )
     monkeypatch.setattr(
         provider_registry,
-        "available_models_for_role",
-        lambda role: [
+        "_catalog_rows_for_user",
+        lambda user_id: [
             {
+                "role": "main_writer",
                 "model": "qwen3.7-plus",
                 "provider_code": "dashscope",
                 "config": {"temperature_hint": "stable"},
@@ -185,3 +186,94 @@ def test_model_options_map_returns_all_registry_options_for_healthy_role(monkeyp
     assert [item["model"] for item in options["main_writer"]["options"]] == ["qwen3.7-plus", "qwen3.7-max"]
     assert [item["model"] for item in options["fast_writer"]["options"]] == ["qwen3.6-flash", "qwen3.5-flash"]
     assert options["main_writer"]["source"] == "registry"
+
+
+def test_model_options_map_filters_supplemental_providers_by_user_keys(monkeypatch):
+    monkeypatch.setattr(provider_registry, "registry_enabled", lambda: True)
+    monkeypatch.setattr(
+        provider_registry,
+        "list_catalog_rows",
+        lambda include_disabled=False: [
+            {
+                "id": 1,
+                "role": "main_writer",
+                "model": "qwen3.7-plus",
+                "display_name": "Qwen 3.7 Plus",
+                "provider_id": 10,
+                "provider_code": "dashscope",
+                "provider_name": "DashScope",
+                "config": {},
+            },
+            {
+                "id": 2,
+                "role": "main_writer",
+                "model": "deepseek-v4-pro",
+                "display_name": "DeepSeek V4 Pro",
+                "provider_id": 11,
+                "provider_code": "deepseek",
+                "provider_name": "DeepSeek",
+                "config": {},
+            },
+            {
+                "id": 3,
+                "role": "web_search",
+                "model": "mimo-v2.5-pro",
+                "display_name": "MiMo V2.5 Pro",
+                "provider_id": 12,
+                "provider_code": "mimo",
+                "provider_name": "Xiaomi MiMo",
+                "config": {},
+            },
+        ],
+    )
+    monkeypatch.setattr(provider_registry, "load_user_model_choices", lambda user_id: {})
+    monkeypatch.setattr(
+        provider_registry,
+        "_user_provider_gate",
+        lambda user_id: {"dashscope": True, "deepseek": False, "mimo": True, "mimo_search": False},
+    )
+
+    options = provider_registry.model_options_map_for_user(7)
+
+    assert [item["model"] for item in options["main_writer"]["options"]] == ["qwen3.7-plus"]
+    if "web_search" in options and "options" in options["web_search"]:
+        assert all(item["provider_code"] != "mimo" for item in options["web_search"]["options"])
+
+
+def test_validation_candidate_models_excludes_disabled_legacy_rows(monkeypatch):
+    monkeypatch.setattr(provider_registry, "registry_enabled", lambda: True)
+    monkeypatch.setattr(
+        provider_registry,
+        "list_catalog_rows",
+        lambda include_disabled=False: [
+            {
+                "model": "deepseek-v4-flash",
+                "provider_code": "deepseek",
+            },
+            {
+                "model": "deepseek-v4-pro",
+                "provider_code": "deepseek",
+            },
+        ] if include_disabled is False else [
+            {
+                "model": "deepseek-chat",
+                "provider_code": "deepseek",
+            },
+            {
+                "model": "deepseek-reasoner",
+                "provider_code": "deepseek",
+            },
+            {
+                "model": "deepseek-v4-flash",
+                "provider_code": "deepseek",
+            },
+            {
+                "model": "deepseek-v4-pro",
+                "provider_code": "deepseek",
+            },
+        ],
+    )
+
+    models = provider_registry.validation_candidate_models("deepseek")
+
+    assert models == ["deepseek-v4-flash", "deepseek-v4-pro"]

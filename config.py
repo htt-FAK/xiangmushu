@@ -15,6 +15,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 # DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
 DEEPSEEK_API_KEY = ""
 DEEPSEEK_BASE_URL = ""
+MIMO_API_KEY = os.getenv("MIMO_API_KEY", "").strip()
+MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1").strip() or "https://api.xiaomimimo.com/v1"
 # 嵌入 / 回落聊天：优先百炼 Key，兼容仅配 OPENAI_API_KEY
 OPENAI_COMPAT_API_KEY = DASHSCOPE_API_KEY or OPENAI_API_KEY
 
@@ -141,11 +143,15 @@ AI_MODEL_PRICING: dict[str, dict[str, float]] = {
     "qwen-turbo": {"input": 0.0003, "output": 0.0006},
     "qwen3.6-flash": {"input": 0.0003, "output": 0.0006},
     "deepseek-v4-flash": {"input": 0.0003, "output": 0.0006},
+    "deepseek-v4-pro": {"input": 0.001, "output": 0.002},
     "qwen3.7-plus": {"input": 0.0008, "output": 0.002},
     "qwen3.7-max": {"input": 0.002, "output": 0.006},
     "qwen3.7-max-preview": {"input": 0.002, "output": 0.006},
     "qwen3.7-max-2026-05-17": {"input": 0.002, "output": 0.006},
     "qwen3.7-max-2026-05-20": {"input": 0.002, "output": 0.006},
+    "mimo-v2.5-pro": {"input": 0.003, "output": 0.006},
+    "mimo-v2.5-pro-ultraspeed": {"input": 0.001, "output": 0.002},
+    "mimo-v2.5": {"input": 0.001, "output": 0.002},
 }
 
 USER_API_KEY_ENCRYPTION_KEY = os.getenv(

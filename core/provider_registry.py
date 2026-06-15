@@ -86,7 +86,37 @@ KNOWN_MODEL_DISPLAY_NAMES: dict[str, str] = {
     "qwen3.5-flash": "Qwen 3.5 Flash",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
     "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "mimo-v2.5-pro": "MiMo V2.5 Pro",
+    "mimo-v2.5-pro-ultraspeed": "MiMo V2.5 Pro UltraSpeed",
+    "mimo-v2.5": "MiMo V2.5",
     "text-embedding-v4": "Text Embedding V4",
+}
+
+SUPPORTED_PROVIDER_CODES: tuple[str, ...] = ("dashscope", "deepseek", "mimo")
+ROLE_PROVIDER_MATRIX: dict[str, tuple[str, ...]] = {
+    "main_writer": ("dashscope", "deepseek", "mimo"),
+    "fast_writer": ("dashscope", "deepseek", "mimo"),
+    "web_search": ("dashscope", "mimo"),
+    "vision_layout": ("dashscope", "mimo"),
+    "template_planner": ("dashscope", "deepseek", "mimo"),
+    "audit_text": ("dashscope", "deepseek", "mimo"),
+    "embedding": ("dashscope",),
+}
+STRICT_PROVIDER_ROLE_MODELS: dict[str, dict[str, tuple[str, ...]]] = {
+    "deepseek": {
+        "main_writer": ("deepseek-v4-pro",),
+        "fast_writer": ("deepseek-v4-flash",),
+        "template_planner": ("deepseek-v4-flash",),
+        "audit_text": ("deepseek-v4-flash",),
+    },
+    "mimo": {
+        "main_writer": ("mimo-v2.5-pro",),
+        "fast_writer": ("mimo-v2.5-pro-ultraspeed",),
+        "web_search": ("mimo-v2.5-pro",),
+        "vision_layout": ("mimo-v2.5",),
+        "template_planner": ("mimo-v2.5-pro",),
+        "audit_text": ("mimo-v2.5-pro",),
+    },
 }
 
 
@@ -143,6 +173,8 @@ def _provider_code_for_seed_model(model: str) -> str | None:
         return None
     if value.startswith("deepseek-"):
         return "deepseek"
+    if value.startswith("mimo-"):
+        return "mimo"
     if value.startswith("qwen") or value.startswith("text-embedding"):
         return "dashscope"
     return None
@@ -186,6 +218,18 @@ def role_seed_model_ids(role: str) -> list[str]:
     default_model = str((ROLE_DEFAULTS.get(role_key) or {}).get("default_model") or "").strip()
     if default_model and default_model not in models:
         models.append(default_model)
+    curated: dict[str, list[str]] = {
+        "main_writer": ["qwen3.7-plus", "deepseek-v4-pro", "mimo-v2.5-pro"],
+        "fast_writer": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro-ultraspeed"],
+        "web_search": ["qwen3.7-plus", "mimo-v2.5-pro"],
+        "vision_layout": ["qwen3.7-plus", "mimo-v2.5"],
+        "template_planner": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro"],
+        "audit_text": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro"],
+        "embedding": ["text-embedding-v4"],
+    }
+    for model in curated.get(role_key, []):
+        if model not in models:
+            models.append(model)
     return models
 
 
@@ -202,6 +246,22 @@ def _capabilities_for_seed_role(role: str) -> list[str]:
     return ["text"]
 
 
+def _supports_role_provider(role: str, provider_code: str) -> bool:
+    return str(provider_code or "").strip().lower() in ROLE_PROVIDER_MATRIX.get(str(role or "").strip(), ())
+
+
+def _seed_model_allowed_for_role(role: str, provider_code: str, model: str) -> bool:
+    role_key = str(role or "").strip()
+    code = str(provider_code or "").strip().lower()
+    model_id = str(model or "").strip()
+    if not model_id or not _supports_role_provider(role_key, code):
+        return False
+    strict = STRICT_PROVIDER_ROLE_MODELS.get(code)
+    if strict is None:
+        return True
+    return model_id in strict.get(role_key, ())
+
+
 def catalog_seed_candidates() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for role in UI_ROLE_KEYS:
@@ -210,6 +270,8 @@ def catalog_seed_candidates() -> list[dict[str, Any]]:
         for model in role_seed_model_ids(role):
             provider_code = _provider_code_for_seed_model(model)
             if provider_code is None:
+                continue
+            if not _seed_model_allowed_for_role(role, provider_code, model):
                 continue
             pricing = dict(getattr(config, "AI_MODEL_PRICING", {}).get(model) or {})
             rows.append(
@@ -330,6 +392,8 @@ def provider_code_for_model(model: str) -> str:
                 return str(item["provider_code"])
     if mid.startswith("deepseek"):
         return "deepseek"
+    if mid.startswith("mimo-"):
+        return "mimo"
     return "dashscope"
 
 
@@ -345,7 +409,7 @@ def list_catalog_rows(include_disabled: bool = False) -> list[dict[str, Any]]:
         JOIN model_providers mp ON mp.id = mc.provider_id
     """
     if not include_disabled:
-        query += " WHERE mc.enabled = 1 AND mp.enabled = 1"
+        query += " WHERE mc.enabled = 1"
     query += " ORDER BY mc.role_key ASC, mc.id ASC"
     with mysql_transaction() as conn:
         with conn.cursor() as cur:
@@ -384,11 +448,55 @@ def available_models_for_role(role: str) -> list[dict[str, Any]]:
     return [item for item in list_catalog_rows(include_disabled=False) if item["role"] == role_key]
 
 
+def _user_provider_gate(user_id: int | None) -> dict[str, bool]:
+    gates = {"dashscope": True, "deepseek": False, "mimo": False, "mimo_search": False}
+    if user_id is None:
+        return gates
+    try:
+        from core.billing import load_provider_api_key_validation, provider_api_key_status_map
+
+        statuses = provider_api_key_status_map(user_id, SUPPORTED_PROVIDER_CODES)
+        for provider_code in ("deepseek", "mimo"):
+            item = statuses.get(provider_code) or {}
+            gates[provider_code] = bool(item.get("has_key") and item.get("validated"))
+        mimo_validation = load_provider_api_key_validation(user_id, "mimo")
+        gates["mimo_search"] = bool(gates["mimo"] and mimo_validation.get("search_enabled"))
+    except Exception:
+        return gates
+    return gates
+
+
+def _catalog_rows_for_user(user_id: int | None) -> list[dict[str, Any]]:
+    rows = list_catalog_rows(include_disabled=False)
+    gates = _user_provider_gate(user_id)
+    filtered: list[dict[str, Any]] = []
+    for item in rows:
+        role = str(item["role"])
+        provider_code = str(item["provider_code"])
+        if not _supports_role_provider(role, provider_code):
+            continue
+        if provider_code == "dashscope":
+            filtered.append(item)
+            continue
+        if provider_code == "deepseek":
+            if gates["deepseek"]:
+                filtered.append(item)
+            continue
+        if provider_code == "mimo":
+            if role == "web_search":
+                if gates["mimo_search"]:
+                    filtered.append(item)
+                continue
+            if gates["mimo"]:
+                filtered.append(item)
+    return filtered
+
+
 def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str, Any]]:
     if not registry_enabled():
         return _legacy_model_options()
     try:
-        catalog_rows = list_catalog_rows(include_disabled=False)
+        catalog_rows = _catalog_rows_for_user(user_id)
     except Exception as exc:
         warning = _registry_warning("Model registry is unavailable; falling back to legacy model options.", exc)
         return _legacy_model_options_with_metadata(warning)
@@ -494,7 +602,7 @@ def sanitize_user_model_choices(choices: dict[str, str] | None) -> tuple[dict[st
     if not registry_enabled():
         return raw, {}
     try:
-        catalog_rows = list_catalog_rows(include_disabled=False)
+        catalog_rows = _catalog_rows_for_user(None)
     except Exception as exc:
         warning = _registry_warning(
             "Model registry is unavailable; preserved selected models without validating availability.",
@@ -524,7 +632,7 @@ def save_user_model_choices(user_id: int, choices: dict[str, str] | None) -> tup
     if not registry_enabled():
         return clean, warnings
     try:
-        catalog_rows = list_catalog_rows(include_disabled=False)
+        catalog_rows = _catalog_rows_for_user(user_id)
     except Exception as exc:
         warning = _registry_warning(
             "Model registry is unavailable; saved selections only in JSON preferences.",
@@ -575,7 +683,7 @@ def resolve_role_choice(role: str, user_id: int | None = None) -> dict[str, Any]
         if selected:
             if not registry_enabled():
                 return {"role": role_key, "model": selected, "provider_code": provider_code_for_model(selected), "source": f"user:{role_key}"}
-            allowed = {item["model"]: item for item in available_models_for_role(role_key)}
+            allowed = {item["model"]: item for item in _catalog_rows_for_user(user_id) if item["role"] == role_key}
             if selected in allowed:
                 item = allowed[selected]
                 return {
@@ -588,7 +696,9 @@ def resolve_role_choice(role: str, user_id: int | None = None) -> dict[str, Any]
             source = f"fallback:{role_key}"
     extra_body = dict((ROLE_DEFAULTS.get(role_key) or {}).get("extra_body") or {})
     if registry_enabled():
-        for item in available_models_for_role(role_key):
+        for item in _catalog_rows_for_user(user_id):
+            if item["role"] != role_key:
+                continue
             if item["model"] == default_model:
                 extra_body.update(dict(item.get("config") or {}))
                 default_provider = str(item["provider_code"])
@@ -606,7 +716,7 @@ def validation_candidate_models(provider_code: str = "dashscope") -> list[str]:
     provider = str(provider_code or "dashscope").strip().lower()
     if not registry_enabled():
         return []
-    items = [item for item in list_catalog_rows(include_disabled=True) if str(item["provider_code"]) == provider]
+    items = [item for item in list_catalog_rows(include_disabled=False) if str(item["provider_code"]) == provider]
     seen: set[str] = set()
     models: list[str] = []
     for item in items:

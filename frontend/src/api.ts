@@ -203,24 +203,24 @@ export async function fetchApiKeyStatus(): Promise<ApiKeyStatus> {
   return requestJson<ApiKeyStatus>("/api/user/apikey");
 }
 
-export async function validateApiKey(apiKey: string): Promise<ApiKeyValidationResult> {
+export async function validateApiKey(apiKey: string, providerCode = "dashscope"): Promise<ApiKeyValidationResult> {
   return requestJsonAllowError<ApiKeyValidationResult>("/api/user/apikey/validate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify({ api_key: apiKey, provider_code: providerCode }),
   });
 }
 
-export async function saveApiKey(apiKey: string): Promise<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }> {
+export async function saveApiKey(apiKey: string, providerCode = "dashscope"): Promise<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }> {
   return requestJson<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }>("/api/user/apikey", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify({ api_key: apiKey, provider_code: providerCode }),
   });
 }
 
-export async function deleteApiKey(): Promise<ApiKeyStatus & { ok: boolean }> {
-  return requestJson<ApiKeyStatus & { ok: boolean }>("/api/user/apikey", {
+export async function deleteApiKey(providerCode = "dashscope"): Promise<ApiKeyStatus & { ok: boolean }> {
+  return requestJson<ApiKeyStatus & { ok: boolean }>(`/api/user/apikey?provider_code=${encodeURIComponent(providerCode)}`, {
     method: "DELETE",
   });
 }

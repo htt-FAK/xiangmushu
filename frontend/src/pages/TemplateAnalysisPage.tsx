@@ -315,7 +315,10 @@ export default function TemplateAnalysisPage() {
   useEffect(() => {
     void refreshTemplates();
     fetchApiKeyStatus()
-      .then((status) => setHasApiKey(Boolean(status.has_key && status.validated)))
+      .then((status) => {
+        const dashscope = status.providers?.dashscope;
+        setHasApiKey(Boolean(dashscope?.has_key && dashscope?.validated));
+      })
       .catch(() => setHasApiKey(null));
     fetchModelOptions()
       .then((options) => {

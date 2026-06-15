@@ -11,6 +11,7 @@ from core.provider_errors import classify_provider_error
 from core.reporting import evidence_refs_from_results
 from core.template_vision import build_table_cell_user_content
 from core.query_expander import expand_query
+from core.provider_clients import chat_client_for_model
 from core.vector_store import VectorStore
 from core.web_search_agent import SessionWebEvidenceCache, fetch_web_evidence
 
@@ -242,6 +243,14 @@ class ContentGenerator:
     def _get_client(self) -> Any:
         """Return the active chat client."""
         return self._client
+
+    def _client_for_model(self, model: str) -> Any:
+        if self._user_id is None:
+            return self._client
+        try:
+            return chat_client_for_model(model, self._user_id, purpose="chat")
+        except Exception:
+            return self._client
 
     def _model_for_module(self, module: str, fallback: str) -> str:
         if self._user_id is None:
@@ -819,7 +828,6 @@ class ContentGenerator:
     ) -> Iterator[str]:
         if route_hook:
             route_hook(bundle.route_meta)
-        client = self._get_client()
         model_chain = self._candidate_models(bundle.model, bundle.route_meta)
         last_error: Optional[Exception] = None
         for model in model_chain:
@@ -827,6 +835,7 @@ class ContentGenerator:
             self.last_usage = None
             self.last_model = ""
             try:
+                client = self._client_for_model(model)
                 stream = chat_completions_create(
                     client,
                     model=model,
@@ -920,12 +929,12 @@ class ContentGenerator:
     ) -> str:
         if route_hook:
             route_hook(bundle.route_meta)
-        client = self._get_client()
         last_error: Optional[Exception] = None
         for model in self._candidate_models(bundle.model, bundle.route_meta):
             try:
                 self.last_usage = None
                 self.last_model = ""
+                client = self._client_for_model(model)
                 resp = chat_completions_create(
                     client,
                     model=model,

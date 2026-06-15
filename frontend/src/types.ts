@@ -144,12 +144,17 @@ export type GenerationBilling = {
   cost_cny: number;
 };
 
-export type ApiKeyStatus = {
+export type ProviderApiKeyStatus = {
+  provider_code?: string;
   has_key: boolean;
   created_at?: string | null;
   updated_at?: string | null;
   key_preview?: string | null;
   validated?: boolean;
+};
+
+export type ApiKeyStatus = {
+  providers: Record<string, ProviderApiKeyStatus>;
 };
 
 export type ValidationProbe = {
@@ -167,6 +172,8 @@ export type ApiKeyValidationResult = {
   message: string;
   retryable: boolean;
   validated_model?: string | null;
+  provider_code?: string;
+  search_enabled?: boolean;
   probes: ValidationProbe[];
 };
 

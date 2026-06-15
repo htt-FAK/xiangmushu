@@ -11,6 +11,7 @@ import config
 from core.dashscope_chat import chat_completions_create
 from core.fill_task import FillTask
 from core.model_router import AUDIT_TEXT, resolve_model_profile
+from core.provider_clients import chat_client_for_model
 
 _LOG = logging.getLogger(__name__)
 
@@ -49,8 +50,9 @@ def _strip_json_fence(raw: str) -> str:
 
 
 class ContentAuditor:
-    def __init__(self) -> None:
+    def __init__(self, user_id: int | None = None) -> None:
         self._client = config.openai_client_for_chat()
+        self._user_id = user_id
 
     def audit(
         self,
@@ -90,8 +92,11 @@ class ContentAuditor:
                 continue
             seen_models.add(model)
             try:
+                client = self._client
+                if self._user_id is not None:
+                    client = chat_client_for_model(model, self._user_id, purpose="chat")
                 resp = chat_completions_create(
-                    self._client,
+                    client,
                     model=model,
                     messages=[
                         {"role": "system", "content": AUDIT_SYSTEM},

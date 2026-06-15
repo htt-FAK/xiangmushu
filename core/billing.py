@@ -81,6 +81,22 @@ def init_billing_db(db_path: str | None = None) -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_provider_api_keys (
+                user_id INTEGER NOT NULL,
+                provider_code TEXT NOT NULL,
+                encrypted_api_key TEXT NOT NULL,
+                key_hint TEXT,
+                status TEXT NOT NULL DEFAULT 'validated',
+                validation_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, provider_code),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.commit()
 
 
@@ -311,21 +327,60 @@ def save_user_api_key(
                 )
         return
     with _connect(db_path) as conn:
+        key_hint = None
+        value = (api_key or "").strip()
+        if value:
+            key_hint = f"{value[:4]}...{value[-4:]}" if len(value) > 8 else "****"
         conn.execute(
             """
-            INSERT INTO user_api_keys(user_id, encrypted_api_key, created_at, updated_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
+            INSERT INTO user_provider_api_keys(
+                user_id, provider_code, encrypted_api_key, key_hint, status, validation_json, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, 'validated', ?, ?, ?)
+            ON CONFLICT(user_id, provider_code) DO UPDATE SET
                 encrypted_api_key = excluded.encrypted_api_key,
+                key_hint = excluded.key_hint,
+                status = excluded.status,
+                validation_json = excluded.validation_json,
                 updated_at = excluded.updated_at
             """,
-            (user_id, encrypted, now, now),
+            (
+                user_id,
+                provider_code,
+                encrypted,
+                key_hint,
+                json.dumps(validation or {}, ensure_ascii=False),
+                now,
+                now,
+            ),
         )
+        if provider_code == "dashscope":
+            conn.execute(
+                """
+                INSERT INTO user_api_keys(user_id, encrypted_api_key, created_at, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    encrypted_api_key = excluded.encrypted_api_key,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, encrypted, now, now),
+            )
         conn.commit()
 
 
 def get_user_api_key_status(user_id: int, db_path: str | None = None) -> dict[str, Any]:
     return get_provider_api_key_status(user_id, "dashscope", db_path=db_path)
+
+
+def provider_api_key_status_map(
+    user_id: int,
+    provider_codes: list[str] | tuple[str, ...],
+    db_path: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(provider_code): get_provider_api_key_status(user_id, str(provider_code), db_path=db_path)
+        for provider_code in provider_codes
+    }
 
 
 def get_provider_api_key_status(user_id: int, provider_code: str, db_path: str | None = None) -> dict[str, Any]:
@@ -339,6 +394,7 @@ def get_provider_api_key_status(user_id: int, provider_code: str, db_path: str |
                     "created_at": None,
                     "updated_at": None,
                     "key_preview": None,
+                    "provider_code": provider_code,
                 }
             with conn.cursor() as cur:
                 cur.execute(
@@ -357,6 +413,7 @@ def get_provider_api_key_status(user_id: int, provider_code: str, db_path: str |
                 "created_at": None,
                 "updated_at": None,
                 "key_preview": None,
+                "provider_code": provider_code,
             }
         created_at = row.get("created_at")
         updated_at = row.get("updated_at")
@@ -366,12 +423,22 @@ def get_provider_api_key_status(user_id: int, provider_code: str, db_path: str |
             "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
             "updated_at": updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at),
             "key_preview": row.get("key_hint") or "****",
+            "provider_code": provider_code,
         }
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT encrypted_api_key, created_at, updated_at FROM user_api_keys WHERE user_id = ?",
-            (user_id,),
+            """
+            SELECT encrypted_api_key, key_hint, status, created_at, updated_at
+            FROM user_provider_api_keys
+            WHERE user_id = ? AND provider_code = ?
+            """,
+            (user_id, provider_code),
         ).fetchone()
+        if row is None and provider_code == "dashscope":
+            row = conn.execute(
+                "SELECT encrypted_api_key, NULL AS key_hint, 'validated' AS status, created_at, updated_at FROM user_api_keys WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
     if row is None:
         return {
             "has_key": False,
@@ -379,27 +446,76 @@ def get_provider_api_key_status(user_id: int, provider_code: str, db_path: str |
             "created_at": None,
             "updated_at": None,
             "key_preview": None,
+            "provider_code": provider_code,
         }
     preview = None
     try:
-        decrypted = decrypt_api_key(str(row["encrypted_api_key"]))
-        if decrypted and len(decrypted) > 8:
-            preview = f"{decrypted[:4]}{'*' * (len(decrypted) - 8)}{decrypted[-4:]}"
-        elif decrypted:
-            preview = "****"
+        key_hint = row["key_hint"] if "key_hint" in row.keys() else None
+        if key_hint:
+            preview = str(key_hint)
+        else:
+            decrypted = decrypt_api_key(str(row["encrypted_api_key"]))
+            if decrypted and len(decrypted) > 8:
+                preview = f"{decrypted[:4]}{'*' * (len(decrypted) - 8)}{decrypted[-4:]}"
+            elif decrypted:
+                preview = "****"
     except Exception:
         preview = "****"
     return {
         "has_key": True,
-        "validated": True,
+        "validated": str(row["status"] or "validated") == "validated" if "status" in row.keys() else True,
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "key_preview": preview,
+        "provider_code": provider_code,
     }
 
 
 def load_user_api_key(user_id: int, db_path: str | None = None) -> str | None:
     return load_provider_api_key(user_id, "dashscope", db_path=db_path)
+
+
+def load_provider_api_key_validation(
+    user_id: int,
+    provider_code: str,
+    db_path: str | None = None,
+) -> dict[str, Any]:
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            provider_id = _provider_id_for_code(conn, provider_code)
+            if provider_id is None:
+                return {}
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT validation_json
+                    FROM provider_credentials
+                    WHERE owner_user_id = %s AND provider_id = %s
+                    """,
+                    (user_id, provider_id),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return {}
+        try:
+            return json.loads(str(row.get("validation_json") or "{}"))
+        except json.JSONDecodeError:
+            return {}
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT validation_json
+            FROM user_provider_api_keys
+            WHERE user_id = ? AND provider_code = ?
+            """,
+            (user_id, provider_code),
+        ).fetchone()
+    if row is None:
+        return {}
+    try:
+        return json.loads(str(row["validation_json"] or "{}"))
+    except Exception:
+        return {}
 
 
 def load_provider_api_key(user_id: int, provider_code: str, db_path: str | None = None) -> str | None:
@@ -423,9 +539,18 @@ def load_provider_api_key(user_id: int, provider_code: str, db_path: str | None 
         return decrypt_api_key(str(row["encrypted_api_key"]))
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT encrypted_api_key FROM user_api_keys WHERE user_id = ?",
-            (user_id,),
+            """
+            SELECT encrypted_api_key
+            FROM user_provider_api_keys
+            WHERE user_id = ? AND provider_code = ?
+            """,
+            (user_id, provider_code),
         ).fetchone()
+        if row is None and provider_code == "dashscope":
+            row = conn.execute(
+                "SELECT encrypted_api_key FROM user_api_keys WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
     if row is None:
         return None
     return decrypt_api_key(str(row["encrypted_api_key"]))
@@ -448,5 +573,10 @@ def delete_provider_api_key(user_id: int, provider_code: str, db_path: str | Non
                 )
         return
     with _connect(db_path) as conn:
-        conn.execute("DELETE FROM user_api_keys WHERE user_id = ?", (user_id,))
+        conn.execute(
+            "DELETE FROM user_provider_api_keys WHERE user_id = ? AND provider_code = ?",
+            (user_id, provider_code),
+        )
+        if provider_code == "dashscope":
+            conn.execute("DELETE FROM user_api_keys WHERE user_id = ?", (user_id,))
         conn.commit()

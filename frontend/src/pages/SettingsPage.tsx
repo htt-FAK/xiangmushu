@@ -4,11 +4,45 @@ import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreference
 import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
 import { useI18n } from "../i18n";
-import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap } from "../types";
+import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap, ProviderApiKeyStatus } from "../types";
 
-const BAILIAN_KEY_URL = "https://bailian.console.aliyun.com/#/key";
 const MODEL_ROLE_ORDER = ["main_writer", "web_search", "fast_writer", "vision_layout", "template_planner", "audit_text"];
 type ApiKeyStage = "idle" | "validating" | "saving" | "saved" | "failed";
+type ProviderCode = "dashscope" | "deepseek" | "mimo";
+
+const PROVIDERS: Array<{
+  code: ProviderCode;
+  title: string;
+  body: string;
+  link: string;
+  linkLabel: string;
+  badge: string;
+}> = [
+  {
+    code: "dashscope",
+    title: "DashScope / 阿里云百炼",
+    body: "站点基础能力提供方。知识库 embedding、默认文本、默认联网和默认视觉链路都依赖 DashScope。",
+    link: "https://bailian.console.aliyun.com/#/key",
+    linkLabel: "获取 DashScope Key",
+    badge: "基础必需",
+  },
+  {
+    code: "deepseek",
+    title: "DeepSeek",
+    body: "文本补充 provider。可用于主写作、快速写作、模板规划和文本审核，不参与联网搜索、视觉和 embedding。",
+    link: "https://platform.deepseek.com/api_keys",
+    linkLabel: "获取 DeepSeek Key",
+    badge: "文本补充",
+  },
+  {
+    code: "mimo",
+    title: "Xiaomi MiMo",
+    body: "文本、联网搜索和视觉补充 provider。按量付费，联网搜索需单独开通插件服务。",
+    link: "https://platform.xiaomimimo.com/console/api-keys",
+    linkLabel: "获取 MiMo Key",
+    badge: "文本 / 搜索 / 视觉",
+  },
+];
 
 function flattenOptions(config?: ModelModuleConfig): ModelOption[] {
   const seen = new Set<string>();
@@ -34,9 +68,6 @@ function preferredModel(config?: ModelModuleConfig, current = "") {
   return options.find((item) => item.recommended)?.model || options[0]?.model || current;
 }
 
-// ---------------------------------------------------------------------------
-// Model Selector Component
-// ---------------------------------------------------------------------------
 function ModelSelector({
   moduleKey,
   config,
@@ -53,7 +84,6 @@ function ModelSelector({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
   useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
@@ -65,41 +95,22 @@ function ModelSelector({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  // Flatten all options for display
-  const flatOptions: { model: string; recommended?: boolean; tier?: string }[] = useMemo(() => {
-    const result: { model: string; recommended?: boolean; tier?: string }[] = [];
-    if (config.tiers) {
-      for (const [tierName, models] of Object.entries(config.tiers)) {
-        for (const m of models) {
-          result.push({ ...m, tier: tierName });
-        }
-      }
-    }
-    if (config.options) {
-      for (const m of config.options) {
-        result.push(m);
-      }
-    }
-    return result;
-  }, [config]);
-
-  const selectedLabel = flatOptions.find((o) => o.model === selected)?.model || selected || "—";
-  const isRecommended = flatOptions.find((o) => o.model === selected)?.recommended;
+  const flatOptions: ModelOption[] = useMemo(() => flattenOptions(config), [config]);
+  const selectedOption = flatOptions.find((o) => o.model === selected);
+  const selectedLabel = selectedOption?.label || selectedOption?.model || selected || "...";
 
   return (
     <div className={`relative ${open ? "z-[90]" : "z-0"}`} ref={ref}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <span className="text-sm font-medium text-slate-200">{config.label}</span>
-          {config.description && (
-            <p className="mt-0.5 text-xs text-slate-500 leading-relaxed">{config.description}</p>
-          )}
+          {config.description ? <p className="mt-0.5 text-xs text-slate-500 leading-relaxed">{config.description}</p> : null}
         </div>
         <button
           type="button"
           onClick={() => setOpen(!open)}
           disabled={saving}
-          className={`flex min-w-[200px] items-center justify-between gap-2 border px-3 py-2 text-left text-sm transition ${
+          className={`flex min-w-[220px] items-center justify-between gap-2 border px-3 py-2 text-left text-sm transition ${
             open
               ? "border-signal-lime/60 bg-signal-lime/8 text-white"
               : "border-white/15 bg-white/[0.04] text-slate-200 hover:border-white/30"
@@ -107,83 +118,62 @@ function ModelSelector({
         >
           <span className="flex items-center gap-1.5 truncate">
             {selectedLabel}
-            {isRecommended && <Star size={12} className="shrink-0 fill-signal-lime text-signal-lime" />}
+            {selectedOption?.provider_name ? <span className="text-xs text-slate-500">({selectedOption.provider_name})</span> : null}
+            {selectedOption?.recommended ? <Star size={12} className="shrink-0 fill-signal-lime text-signal-lime" /> : null}
           </span>
           <ChevronDown size={14} className={`shrink-0 text-slate-500 transition ${open ? "rotate-180" : ""}`} />
         </button>
       </div>
 
-      {open && (
-        <div className="absolute right-0 z-[100] mt-1 max-h-[360px] w-full min-w-[240px] max-w-[320px] overflow-y-auto border border-white/15 bg-night-900 shadow-xl">
-          {config.tiers ? (
-            Object.entries(config.tiers).map(([tierName, models]) => (
-              <div key={tierName}>
-                <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  {tierName}
-                </div>
-                {models.map((m: ModelOption) => (
-                  <button
-                    key={m.model}
-                    type="button"
-                    onClick={() => {
-                      onSelect(moduleKey, m.model);
-                      setOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
-                      selected === m.model
-                        ? "bg-signal-lime/12 text-white"
-                        : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
-                    }`}
-                  >
-                    <span className="truncate">{m.model}</span>
-                    {m.recommended && (
-                      <span className="ml-2 shrink-0 rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">
-                        ⭐
-                      </span>
-                    )}
-                    {selected === m.model && <Check size={14} className="ml-2 shrink-0 text-signal-lime" />}
-                  </button>
-                ))}
-              </div>
-            ))
-          ) : (
-            config.options?.map((m: ModelOption) => (
-              <button
-                key={m.model}
-                type="button"
-                onClick={() => {
-                  onSelect(moduleKey, m.model);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
-                  selected === m.model
-                    ? "bg-signal-lime/12 text-white"
-                    : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
-                }`}
-              >
-                <span className="truncate">{m.model}</span>
-                {m.recommended && (
-                  <span className="ml-2 shrink-0 rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">
-                    ⭐
-                  </span>
-                )}
-                {selected === m.model && <Check size={14} className="ml-2 shrink-0 text-signal-lime" />}
-              </button>
-            ))
-          )}
+      {open ? (
+        <div className="absolute right-0 z-[100] mt-1 max-h-[360px] w-full min-w-[260px] max-w-[360px] overflow-y-auto border border-white/15 bg-night-900 shadow-xl">
+          {flatOptions.map((option) => (
+            <button
+              key={`${option.provider_code || "default"}-${option.model}`}
+              type="button"
+              onClick={() => {
+                onSelect(moduleKey, option.model);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
+                selected === option.model
+                  ? "bg-signal-lime/12 text-white"
+                  : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
+              }`}
+            >
+              <span className="min-w-0">
+                <span className="block truncate">{option.label || option.model}</span>
+                <span className="block truncate text-xs text-slate-500">
+                  {option.provider_name || option.provider_code || option.model}
+                </span>
+              </span>
+              <span className="ml-2 flex shrink-0 items-center gap-2">
+                {option.recommended ? (
+                  <span className="rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">推荐</span>
+                ) : null}
+                {selected === option.model ? <Check size={14} className="text-signal-lime" /> : null}
+              </span>
+            </button>
+          ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
+}
+
+function providerStatusText(status: ProviderApiKeyStatus | undefined, loading: boolean) {
+  if (loading) return "加载中...";
+  if (!status?.has_key) return "未保存";
+  if (status.validated) return "已验证";
+  return "已保存，待验证";
 }
 
 export default function SettingsPage() {
   const { t } = useI18n();
   const { language, setLanguage } = useAuth();
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
+  const [activeProvider, setActiveProvider] = useState<ProviderCode>("dashscope");
   const [apiKey, setApiKey] = useState("");
-  const [agreeChecked, setAgreeChecked] = useState(false);
-  const [agreeText, setAgreeText] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -191,8 +181,6 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [validation, setValidation] = useState<ApiKeyValidationResult | null>(null);
   const [apiKeyStage, setApiKeyStage] = useState<ApiKeyStage>("idle");
-
-  // Model selection state
   const [modelOptions, setModelOptions] = useState<ModelOptionsMap | null>(null);
   const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
   const [modelWarnings, setModelWarnings] = useState<Record<string, string>>({});
@@ -200,6 +188,7 @@ export default function SettingsPage() {
   const [modelSaving, setModelSaving] = useState(false);
   const modelSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const providerStatuses = status?.providers ?? {};
   const canConfirm = apiKey.trim().length > 0;
 
   useEffect(() => {
@@ -211,12 +200,9 @@ export default function SettingsPage() {
 
   const visibleModelOptions = useMemo(() => {
     if (!modelOptions) return [];
-    return MODEL_ROLE_ORDER
-      .filter((key) => modelOptions[key])
-      .map((key) => [key, modelOptions[key]] as const);
+    return MODEL_ROLE_ORDER.filter((key) => modelOptions[key]).map((key) => [key, modelOptions[key]] as const);
   }, [modelOptions]);
 
-  // Load model options + current choices
   useEffect(() => {
     Promise.all([fetchModelOptions(), fetchUserPreferences()])
       .then(([options, prefs]) => {
@@ -243,53 +229,39 @@ export default function SettingsPage() {
         setModelChoices(merged);
         setModelWarnings(warnings);
       })
-      .catch((err: unknown) => {
-        console.error("Failed to load model options", err);
-      })
+      .catch((err: unknown) => console.error("Failed to load model options", err))
       .finally(() => setModelLoading(false));
   }, []);
 
-  const handleModelSelect = useCallback(
-    (moduleKey: string, model: string) => {
-      setModelWarnings((prev) => {
-        const next = { ...prev };
-        delete next[moduleKey];
-        return next;
-      });
-      let nextChoices: Record<string, string> = {};
-      setModelChoices((prev) => {
-        nextChoices = { ...prev, [moduleKey]: model };
-        return nextChoices;
-      });
-      if (modelSaveTimer.current) clearTimeout(modelSaveTimer.current);
-      setModelSaving(true);
-      modelSaveTimer.current = setTimeout(() => {
-        updateUserPreferences({ model_choices: nextChoices })
-          .then((updated) => {
-            setModelChoices(updated.model_choices ?? nextChoices);
-            setModelWarnings((prev) => ({ ...prev, ...(updated.warnings ?? {}) }));
-          })
-          .catch((err: unknown) => {
-            console.error("Failed to save model choice", err);
-          })
-          .finally(() => setModelSaving(false));
-      }, 400);
-    },
-    [],
-  );
+  const handleModelSelect = useCallback((moduleKey: string, model: string) => {
+    setModelWarnings((prev) => {
+      const next = { ...prev };
+      delete next[moduleKey];
+      return next;
+    });
+    let nextChoices: Record<string, string> = {};
+    setModelChoices((prev) => {
+      nextChoices = { ...prev, [moduleKey]: model };
+      return nextChoices;
+    });
+    if (modelSaveTimer.current) clearTimeout(modelSaveTimer.current);
+    setModelSaving(true);
+    modelSaveTimer.current = setTimeout(() => {
+      updateUserPreferences({ model_choices: nextChoices })
+        .then((updated) => {
+          setModelChoices(updated.model_choices ?? nextChoices);
+          setModelWarnings((prev) => ({ ...prev, ...(updated.warnings ?? {}) }));
+        })
+        .catch((err: unknown) => console.error("Failed to save model choice", err))
+        .finally(() => setModelSaving(false));
+    }, 400);
+  }, []);
 
-  const statusText = useMemo(() => {
-    if (loading) return t("settings.loading");
-    if (status?.has_key) return t("settings.keySaved");
-    return t("settings.keyNotSaved");
-  }, [loading, status?.has_key, t]);
-
-  function openDialog() {
+  function openDialog(providerCode: ProviderCode) {
+    setActiveProvider(providerCode);
     setError("");
     setValidation(null);
     setApiKeyStage("idle");
-    setAgreeChecked(false);
-    setAgreeText("");
     setDialogOpen(true);
   }
 
@@ -300,7 +272,7 @@ export default function SettingsPage() {
     setValidation(null);
     setApiKeyStage("validating");
     try {
-      const checked = await validateApiKey(apiKey);
+      const checked = await validateApiKey(apiKey, activeProvider);
       setValidation(checked);
       if (!checked.ok) {
         setApiKeyStage("failed");
@@ -308,7 +280,7 @@ export default function SettingsPage() {
         return;
       }
       setApiKeyStage("saving");
-      const next = await saveApiKey(apiKey);
+      const next = await saveApiKey(apiKey, activeProvider);
       setStatus(next);
       setValidation(next.validation ?? checked);
       setApiKey("");
@@ -322,11 +294,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function removeKey() {
+  async function removeKey(providerCode: ProviderCode) {
     setSaving(true);
     setError("");
     try {
-      const next = await deleteApiKey();
+      const next = await deleteApiKey(providerCode);
       setStatus(next);
       window.dispatchEvent(new CustomEvent("xiangmushu:apikey-status-changed", { detail: next }));
     } catch (err) {
@@ -351,11 +323,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader
-        eyebrow={t("settings.eyebrow")}
-        title={t("settings.title")}
-        description={t("settings.description")}
-      />
+      <PageHeader eyebrow={t("settings.eyebrow")} title={t("settings.title")} description={t("settings.description")} />
       <ErrorBanner message={error} />
 
       <Panel className="relative z-30 overflow-visible mb-5 md:mb-6">
@@ -366,12 +334,8 @@ export default function SettingsPage() {
                 <Languages size={20} />
               </div>
               <div className="min-w-0">
-                <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">
-                  {t("settings.languageCardTitle")}
-                </h2>
-                <p className="mt-0.5 text-sm text-slate-400">
-                  {t("settings.languageCardBody")}
-                </p>
+                <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("settings.languageCardTitle")}</h2>
+                <p className="mt-0.5 text-sm text-slate-400">{t("settings.languageCardBody")}</p>
               </div>
             </div>
           </div>
@@ -391,14 +355,10 @@ export default function SettingsPage() {
                   }`}
                 >
                   <span className="flex items-center justify-between gap-3">
-                    <span className="font-display text-lg font-semibold md:text-xl">
-                      {t(`settings.language.${item}.title`)}
-                    </span>
+                    <span className="font-display text-lg font-semibold md:text-xl">{t(`settings.language.${item}.title`)}</span>
                     {active ? <Check size={19} className="text-signal-lime" /> : null}
                   </span>
-                  <span className="mt-1.5 block text-sm leading-6 text-slate-400 md:mt-2">
-                    {t(`settings.language.${item}.body`)}
-                  </span>
+                  <span className="mt-1.5 block text-sm leading-6 text-slate-400 md:mt-2">{t(`settings.language.${item}.body`)}</span>
                 </button>
               );
             })}
@@ -406,24 +366,16 @@ export default function SettingsPage() {
         </div>
       </Panel>
 
-      {/* Model Selection Panel — desktop only, requires API Key */}
-      {status?.has_key && (
       <Panel className="relative z-40 overflow-visible mb-5 md:mb-6">
-        <div className="flex items-center gap-3 mb-4">
+        <div className="mb-4 flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime md:h-11 md:w-11">
             <Cpu size={20} />
           </div>
           <div className="min-w-0">
-            <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">
-              {t("settings.modelCardTitle")}
-            </h2>
-            <p className="mt-0.5 text-sm text-slate-400">
-              {t("settings.modelCardBody")}
-            </p>
+            <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("settings.modelCardTitle")}</h2>
+            <p className="mt-0.5 text-sm text-slate-400">{t("settings.modelCardBody")}</p>
           </div>
-          {modelSaving && (
-            <Loader2 className="ml-auto animate-spin text-signal-lime" size={16} />
-          )}
+          {modelSaving ? <Loader2 className="ml-auto animate-spin text-signal-lime" size={16} /> : null}
         </div>
 
         {modelLoading ? (
@@ -439,95 +391,83 @@ export default function SettingsPage() {
           <div className="space-y-3">
             {visibleModelOptions.map(([key, cfg]) => (
               <div key={key} className="space-y-2">
-                <ModelSelector
-                  moduleKey={key}
-                  config={cfg}
-                  selected={modelChoices[key] || ""}
-                  onSelect={handleModelSelect}
-                  saving={modelSaving}
-                />
-                {cfg.source && cfg.source !== "registry" ? (
-                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{cfg.source}</p>
-                ) : null}
-                {modelWarnings[key] ? (
-                  <p className="text-xs text-signal-amber">{modelWarnings[key]}</p>
-                ) : null}
+                <ModelSelector moduleKey={key} config={cfg} selected={modelChoices[key] || ""} onSelect={handleModelSelect} saving={modelSaving} />
+                {cfg.source && cfg.source !== "registry" ? <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{cfg.source}</p> : null}
+                {modelWarnings[key] ? <p className="text-xs text-signal-amber">{modelWarnings[key]}</p> : null}
               </div>
             ))}
           </div>
         ) : null}
       </Panel>
-      )}
 
-      <div className="relative z-0 grid gap-5 md:gap-6 lg:grid-cols-[1fr_360px]">
-        <Panel className="min-w-0">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/12 text-signal-cyan md:h-11 md:w-11">
-                  <KeyRound size={20} />
+      <div className="grid gap-5 md:gap-6 lg:grid-cols-3">
+        {PROVIDERS.map((provider) => {
+          const item = providerStatuses[provider.code];
+          return (
+            <Panel key={provider.code} className="min-w-0">
+              <div className="flex flex-col gap-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="mb-2 inline-flex items-center border border-white/10 bg-night-950/70 px-2 py-1 text-[11px] text-slate-400">
+                      {provider.badge}
+                    </div>
+                    <h2 className="break-words font-display text-xl font-semibold text-white">{provider.title}</h2>
+                    <p className="mt-1 text-sm text-slate-400">{providerStatusText(item, loading)}</p>
+                  </div>
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/12 text-signal-cyan">
+                    <KeyRound size={18} />
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">
-                    {t("settings.apiKeyCardTitle")}
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-400">{statusText}</p>
+
+                {item?.has_key && item.key_preview ? (
+                  <div className="inline-flex items-center gap-2 border border-white/10 bg-night-950/70 px-3 py-2 font-mono text-sm tracking-wide text-signal-cyan">
+                    <KeyRound size={14} />
+                    <span>{item.key_preview}</span>
+                  </div>
+                ) : null}
+
+                <p className="text-sm leading-6 text-slate-300">{provider.body}</p>
+                {provider.code === "mimo" ? (
+                  <div className="space-y-2 text-xs leading-5 text-slate-400">
+                    <p>Base URL: `https://api.xiaomimimo.com/v1`</p>
+                    <p>按量付费，联网服务单独计费，不包含在 token 价格内。</p>
+                    <a className="text-signal-cyan underline" href="https://platform.xiaomimimo.com/console/plugin?userId=2933868983" target="_blank" rel="noreferrer">
+                      开通 MiMo 联网搜索插件
+                    </a>
+                  </div>
+                ) : null}
+                {item?.updated_at ? <p className="text-xs text-slate-500">{t("settings.updatedAt")} {item.updated_at}</p> : null}
+
+                <div className="grid gap-2.5">
+                  <Button className="min-h-12 w-full" onClick={() => openDialog(provider.code)} disabled={saving}>
+                    <KeyRound size={17} />
+                    {item?.has_key ? t("settings.replaceKey") : t("settings.addKey")}
+                  </Button>
+                  <Button className="min-h-12 w-full" variant="danger" onClick={() => void removeKey(provider.code)} disabled={!item?.has_key || saving}>
+                    {saving ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />}
+                    {t("settings.deleteKey")}
+                  </Button>
+                  <a
+                    className="inline-flex min-h-12 items-center justify-center border border-white/10 bg-white/[0.055] px-4 text-sm font-semibold text-signal-cyan hover:border-signal-cyan/50"
+                    href={provider.link}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {provider.linkLabel}
+                  </a>
                 </div>
               </div>
-              {status?.has_key && status.key_preview && (
-                <div className="mt-3 inline-flex items-center gap-2 border border-white/10 bg-night-950/70 px-3 py-2 font-mono text-sm tracking-wide text-signal-cyan">
-                  <KeyRound size={14} />
-                  <span>{status.key_preview}</span>
-                </div>
-              )}
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-300 md:mt-5 md:leading-7">
-                {t("settings.apiKeyCardBody")}
-              </p>
-              {status?.updated_at && (
-                <p className="mt-3 text-xs text-slate-500">
-                  {t("settings.updatedAt")} {status.updated_at}
-                </p>
-              )}
-              {validation && (
-                <p className={`mt-3 text-xs ${validation.ok ? "text-signal-lime" : "text-signal-amber"}`}>
-                  {validation.message}
-                  {validation.validated_model ? ` (${validation.validated_model})` : ""}
-                </p>
-              )}
-            </div>
-            <div className="grid shrink-0 gap-2.5 sm:flex sm:flex-wrap sm:gap-3">
-              <Button className="min-h-12 w-full font-bold sm:min-h-11 sm:w-auto sm:font-semibold" onClick={openDialog} disabled={saving}>
-                <KeyRound size={17} />
-                {status?.has_key ? t("settings.replaceKey") : t("settings.addKey")}
-              </Button>
-              <Button className="min-h-12 w-full sm:min-h-11 sm:w-auto" variant="danger" onClick={removeKey} disabled={!status?.has_key || saving}>
-                {saving ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />}
-                {t("settings.deleteKey")}
-              </Button>
-            </div>
-          </div>
-        </Panel>
-
-        <Panel className="min-w-0">
-          <p className="font-display text-lg font-semibold text-white">{t("settings.bailianTitle")}</p>
-          <p className="mt-2 text-sm leading-6 text-slate-300 md:mt-3 md:leading-7">{t("settings.bailianBody")}</p>
-          <a
-            className="mt-4 inline-flex min-h-12 w-full items-center justify-center border border-white/10 bg-white/[0.055] px-4 text-sm font-bold text-signal-cyan hover:border-signal-cyan/50 sm:min-h-11 sm:w-auto sm:font-semibold"
-            href={BAILIAN_KEY_URL}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {t("settings.getKeyLink")}
-          </a>
-        </Panel>
+            </Panel>
+          );
+        })}
       </div>
 
-      {dialogOpen && (
+      {dialogOpen ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-night-950/92 px-4 py-6 backdrop-blur">
           <div className="mx-auto w-full max-w-3xl border border-white/10 bg-night-900 p-4 shadow-panel md:p-5">
             <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-3 md:pb-4">
               <h2 className="break-words font-display text-xl font-semibold text-white md:text-3xl">
-                {t("settings.noticeTitle")}
+                保存 {PROVIDERS.find((item) => item.code === activeProvider)?.title} API Key
               </h2>
               <button
                 type="button"
@@ -539,29 +479,20 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            <div className="mt-4 space-y-2.5 text-sm leading-6 text-slate-200 md:mt-5 md:space-y-3 md:leading-7">
-              {[1, 2, 3, 4, 5, 6].map((item) => (
-                <p key={item}>
-                  {item}. {t(`settings.noticePoint${item}`)}
-                </p>
-              ))}
-              <p>
-                {t("settings.getKeyPrefix")}{" "}
-                <a className="text-signal-cyan underline" href={BAILIAN_KEY_URL} target="_blank" rel="noreferrer">
-                  {BAILIAN_KEY_URL}
-                </a>
-              </p>
+            <div className="mt-4 space-y-3 text-sm leading-6 text-slate-200">
+              <p>当前 provider：{PROVIDERS.find((item) => item.code === activeProvider)?.title}</p>
+              {activeProvider === "dashscope" ? <p>DashScope 仍是全站基础能力，未保存或未验证时首页、生成页、模板分析页都会保持 missing_key。</p> : null}
+              {activeProvider === "deepseek" ? <p>DeepSeek 仅用于文本角色，不参与联网搜索、视觉和 embedding。</p> : null}
+              {activeProvider === "mimo" ? <p>MiMo 采用按量付费模式，联网搜索需先在插件页开通，否则保存时会返回明确错误。</p> : null}
             </div>
 
             <div className="mt-6 grid gap-4">
               <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  {t("settings.apiKeyLabel")}
-                </span>
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">API Key</span>
                 <Input
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
-                  placeholder={t("settings.apiKeyPlaceholder")}
+                  placeholder={activeProvider === "mimo" ? "请输入 Xiaomi MiMo API Key" : activeProvider === "deepseek" ? "请输入 DeepSeek API Key" : "请输入 DashScope API Key"}
                   type="password"
                   autoComplete="off"
                   disabled={saving || apiKeyStage === "saved"}
@@ -570,30 +501,26 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-4 border border-white/10 bg-night-950/65 p-3 text-sm">
-              {apiKeyStage === "idle" && (
-                <p className="text-slate-400">点击确认后会先测试 API Key，再保存到本地账号。</p>
-              )}
-              {apiKeyStage === "validating" && (
+              {apiKeyStage === "idle" ? <p className="text-slate-400">确认后会先验证当前 provider 的 API Key，再执行保存。</p> : null}
+              {apiKeyStage === "validating" ? (
                 <p className="inline-flex items-center gap-2 text-signal-cyan">
                   <Loader2 className="animate-spin" size={16} />
-                  正在测试 API Key 和可用模型...
+                  正在验证 API Key...
                 </p>
-              )}
-              {apiKeyStage === "saving" && (
+              ) : null}
+              {apiKeyStage === "saving" ? (
                 <p className="inline-flex items-center gap-2 text-signal-cyan">
                   <Loader2 className="animate-spin" size={16} />
                   验证通过，正在保存...
                 </p>
-              )}
-              {apiKeyStage === "saved" && (
+              ) : null}
+              {apiKeyStage === "saved" ? (
                 <p className="inline-flex items-center gap-2 text-signal-lime">
                   <Check size={16} />
-                  验证通过，API Key 已保存。现在可以正常使用模型选择和生成。
+                  API Key 已保存。
                 </p>
-              )}
-              {apiKeyStage === "failed" && validation && (
-                <p className="text-signal-amber">{validation.message || "API Key 验证失败，请检查 Key 或模型额度。"}</p>
-              )}
+              ) : null}
+              {apiKeyStage === "failed" && validation ? <p className="text-signal-amber">{validation.message}</p> : null}
               {validation?.probes?.length ? (
                 <div className="mt-3 space-y-2">
                   {validation.probes.map((probe) => (
@@ -624,7 +551,7 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </>
   );
 }

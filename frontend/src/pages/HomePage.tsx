@@ -26,7 +26,10 @@ export default function HomePage() {
 
   const refreshApiKeyStatus = useCallback(() => {
     fetchApiKeyStatus()
-      .then((status) => setHasValidatedKey(Boolean(status.has_key && status.validated)))
+      .then((status) => {
+        const dashscope = status.providers?.dashscope;
+        setHasValidatedKey(Boolean(dashscope?.has_key && dashscope?.validated));
+      })
       .catch(() => setHasValidatedKey(false));
   }, []);
 

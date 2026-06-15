@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.db import mysql_enabled, mysql_health_check, mysql_transaction  # noqa: E402
-from core.provider_registry import catalog_seed_candidates, list_provider_rows  # noqa: E402
+from core.provider_registry import SUPPORTED_PROVIDER_CODES, UI_ROLE_KEYS, catalog_seed_candidates, list_provider_rows  # noqa: E402
 
 
 def _json_struct(value: Any) -> Any:
@@ -70,6 +70,11 @@ def _normalized_candidate(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _seed_enabled_for_provider(provider: dict[str, Any]) -> bool:
+    config = provider.get("config") or {}
+    return bool(provider.get("enabled") or config.get("enabled_when_credentials_present"))
+
+
 def build_seed_plan() -> dict[str, Any]:
     if not mysql_enabled():
         raise RuntimeError("Set PERSISTENCE_MODE=mysql before seeding the model catalog.")
@@ -79,15 +84,20 @@ def build_seed_plan() -> dict[str, Any]:
 
     providers = {str(item["code"]): item for item in list_provider_rows(include_disabled=True)}
     existing_rows = _raw_catalog_rows()
+    candidate_rows = catalog_seed_candidates()
     existing_by_key = {
         (int(row["provider_id"]), str(row["model_id"]), str(row["role_key"])): row
         for row in existing_rows
     }
+    supported_keys = {
+        (str(candidate["provider_code"]), str(candidate["role"]), str(candidate["model"]))
+        for candidate in candidate_rows
+    }
 
     operations: list[dict[str, Any]] = []
-    counts = {"insert": 0, "update": 0, "unchanged": 0, "skipped": 0}
+    counts = {"insert": 0, "update": 0, "disable_legacy": 0, "unchanged": 0, "skipped": 0}
 
-    for candidate in catalog_seed_candidates():
+    for candidate in candidate_rows:
         provider = providers.get(str(candidate["provider_code"]))
         if provider is None:
             counts["skipped"] += 1
@@ -113,7 +123,7 @@ def build_seed_plan() -> dict[str, Any]:
                     "model": candidate["model"],
                     "provider_code": candidate["provider_code"],
                     "provider_id": int(provider["id"]),
-                    "enabled": bool(provider.get("enabled")),
+                    "enabled": _seed_enabled_for_provider(provider),
                     **normalized_candidate,
                 }
             )
@@ -152,6 +162,34 @@ def build_seed_plan() -> dict[str, Any]:
                 }
             )
 
+    managed_roles = {str(role) for role in UI_ROLE_KEYS}
+    managed_providers = {str(code) for code in SUPPORTED_PROVIDER_CODES}
+    for row in existing_rows:
+        provider_code = str(row.get("provider_code") or "").strip().lower()
+        role = str(row.get("role_key") or "").strip()
+        model = str(row.get("model_id") or "").strip()
+        if provider_code not in managed_providers or role not in managed_roles:
+            continue
+        if provider_code != "deepseek":
+            continue
+        if (provider_code, role, model) in supported_keys:
+            continue
+        if not bool(row.get("enabled")):
+            continue
+        counts["disable_legacy"] += 1
+        operations.append(
+            {
+                "action": "disable_legacy",
+                "reason": "unsupported_deepseek_model",
+                "row_id": int(row["id"]),
+                "role": role,
+                "model": model,
+                "provider_code": provider_code,
+                "provider_id": int(row["provider_id"]),
+                "enabled": False,
+            }
+        )
+
     return {
         "ok": True,
         "mode": "mysql",
@@ -162,7 +200,7 @@ def build_seed_plan() -> dict[str, Any]:
 
 
 def apply_seed_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    applied = {"inserted": 0, "updated": 0}
+    applied = {"inserted": 0, "updated": 0, "disabled_legacy": 0}
     with mysql_transaction() as conn:
         with conn.cursor() as cur:
             for op in plan.get("operations") or []:
@@ -215,6 +253,16 @@ def apply_seed_plan(plan: dict[str, Any]) -> dict[str, Any]:
                         ),
                     )
                     applied["updated"] += 1
+                elif action == "disable_legacy":
+                    cur.execute(
+                        """
+                        UPDATE model_catalog
+                        SET enabled = 0
+                        WHERE id = %s
+                        """,
+                        (int(op["row_id"]),),
+                    )
+                    applied["disabled_legacy"] += 1
     result = dict(plan)
     result["applied"] = applied
     return result
@@ -229,11 +277,17 @@ def _print_text(plan: dict[str, Any], *, applied: bool) -> None:
         "counts: "
         f"insert={counts.get('insert', 0)} "
         f"update={counts.get('update', 0)} "
+        f"disable_legacy={counts.get('disable_legacy', 0)} "
         f"unchanged={counts.get('unchanged', 0)} "
         f"skipped={counts.get('skipped', 0)}"
     )
     if applied:
-        print(f"applied: inserted={plan.get('applied', {}).get('inserted', 0)} updated={plan.get('applied', {}).get('updated', 0)}")
+        print(
+            "applied: "
+            f"inserted={plan.get('applied', {}).get('inserted', 0)} "
+            f"updated={plan.get('applied', {}).get('updated', 0)} "
+            f"disabled_legacy={plan.get('applied', {}).get('disabled_legacy', 0)}"
+        )
     print("operations:")
     for op in plan.get("operations") or []:
         print(f"  - {op['action']}: {op['provider_code']} / {op['role']} / {op['model']}")

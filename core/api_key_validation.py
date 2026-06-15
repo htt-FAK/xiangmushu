@@ -7,6 +7,8 @@ from core.dashscope_chat import direct_chat_completions_create
 from core.provider_errors import classify_provider_error
 from core.provider_registry import provider_by_code, validation_candidate_models as registry_validation_candidate_models
 
+MIMO_PLUGIN_URL = "https://platform.xiaomimimo.com/console/plugin?userId=2933868983"
+
 
 def validation_candidate_models(provider_code: str = "dashscope") -> list[str]:
     try:
@@ -93,6 +95,31 @@ def probe_api_key_model(api_key: str, model: str, provider_code: str = "dashscop
     }
 
 
+def probe_mimo_search_plugin(api_key: str) -> dict[str, Any]:
+    client = _client_for_api_key(api_key, "mimo")
+    response = direct_chat_completions_create(
+        client,
+        model="mimo-v2.5-pro",
+        messages=[
+            {"role": "system", "content": "Return OK."},
+            {"role": "user", "content": "Reply with OK only."},
+        ],
+        max_tokens=8,
+        temperature=0,
+        tools=[{"type": "web_search", "max_keyword": 1, "force_search": False, "limit": 1}],
+        tool_choice="auto",
+    )
+    return {
+        "ok": True,
+        "model": "mimo-v2.5-pro",
+        "code": "ok",
+        "message": "MiMo web search plugin validation succeeded.",
+        "detail": str(getattr(response, "model", None) or "mimo-v2.5-pro"),
+        "provider_code": "mimo",
+        "search_enabled": True,
+    }
+
+
 def _summary_result(probes: list[dict[str, Any]]) -> dict[str, Any]:
     priority = [
         "invalid_api_key",
@@ -150,6 +177,40 @@ def validate_user_api_key(api_key: str, provider_code: str = "dashscope") -> dic
             result = probe_api_key_model(value, model, provider_code)
             probes.append(result)
             if result.get("ok"):
+                if provider_code == "mimo":
+                    try:
+                        plugin_probe = probe_mimo_search_plugin(value)
+                        probes.append(plugin_probe)
+                    except Exception as exc:
+                        classified = classify_provider_error(exc)
+                        probes.append(
+                            {
+                                "ok": False,
+                                "model": "mimo-v2.5-pro",
+                                "provider_code": "mimo",
+                                "code": "mimo_search_plugin_required",
+                                "message": (
+                                    "MiMo text validation passed, but web search is not enabled. "
+                                    f"Please enable the MiMo plugin service at {MIMO_PLUGIN_URL}."
+                                ),
+                                "detail": classified.get("detail") or str(exc),
+                                "retryable": False,
+                                "search_enabled": False,
+                            }
+                        )
+                        return {
+                            "ok": False,
+                            "code": "mimo_search_plugin_required",
+                            "message": (
+                                "MiMo text validation passed, but web search is not enabled. "
+                                f"Please enable the MiMo plugin service at {MIMO_PLUGIN_URL}."
+                            ),
+                            "retryable": False,
+                            "validated_model": model,
+                            "provider_code": provider_code,
+                            "probes": probes,
+                            "search_enabled": False,
+                        }
                 return {
                     "ok": True,
                     "code": "ok",
@@ -158,6 +219,7 @@ def validate_user_api_key(api_key: str, provider_code: str = "dashscope") -> dic
                     "validated_model": model,
                     "provider_code": provider_code,
                     "probes": probes,
+                    "search_enabled": provider_code != "mimo" or True,
                 }
         except Exception as exc:
             classified = classify_provider_error(exc)
