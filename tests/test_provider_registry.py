@@ -32,6 +32,39 @@ def test_sanitize_user_model_choices_falls_back_when_model_disabled(monkeypatch)
     assert "main_writer" in warnings
 
 
+def test_sanitize_user_model_choices_allows_validated_supplemental_provider(monkeypatch):
+    monkeypatch.setattr(provider_registry, "registry_enabled", lambda: True)
+    monkeypatch.setattr(
+        provider_registry,
+        "_catalog_rows_for_user",
+        lambda user_id: [
+            {
+                "id": 1,
+                "role": "main_writer",
+                "model": "qwen3.7-plus",
+                "provider_id": 10,
+                "provider_code": "dashscope",
+                "provider_name": "DashScope",
+                "config": {},
+            },
+            {
+                "id": 2,
+                "role": "main_writer",
+                "model": "deepseek-v4-pro",
+                "provider_id": 11,
+                "provider_code": "deepseek",
+                "provider_name": "DeepSeek",
+                "config": {},
+            },
+        ],
+    )
+
+    clean, warnings = provider_registry.sanitize_user_model_choices({"main_writer": "deepseek-v4-pro"}, user_id=7)
+
+    assert clean == {"main_writer": "deepseek-v4-pro"}
+    assert warnings == {}
+
+
 def test_model_options_map_marks_unavailable_selected_model(monkeypatch):
     monkeypatch.setattr(provider_registry, "registry_enabled", lambda: True)
     monkeypatch.setattr(

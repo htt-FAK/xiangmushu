@@ -592,7 +592,10 @@ def load_user_model_choices(user_id: int | None) -> dict[str, str]:
     return {str(row["module_key"]): str(row["model_id"]) for row in rows if str(row.get("model_id") or "").strip()}
 
 
-def sanitize_user_model_choices(choices: dict[str, str] | None) -> tuple[dict[str, str], dict[str, str]]:
+def sanitize_user_model_choices(
+    choices: dict[str, str] | None,
+    user_id: int | None = None,
+) -> tuple[dict[str, str], dict[str, str]]:
     known_roles = _known_role_keys()
     raw = {
         str(k): str(v)
@@ -602,7 +605,7 @@ def sanitize_user_model_choices(choices: dict[str, str] | None) -> tuple[dict[st
     if not registry_enabled():
         return raw, {}
     try:
-        catalog_rows = _catalog_rows_for_user(None)
+        catalog_rows = _catalog_rows_for_user(user_id)
     except Exception as exc:
         warning = _registry_warning(
             "Model registry is unavailable; preserved selected models without validating availability.",
@@ -628,7 +631,7 @@ def sanitize_user_model_choices(choices: dict[str, str] | None) -> tuple[dict[st
 
 
 def save_user_model_choices(user_id: int, choices: dict[str, str] | None) -> tuple[dict[str, str], dict[str, str]]:
-    clean, warnings = sanitize_user_model_choices(choices)
+    clean, warnings = sanitize_user_model_choices(choices, user_id=user_id)
     if not registry_enabled():
         return clean, warnings
     try:

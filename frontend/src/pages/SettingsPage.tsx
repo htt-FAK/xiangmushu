@@ -191,6 +191,39 @@ export default function SettingsPage() {
   const providerStatuses = status?.providers ?? {};
   const canConfirm = apiKey.trim().length > 0;
 
+  const refreshModelSettings = useCallback(async () => {
+    setModelLoading(true);
+    try {
+      const [options, prefs] = await Promise.all([fetchModelOptions(), fetchUserPreferences()]);
+      setModelOptions(options);
+      const saved = prefs.model_choices ?? {};
+      const merged: Record<string, string> = { ...saved };
+      const warnings: Record<string, string> = { ...(prefs.warnings ?? {}) };
+      for (const key of MODEL_ROLE_ORDER) {
+        const cfg = options[key];
+        const availableModels = flattenOptions(cfg).map((item) => item.model);
+        const savedChoice = merged[key];
+        if (savedChoice && availableModels.length > 0 && !availableModels.includes(savedChoice)) {
+          const fallbackModel = preferredModel(cfg, savedChoice);
+          merged[key] = fallbackModel;
+          warnings[key] = cfg?.selected_unavailable?.reason ?? `${savedChoice} unavailable, switched to ${fallbackModel}`;
+        }
+        if (!merged[key]) {
+          merged[key] = preferredModel(cfg);
+        }
+        if (cfg?.warning) {
+          warnings[key] = warnings[key] || cfg.warning;
+        }
+      }
+      setModelChoices(merged);
+      setModelWarnings(warnings);
+    } catch (err) {
+      console.error("Failed to load model options", err);
+    } finally {
+      setModelLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchApiKeyStatus()
       .then(setStatus)
@@ -204,34 +237,8 @@ export default function SettingsPage() {
   }, [modelOptions]);
 
   useEffect(() => {
-    Promise.all([fetchModelOptions(), fetchUserPreferences()])
-      .then(([options, prefs]) => {
-        setModelOptions(options);
-        const saved = prefs.model_choices ?? {};
-        const merged: Record<string, string> = { ...saved };
-        const warnings: Record<string, string> = { ...(prefs.warnings ?? {}) };
-        for (const key of MODEL_ROLE_ORDER) {
-          const cfg = options[key];
-          const availableModels = flattenOptions(cfg).map((item) => item.model);
-          const savedChoice = merged[key];
-          if (savedChoice && availableModels.length > 0 && !availableModels.includes(savedChoice)) {
-            const fallbackModel = preferredModel(cfg, savedChoice);
-            merged[key] = fallbackModel;
-            warnings[key] = cfg?.selected_unavailable?.reason ?? `${savedChoice} unavailable, switched to ${fallbackModel}`;
-          }
-          if (!merged[key]) {
-            merged[key] = preferredModel(cfg);
-          }
-          if (cfg?.warning) {
-            warnings[key] = warnings[key] || cfg.warning;
-          }
-        }
-        setModelChoices(merged);
-        setModelWarnings(warnings);
-      })
-      .catch((err: unknown) => console.error("Failed to load model options", err))
-      .finally(() => setModelLoading(false));
-  }, []);
+    void refreshModelSettings();
+  }, [refreshModelSettings]);
 
   const handleModelSelect = useCallback((moduleKey: string, model: string) => {
     setModelWarnings((prev) => {
@@ -283,6 +290,7 @@ export default function SettingsPage() {
       const next = await saveApiKey(apiKey, activeProvider);
       setStatus(next);
       setValidation(next.validation ?? checked);
+      await refreshModelSettings();
       setApiKey("");
       setApiKeyStage("saved");
       window.dispatchEvent(new CustomEvent("xiangmushu:apikey-status-changed", { detail: next }));
@@ -300,6 +308,7 @@ export default function SettingsPage() {
     try {
       const next = await deleteApiKey(providerCode);
       setStatus(next);
+      await refreshModelSettings();
       window.dispatchEvent(new CustomEvent("xiangmushu:apikey-status-changed", { detail: next }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
