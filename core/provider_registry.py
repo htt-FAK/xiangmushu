@@ -608,7 +608,7 @@ def sanitize_user_model_choices(
         catalog_rows = _catalog_rows_for_user(user_id)
     except Exception as exc:
         warning = _registry_warning(
-            "Model registry is unavailable; preserved selected models without validating availability.",
+            "模型注册表不可用：已直接保留您选择的模型，暂未校验可用状态",
             exc,
         )
         return raw, {role: warning for role in raw}
@@ -626,7 +626,7 @@ def sanitize_user_model_choices(
         fallback_model, _ = default_model_for_role(role)
         if fallback_model:
             clean[role] = fallback_model
-            warnings[role] = f"Selected model '{model}' is unavailable; fell back to '{fallback_model}'."
+            warnings[role] = f"所选模型 '{model}' 暂时不可用，已自动降级至默认模型 '{fallback_model}'"
     return clean, warnings
 
 
@@ -638,7 +638,7 @@ def save_user_model_choices(user_id: int, choices: dict[str, str] | None) -> tup
         catalog_rows = _catalog_rows_for_user(user_id)
     except Exception as exc:
         warning = _registry_warning(
-            "Model registry is unavailable; saved selections only in JSON preferences.",
+            "模型注册表不可用：您的模型选择仅保存在本地 JSON 首选项中",
             exc,
         )
         merged = dict(warnings)

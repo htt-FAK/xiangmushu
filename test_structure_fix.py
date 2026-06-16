@@ -11,8 +11,6 @@ import config
 print("=== 配置检查 ===")
 print(f"OPENAI_BASE_URL: {config.OPENAI_BASE_URL}")
 print(f"DASHSCOPE_API_KEY: {'已配置' if config.DASHSCOPE_API_KEY else '未配置'}")
-print(f"DEEPSEEK_API_KEY: {'已配置' if config.DEEPSEEK_API_KEY else '未配置(已禁用)'}")
-print(f"FOSUN_AIGW_API_KEY: {'已配置' if config.FOSUN_AIGW_API_KEY else '未配置(已禁用)'}")
 print(f"TEMPLATE_ANALYZE_MODEL: {config.TEMPLATE_ANALYZE_MODEL}")
 print(f"LARGE_LLM_MODEL: {config.LARGE_LLM_MODEL}")
 print(f"SMALL_LLM_MODEL: {config.SMALL_LLM_MODEL}")
@@ -29,12 +27,6 @@ try:
     print(f"聊天客户端: OK (base_url={getattr(chat_client, 'base_url', 'unknown')})")
 except Exception as e:
     print(f"聊天客户端: FAILED - {e}")
-
-try:
-    ds_client = config.deepseek_client()
-    print(f"DeepSeek客户端: {'None(已禁用)' if ds_client is None else 'OK'}")
-except Exception as e:
-    print(f"DeepSeek客户端: FAILED - {e}")
 
 print("\n=== API 调用测试（轻量级） ===")
 try:

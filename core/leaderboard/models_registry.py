@@ -1,11 +1,11 @@
-"""入榜模型池：网关 ID、能力标签、百炼 alias。"""
+"""入榜模型池：阿里云可调用模型 ID、能力标签、百炼 alias。"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
-# 复星网关完整列表（用户提供）
-FOSUN_GATEWAY_MODEL_IDS: List[str] = [
+# 阿里云百炼兼容通道下可测的模型列表
+ALIYUN_MODEL_IDS: List[str] = [
     "claude-opus-4.6",
     "claude-opus-4.7",
     "claude-sonnet-4.6",
@@ -126,7 +126,7 @@ def _provider_for(model_id: str) -> str:
 
 
 def build_model_registry(extra_ids: Optional[List[str]] = None) -> List[ModelEntry]:
-    ids = list(FOSUN_GATEWAY_MODEL_IDS)
+    ids = list(ALIYUN_MODEL_IDS)
     if extra_ids:
         for m in extra_ids:
             if m not in ids:

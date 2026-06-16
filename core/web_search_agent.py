@@ -9,9 +9,20 @@ from core.dashscope_chat import chat_completions_create
 from core.evidence_pack import WebFact
 from core.fill_task import FillTask
 from core.model_router import WEB_SEARCH, ModelCallProfile, resolve_model_profile
+from core.provider_clients import chat_client_for_model
+from core.provider_registry import provider_code_for_model
 
 
 _LOG = logging.getLogger(__name__)
+
+_MIMO_WEB_SEARCH_TOOLS = [
+    {
+        "type": "web_search",
+        "max_keyword": 3,
+        "force_search": True,
+        "limit": 1,
+    }
+]
 
 
 WEB_SEARCH_SYSTEM = """You are a web evidence extraction agent. Search only for supporting public facts.
@@ -128,6 +139,17 @@ def fetch_web_evidence(
         user_id=user_id,
         routing_reason="web evidence extraction",
     )
+    resolved_client = client
+    if user_id is not None:
+        try:
+            resolved_client = chat_client_for_model(profile.model, user_id, purpose="chat")
+        except Exception as exc:
+            _LOG.warning(
+                "web_evidence_client_resolve_failed task_id=%s model=%s err=%s",
+                task.task_id,
+                profile.model,
+                exc,
+            )
     prompt = (
         f"Task type: {task.task_type}\n"
         f"Target chapter: {task.target_chapter}\n"
@@ -135,19 +157,25 @@ def fetch_web_evidence(
         "Search for concise facts that can support this project document section. "
         "Return claims with source metadata and gaps. Do not draft final prose."
     )
+    request_kwargs: dict[str, Any] = {
+        "model": profile.model,
+        "messages": [
+            {"role": "system", "content": WEB_SEARCH_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": profile.temperature or 0.2,
+        "stream": False,
+        "allow_backup_fallback": False,
+    }
+    if provider_code_for_model(profile.model) == "mimo":
+        request_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        request_kwargs["tools"] = list(_MIMO_WEB_SEARCH_TOOLS)
+        request_kwargs["tool_choice"] = "auto"
+    else:
+        request_kwargs["extra_body"] = dict(profile.extra_body)
 
     try:
-        response = chat_completions_create(
-            client,
-            model=profile.model,
-            messages=[
-                {"role": "system", "content": WEB_SEARCH_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=profile.temperature or 0.2,
-            extra_body=profile.extra_body,
-            stream=False,
-        )
+        response = chat_completions_create(resolved_client, **request_kwargs)
         ch0 = response.choices[0] if response.choices else None
         raw = (ch0.message.content if ch0 and ch0.message else "") or ""
         facts, gaps = parse_web_evidence(raw)

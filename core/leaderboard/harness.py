@@ -1,4 +1,4 @@
-"""双通道 API 调用与延迟/token 采集。"""
+"""阿里云百炼通道 API 调用与延迟/token 采集。"""
 from __future__ import annotations
 
 import base64
@@ -48,12 +48,10 @@ def vision_data_url() -> str:
 
 
 def client_for_channel(channel: str) -> Optional[OpenAI]:
-    if channel == "fosun":
-        if not (config.FOSUN_AIGW_API_KEY or "").strip():
+    if channel in {"aliyun", "dashscope", "bailian"}:
+        if not config.chat_llm_configured():
             return None
         return config.openai_client_for_chat()
-    if channel == "dashscope":
-        return config.dashscope_backup_chat_client()
     return None
 
 
@@ -235,7 +233,7 @@ def run_probes_for_entry(
     if client is None:
         return None
     mid = entry.resolve_id(channel)
-    use_gw_raw = channel == "fosun"
+    use_gw_raw = False
     pr = ProbeResult(model_id=entry.model_id, channel=channel)
     pr.chat = probe_chat(client, mid, use_wrapper=not use_gw_raw or True)
     if not skip_vision:

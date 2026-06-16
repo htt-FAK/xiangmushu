@@ -45,7 +45,7 @@ def run_leaderboard(
     tracks: Optional[List[str]] = None,
 ) -> str:
     cfg = load_leaderboard_config(config_path)
-    chs = channels or list(cfg.get("channels") or ["fosun", "dashscope"])
+    chs = channels or list(cfg.get("channels") or ["aliyun"])
     entries = build_model_registry(model_ids)
     if quick:
         qm = set(cfg.get("quick_models") or [])
@@ -78,14 +78,9 @@ def run_leaderboard(
     work: List[tuple] = []
     for entry in entries:
         for ch in chs:
-            if ch == "fosun":
-                import config as app_config
-                if not (app_config.FOSUN_AIGW_API_KEY or "").strip():
-                    continue
-            elif ch == "dashscope":
-                import config as app_config
-                if not app_config.dashscope_backup_chat_client():
-                    continue
+            import config as app_config
+            if ch in {"aliyun", "dashscope", "bailian", "fosun"} and not app_config.chat_llm_configured():
+                continue
             work.append((entry, ch))
     total_work = len(work)
     done = 0

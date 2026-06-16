@@ -221,10 +221,12 @@ class ContentGenerator:
         vector_store: VectorStore,
         api_key: str | None = None,
         user_id: int | None = None,
+        strict_model_selection: bool = False,
     ):
         self._vs = vector_store
         self._client = self._client_for_api_key(api_key) if api_key else config.openai_client_for_chat()
         self._user_id = user_id
+        self._strict_model_selection = bool(strict_model_selection)
         self._web_cache = SessionWebEvidenceCache()
         self.last_usage: Any = None
         self.last_model: str = ""
@@ -252,6 +254,15 @@ class ContentGenerator:
         except Exception:
             return self._client
 
+    def _dashscope_backup_client(self) -> Any:
+        if self._user_id is None:
+            return config.dashscope_backup_chat_client()
+        dashscope_model = str(getattr(config, "MAIN_WRITER_MODEL", "") or "qwen3.7-plus")
+        try:
+            return chat_client_for_model(dashscope_model, self._user_id, purpose="chat")
+        except Exception:
+            return config.dashscope_backup_chat_client()
+
     def _model_for_module(self, module: str, fallback: str) -> str:
         if self._user_id is None:
             return fallback
@@ -271,6 +282,9 @@ class ContentGenerator:
         route_meta: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Return the ordered fallback chain for the current route."""
+        if getattr(self, "_strict_model_selection", False):
+            mid = (default_model or "").strip()
+            return [mid] if mid else []
         explicit = (route_meta or {}).get("model_fallbacks")
         if isinstance(explicit, list):
             models = [default_model] + [str(item) for item in explicit]
@@ -828,56 +842,56 @@ class ContentGenerator:
     ) -> Iterator[str]:
         if route_hook:
             route_hook(bundle.route_meta)
-        model_chain = self._candidate_models(bundle.model, bundle.route_meta)
-        last_error: Optional[Exception] = None
-        for model in model_chain:
-            acc_len = 0
-            self.last_usage = None
-            self.last_model = ""
-            try:
-                client = self._client_for_model(model)
-                stream = chat_completions_create(
-                    client,
-                    model=model,
-                    messages=bundle.messages,
-                    temperature=bundle.temperature,
-                    stream=True,
-                    extra_body=bundle.extra_body,
-                    max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
-                )
-                for chunk in stream:
-                    usage = getattr(chunk, "usage", None)
-                    if usage is not None:
-                        self.last_usage = usage
-                        self.last_model = str(getattr(chunk, "model", None) or model)
-                    ch = chunk.choices[0] if chunk.choices else None
-                    if not ch or not ch.delta:
-                        continue
-                    piece = ch.delta.content or ""
-                    if piece:
-                        acc_len += len(piece)
-                        yield piece
-                if acc_len > 0:
-                    self.last_model = self.last_model or model
-                    _ensure_gen_logger()
-                    _LOG.info(
-                        "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
-                        bundle.route_meta.get("task_id"),
-                        bundle.route_meta.get("target_chapter"),
-                        model,
-                        bundle.route_meta.get("native_web_search"),
-                        acc_len,
-                    )
-                    return
-                _LOG.warning("content_gen_stream_empty model=%s, trying next fallback", model)
-            except Exception as e:
-                quota_error = self._quota_error_for(e, model, bundle.route_meta)
-                if quota_error is not None:
-                    raise quota_error
-                last_error = e
-                _LOG.warning("content_gen_stream_error model=%s err=%s", model, e)
-        if last_error is not None:
-            raise last_error
+        model = bundle.model
+        acc_len = 0
+        self.last_usage = None
+        self.last_model = ""
+        try:
+            client = self._client_for_model(model)
+            stream = chat_completions_create(
+                client,
+                model=model,
+                messages=bundle.messages,
+                temperature=bundle.temperature,
+                stream=True,
+                extra_body=bundle.extra_body,
+                max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
+                backup_client=self._dashscope_backup_client(),
+                allow_backup_fallback=False,
+            )
+            for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    self.last_usage = usage
+                    self.last_model = str(getattr(chunk, "model", None) or model)
+                ch = chunk.choices[0] if chunk.choices else None
+                if not ch or not ch.delta:
+                    continue
+                piece = ch.delta.content or ""
+                if piece:
+                    acc_len += len(piece)
+                    yield piece
+        except Exception as e:
+            quota_error = self._quota_error_for(e, model, bundle.route_meta)
+            if quota_error is not None:
+                raise quota_error
+            _LOG.warning("content_gen_stream_error model=%s err=%s", model, e)
+            raise RuntimeError("当前模型不可用，请到设置页更换模型或检查对应Key") from e
+
+        if acc_len <= 0:
+            _LOG.warning("content_gen_stream_empty model=%s", model)
+            raise RuntimeError(f"所选模型无有效输出：{model}")
+
+        self.last_model = self.last_model or model
+        _ensure_gen_logger()
+        _LOG.info(
+            "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
+            bundle.route_meta.get("task_id"),
+            bundle.route_meta.get("target_chapter"),
+            model,
+            bundle.route_meta.get("native_web_search"),
+            acc_len,
+        )
 
     def generate_stream(
         self,
@@ -929,53 +943,51 @@ class ContentGenerator:
     ) -> str:
         if route_hook:
             route_hook(bundle.route_meta)
-        last_error: Optional[Exception] = None
-        for model in self._candidate_models(bundle.model, bundle.route_meta):
-            try:
-                self.last_usage = None
-                self.last_model = ""
-                client = self._client_for_model(model)
-                resp = chat_completions_create(
-                    client,
-                    model=model,
-                    messages=bundle.messages,
-                    temperature=bundle.temperature,
-                    stream=False,
-                    extra_body=bundle.extra_body,
-                    max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
-                )
-                ch0 = resp.choices[0] if resp.choices else None
-                text = (ch0.message.content if ch0 and ch0.message else "") or ""
-                if not text.strip():
-                    _LOG.warning("content_gen_nonstream_empty model=%s, trying next fallback", model)
-                    continue
-                if self._is_error_content(text):
-                    quota_error = self._quota_error_for(text, model, bundle.route_meta)
-                    if quota_error is not None:
-                        raise quota_error
-                    _LOG.warning("content_gen_nonstream_error_text model=%s text=%s", model, text[:200])
-                    continue
-                self.last_usage = getattr(resp, "usage", None)
-                self.last_model = str(getattr(resp, "model", None) or model)
-                _ensure_gen_logger()
-                _LOG.info(
-                    "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
-                    bundle.route_meta.get("task_id"),
-                    bundle.route_meta.get("target_chapter"),
-                    model,
-                    bundle.route_meta.get("native_web_search"),
-                    len(text),
-                )
-                return text.strip()
-            except Exception as e:
-                quota_error = self._quota_error_for(e, model, bundle.route_meta)
+        model = bundle.model
+        try:
+            self.last_usage = None
+            self.last_model = ""
+            client = self._client_for_model(model)
+            resp = chat_completions_create(
+                client,
+                model=model,
+                messages=bundle.messages,
+                temperature=bundle.temperature,
+                stream=False,
+                extra_body=bundle.extra_body,
+                max_tokens=int(bundle.route_meta.get("gen_max_output_tokens") or 4096),
+                backup_client=self._dashscope_backup_client(),
+                allow_backup_fallback=False,
+            )
+            ch0 = resp.choices[0] if resp.choices else None
+            text = (ch0.message.content if ch0 and ch0.message else "") or ""
+            if not text.strip():
+                _LOG.warning("content_gen_nonstream_empty model=%s", model)
+                raise RuntimeError(f"所选模型无有效输出：{model}")
+            if self._is_error_content(text):
+                quota_error = self._quota_error_for(text, model, bundle.route_meta)
                 if quota_error is not None:
                     raise quota_error
-                last_error = e
-                _LOG.warning("content_gen_nonstream_error model=%s err=%s", model, e)
-        if last_error is not None:
-            _LOG.error("content_gen_all_models_failed err=%s", last_error)
-        return "(generation failed; check model config and retry)"
+                _LOG.warning("content_gen_nonstream_error_text model=%s text=%s", model, text[:200])
+                raise RuntimeError("当前模型不可用，请到设置页更换模型或检查对应Key")
+            self.last_usage = getattr(resp, "usage", None)
+            self.last_model = str(getattr(resp, "model", None) or model)
+            _ensure_gen_logger()
+            _LOG.info(
+                "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
+                bundle.route_meta.get("task_id"),
+                bundle.route_meta.get("target_chapter"),
+                model,
+                bundle.route_meta.get("native_web_search"),
+                len(text),
+            )
+            return text.strip()
+        except Exception as e:
+            quota_error = self._quota_error_for(e, model, bundle.route_meta)
+            if quota_error is not None:
+                raise quota_error
+            _LOG.warning("content_gen_nonstream_error model=%s err=%s", model, e)
+            raise RuntimeError("当前模型不可用，请到设置页更换模型或检查对应Key") from e
 
     def generate(
 

@@ -10,13 +10,28 @@ DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-# DeepSeek API（免费额度已用完，暂时禁用）
+# DeepSeek API（平台默认免费额度已用完，全局直连禁用；但 base_url 仍保留，
+# 以便用户自带 Key (BYOK) 时能按 DeepSeek 自身的调用方式正确校验/调用）。
 # DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
-# DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
 DEEPSEEK_API_KEY = ""
-DEEPSEEK_BASE_URL = ""
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip() or "https://api.deepseek.com"
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "").strip()
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1").strip() or "https://api.xiaomimimo.com/v1"
+
+# Provider → OpenAI 兼容 base_url 映射。
+# 用于按 provider 校验/调用用户自带 Key 时，确保走各家自己的调用端点，
+# 而不是在缺少 MySQL provider registry 时统统退化成阿里云百炼端点。
+PROVIDER_BASE_URLS: dict[str, str] = {
+    "dashscope": DASHSCOPE_COMPAT_BASE,
+    "deepseek": DEEPSEEK_BASE_URL,
+    "mimo": MIMO_BASE_URL,
+}
+
+
+def provider_base_url(provider_code: str) -> str:
+    """返回指定 provider 的 OpenAI 兼容 base_url；未知 provider 回落到百炼。"""
+    code = str(provider_code or "").strip().lower()
+    return PROVIDER_BASE_URLS.get(code) or DASHSCOPE_COMPAT_BASE
 # 嵌入 / 回落聊天：优先百炼 Key，兼容仅配 OPENAI_API_KEY
 OPENAI_COMPAT_API_KEY = DASHSCOPE_API_KEY or OPENAI_API_KEY
 
@@ -28,21 +43,12 @@ EMBEDDING_OPENAI_BASE_URL = (
     os.getenv("EMBEDDING_OPENAI_BASE_URL", "").strip() or DASHSCOPE_COMPAT_BASE
 )
 
-# 复星 AI 网关（OpenAI 兼容）；未设环境变量时使用默认 Base URL / Key
-# 注意：复星网关当前不可用（403 Forbidden），强制禁用
-_env_fosun_key = os.getenv("FOSUN_AIGW_API_KEY", "").strip()
-FOSUN_AIGW_BASE_URL = os.getenv("FOSUN_AIGW_BASE_URL", "").strip() or "https://aigw.fosunwealth.com/v1"
-# 强制禁用复星网关（2026-05-24 测试显示 403 Forbidden）
-FOSUN_AIGW_API_KEY = ""  # 清空 Key 强制禁用
-
-# 重置已缓存的客户端单例（避免使用旧的复星网关配置）
-_chat_client_singleton = None
 
 # Embedding 模型（百炼 compatible-mode 用 text-embedding-v3 等）
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")
 RERANK_MODEL = os.getenv("RERANK_MODEL", "qwen3-rerank")
 
-# 场景 LLM / 视觉（复星网关 ID；对齐 leaderboard v2026.05.21 fosun 主榜，均可 env 覆盖）
+# 场景 LLM / 视觉（均可 env 覆盖）
 # 视觉/联网/大段：qwen3.7-plus；小模型/RAG/表格快批：qwen3.7-flash
 _vw = os.getenv("VISION_WEB_MODEL", "").strip()
 if not _vw:
@@ -58,7 +64,7 @@ TABLE_CELL_VISION_FALLBACK_MODEL = os.getenv("TABLE_CELL_VISION_FALLBACK_MODEL",
 TABLE_CELL_FALLBACK_MODEL = os.getenv("TABLE_CELL_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "qwen3.6-flash").strip()
 SMALL_LLM_FALLBACK_MODEL = os.getenv("SMALL_LLM_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
-# 结构分析：复星网关上 glm-5.1 chat 易空回复或长时间无响应，默认 qwen3.5-plus
+# 结构分析：默认 qwen3.6-flash，可环境变量覆盖
 TEMPLATE_ANALYZE_MODEL = os.getenv("TEMPLATE_ANALYZE_MODEL", "").strip() or "qwen3.6-flash"
 TEMPLATE_ANALYZE_FALLBACK_MODEL = (
     os.getenv("TEMPLATE_ANALYZE_FALLBACK_MODEL", "").strip() or "qwen3.7-plus"
@@ -186,20 +192,6 @@ BATCH_TABLE_FAST_MODEL = (
     os.getenv("BATCH_TABLE_FAST_MODEL", "").strip() or "qwen3.6-flash"
 )
 
-# 复星网关上 chat 不可靠的模型：直接走百炼 compatible-mode，避免空回复再等一轮
-def _parse_fosun_chat_skip_models() -> frozenset[str]:
-    raw = os.getenv(
-        "FOSUN_CHAT_SKIP_MODELS",
-        "",
-    ).strip()
-    return frozenset(p.strip() for p in raw.split(",") if p.strip())
-
-
-FOSUN_CHAT_SKIP_MODELS = _parse_fosun_chat_skip_models()
-
-
-def chat_prefers_dashscope_first(model: str) -> bool:
-    return (model or "").strip() in FOSUN_CHAT_SKIP_MODELS
 # ---------------------------------------------------------------------------
 # 用户可选模型注册表
 # ---------------------------------------------------------------------------
@@ -610,7 +602,7 @@ PRESERVE_TABLE_FORMAT = _PRESERVE_TABLE_FORMAT not in ("0", "false", "no", "off"
 
 def chat_llm_configured() -> bool:
     """是否具备聊天/多模态调用所需 Key。"""
-    return bool((FOSUN_AIGW_API_KEY or OPENAI_COMPAT_API_KEY or "").strip())
+    return bool((OPENAI_COMPAT_API_KEY or "").strip())
 
 
 def embedding_llm_configured() -> bool:
@@ -625,26 +617,18 @@ _dashscope_backup_chat_checked_none: bool = False
 
 
 def openai_client_for_chat() -> Any:
-    """聊天/视觉统一入口：已配置复星网关 Key 时走网关，否则走 OPENAI_BASE_URL（默认百炼）。"""
+    """聊天/视觉统一入口：走 OPENAI_BASE_URL（默认百炼 compatible-mode）。"""
     global _chat_client_singleton
     if _chat_client_singleton is not None:
         return _chat_client_singleton
     from openai import OpenAI
 
-    if FOSUN_AIGW_API_KEY:
-        _chat_client_singleton = OpenAI(
-            api_key=FOSUN_AIGW_API_KEY,
-            base_url=FOSUN_AIGW_BASE_URL,
-            timeout=OPENAI_TIMEOUT,
-            max_retries=OPENAI_MAX_RETRIES,
-        )
-    else:
-        _chat_client_singleton = OpenAI(
-            api_key=OPENAI_COMPAT_API_KEY or "sk-placeholder",
-            base_url=OPENAI_BASE_URL,
-            timeout=OPENAI_TIMEOUT,
-            max_retries=OPENAI_MAX_RETRIES,
-        )
+    _chat_client_singleton = OpenAI(
+        api_key=OPENAI_COMPAT_API_KEY or "sk-placeholder",
+        base_url=OPENAI_BASE_URL,
+        timeout=OPENAI_TIMEOUT,
+        max_retries=OPENAI_MAX_RETRIES,
+    )
     return _chat_client_singleton
 
 
@@ -680,7 +664,7 @@ def deepseek_client() -> Optional[Any]:
 
 
 def openai_client_for_template_analyze() -> Any:
-    """结构分析专用：优先百炼（复星网关上 glm/qwen 大 prompt 易长时间无响应），短超时、不重试。"""
+    """结构分析专用：优先百炼 compatible-mode，短超时、不重试。"""
     from openai import OpenAI
 
     key = (DASHSCOPE_API_KEY or OPENAI_API_KEY or "").strip()

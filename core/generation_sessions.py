@@ -39,6 +39,7 @@ class GenerationSession:
     last_error: dict[str, Any] | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
     next_seq: int = 0
+    terminate_requested: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _condition: threading.Condition = field(init=False, repr=False)
 
@@ -109,7 +110,8 @@ class GenerationSession:
             block["text"] = f"{block.get('text', '')}{event.get('text') or ''}"
             return
         if event_type == "audit":
-            self.current_step = "audit"
+            if event.get("is_model_audit") is not False:
+                self.current_step = "audit"
             block = self._ensure_output(int(event.get("index") or 0))
             block.update(
                 {
@@ -143,6 +145,16 @@ class GenerationSession:
             self.visual_score = event.get("visual_score")
             self.billing = event.get("billing") or self.billing
             self.billing_summary = event.get("billing_summary")
+            return
+        if event_type == "terminated":
+            self.status = "terminated"
+            self.current_step = "terminated"
+            self.current_task = str(event.get("message") or "已终止")
+            self.last_error = {
+                "code": "terminated",
+                "message": str(event.get("message") or "生成任务已终止"),
+                "retryable": False,
+            }
             return
         if event_type == "quota_alert":
             message = str(event.get("message") or event.get("detail") or "Quota exceeded")
@@ -185,7 +197,14 @@ class GenerationSession:
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
                 "last_seq": self.next_seq,
+                "terminate_requested": self.terminate_requested,
             }
+
+    def request_terminate(self) -> None:
+        with self._condition:
+            self.terminate_requested = True
+            self.updated_at = _now_iso()
+            self._condition.notify_all()
 
     def stream_events(self, after_seq: int = 0, heartbeat_seconds: float = 5.0):
         cursor = max(0, int(after_seq or 0))
@@ -194,13 +213,13 @@ class GenerationSession:
             terminal = False
             batch: list[dict[str, Any]] = []
             with self._condition:
-                if self.next_seq <= cursor and self.status not in {"done", "error"}:
+                if self.next_seq <= cursor and self.status not in {"done", "error", "terminated"}:
                     notified = self._condition.wait(timeout=heartbeat_seconds)
-                    if not notified and self.next_seq <= cursor and self.status not in {"done", "error"}:
+                    if not notified and self.next_seq <= cursor and self.status not in {"done", "error", "terminated"}:
                         heartbeat = True
                 if self.next_seq > cursor:
                     batch = [dict(item) for item in self.events if int(item.get("seq") or 0) > cursor]
-                elif self.status in {"done", "error"}:
+                elif self.status in {"done", "error", "terminated"}:
                     terminal = True
             if batch:
                 for event in batch:
@@ -277,11 +296,30 @@ class GenerationSessionManager:
         session = self._sessions[session_id]
         payload = session.append_event(event)
         _persist_session_snapshot(session)
-        if session.status in {"done", "error"}:
+        if session.status in {"done", "error", "terminated"}:
             with self._lock:
                 if self._active_by_user.get(session.user_id) == session_id:
                     self._active_by_user.pop(session.user_id, None)
         return payload
+
+    def is_terminate_requested(self, session_id: str) -> bool:
+        session = self._sessions.get(session_id)
+        return bool(session and session.terminate_requested)
+
+    def terminate_session_for_user(self, user_id: int, session_id: str) -> GenerationSession | None:
+        session = self.get_session_for_user(user_id, session_id)
+        if session is None:
+            return None
+        session.request_terminate()
+        if session.status == "running":
+            self.append_event(
+                session_id,
+                {
+                    "type": "terminated",
+                    "message": "生成任务已终止",
+                },
+            )
+        return session
 
 
 session_manager = GenerationSessionManager()
@@ -315,15 +353,29 @@ def _load_persisted_session(user_id: int, session_id: str) -> GenerationSession 
         return None
     if not snapshot:
         return None
+    status = str(snapshot.get("status") or "running")
+    last_error = snapshot.get("last_error")
+    current_step = str(snapshot.get("currentStep") or "idle")
+    current_task = str(snapshot.get("currentTask") or "")
+    if status == "running":
+        status = "terminated"
+        current_step = "terminated"
+        current_task = "生成任务在服务器重启后已终止"
+        last_error = {
+            "code": "terminated",
+            "message": "生成任务在服务器重启后已终止",
+            "retryable": False,
+        }
+
     session = GenerationSession(
         session_id=str(snapshot.get("session_id") or session_id),
         user_id=int(snapshot.get("user_id") or user_id),
         params=dict(snapshot.get("params") or {}),
         created_at=str(snapshot.get("created_at") or _now_iso()),
         updated_at=str(snapshot.get("updated_at") or _now_iso()),
-        status=str(snapshot.get("status") or "running"),
-        current_step=str(snapshot.get("currentStep") or "idle"),
-        current_task=str(snapshot.get("currentTask") or ""),
+        status=status,
+        current_step=current_step,
+        current_task=current_task,
         progress=dict(snapshot.get("progress") or {"done": 0, "total": 0}),
         outputs=list(snapshot.get("outputs") or []),
         download=str(snapshot.get("download") or ""),
@@ -335,7 +387,7 @@ def _load_persisted_session(user_id: int, session_id: str) -> GenerationSession 
         visual_score=snapshot.get("visual_score"),
         billing=snapshot.get("billing"),
         billing_summary=snapshot.get("billing_summary"),
-        last_error=snapshot.get("last_error"),
+        last_error=last_error,
     )
     session.next_seq = int(snapshot.get("last_seq") or 0)
     return session

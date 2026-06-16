@@ -368,8 +368,12 @@ def get_current_user(
 ADMIN_EMAILS = {"3406847927@qq.com"}
 
 
+def is_admin_user(user: User) -> bool:
+    return user.email in ADMIN_EMAILS
+
+
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.email not in ADMIN_EMAILS:
+    if not is_admin_user(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
 
@@ -943,6 +947,7 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
         session_manager.append_event(session_id, event)
 
     def _generate_one_task(i, task):
+        emit({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
         import copy
 
         task = copy.deepcopy(task)
@@ -1029,6 +1034,7 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                     "verdict": audit_verdict,
                     "issues": audit_issues[:5],
                     "revised": revised,
+                    "is_model_audit": local_auditor is not None,
                 }
             result["trace"] = build_generation_trace(
                 task,
@@ -1044,6 +1050,13 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
             logger.exception("Task %d generation failed", i)
             content = "（生成失败，请重试）"
             classified = classify_provider_error(exc)
+            selected_model = str(((result.get("route") or {}).get("model")) or "")
+            if selected_model:
+                code = str(classified.get("code") or "")
+                if code in {"model_unavailable", "provider_error", "unknown_error", "permission_denied"}:
+                    classified["message"] = "当前模型不可用，请到设置页更换模型或检查对应Key"
+                    classified["detail"] = "当前模型不可用，请到设置页更换模型或检查对应Key"
+                    classified["retryable"] = False
             result["content"] = content
             result["error"] = classified
             result["route_meta"] = {"model": "", "generation_tier": "error", "evidence_refs": []}
@@ -1058,9 +1071,6 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
 
     try:
         task_results = []
-        for i, task in enumerate(tasks):
-            emit({"type": "task", "index": i, "total": len(tasks), "chapter": task.target_chapter})
-
         abort_generation = False
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=config.GENERATION_MAX_WORKERS)
         try:
@@ -1482,7 +1492,7 @@ async def auth_login(payload: LoginRequest, request: Request):
 
 @app.get("/api/auth/me")
 async def auth_me(current_user: User = Depends(get_current_user)):
-    return {"id": current_user.id, "email": current_user.email}
+    return {"id": current_user.id, "email": current_user.email, "is_admin": is_admin_user(current_user)}
 
 
 @app.get("/api/user/model-options")
@@ -1523,7 +1533,7 @@ async def user_apikey_validate(
 ):
     provider_code = _provider_code_or_default(payload.provider_code)
     try:
-        result = validate_user_api_key(payload.api_key, provider_code)
+        result = validate_user_api_key(payload.api_key, provider_code, current_user.id)
     except TypeError:
         result = validate_user_api_key(payload.api_key)
     if result.get("ok"):
@@ -1539,7 +1549,7 @@ async def user_apikey_save(
 ):
     provider_code = _provider_code_or_default(payload.provider_code)
     try:
-        validation = validate_user_api_key(payload.api_key, provider_code)
+        validation = validate_user_api_key(payload.api_key, provider_code, current_user.id)
     except TypeError:
         validation = validate_user_api_key(payload.api_key)
     if not validation.get("ok"):
@@ -2116,6 +2126,21 @@ async def generate_session_snapshot(
 ):
     session = _ensure_session_owned(session_id, current_user)
     return _serialize_session(session)
+
+
+@app.post("/api/generate/sessions/{session_id}/terminate")
+async def generate_session_terminate(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_session_owned(session_id, current_user)
+    session = session_manager.terminate_session_for_user(current_user.id, session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation session not found",
+        )
+    return {"ok": True, **_serialize_session(session)}
 
 
 @app.get("/api/generate/sessions/{session_id}/stream")

@@ -50,9 +50,46 @@ def _strip_json_fence(raw: str) -> str:
 
 
 class ContentAuditor:
-    def __init__(self, user_id: int | None = None) -> None:
+    def __init__(
+        self,
+        user_id: int | None = None,
+        model_overrides: Optional[Dict[str, str]] = None,
+        strict_model_selection: bool = False,
+    ) -> None:
         self._client = config.openai_client_for_chat()
         self._user_id = user_id
+        self._model_overrides = {
+            str(k): str(v).strip()
+            for k, v in (model_overrides or {}).items()
+            if str(v or "").strip()
+        }
+        self._strict_model_selection = bool(strict_model_selection)
+
+    def _resolve_model_chain_and_temp(self) -> tuple[List[str], float]:
+        """Resolve the audit model chain and temperature.
+
+        Honors per-request model overrides and strict selection. In strict
+        mode the fallback chain is disabled and only the selected model
+        (override, else ``config.AUDIT_LLM_MODEL``) is used.
+        """
+        override = self._model_overrides.get("audit", "")
+        if self._strict_model_selection:
+            selected = override or str(getattr(config, "AUDIT_LLM_MODEL", "") or "").strip()
+            chain = [selected] if selected else []
+            return chain, config.TEMP_AUDIT
+        audit_profile = resolve_model_profile(
+            AUDIT_TEXT,
+            routing_reason="content audit",
+        )
+        chain = list(audit_profile.model_chain)
+        if override:
+            chain = [override] + [m for m in chain if m != override]
+        temperature = (
+            audit_profile.temperature
+            if audit_profile.temperature is not None
+            else config.TEMP_AUDIT
+        )
+        return chain, temperature
 
     def audit(
         self,
@@ -80,11 +117,7 @@ class ContentAuditor:
 
         raw = ""
         last_error: Optional[Exception] = None
-        audit_profile = resolve_model_profile(
-            AUDIT_TEXT,
-            routing_reason="content audit",
-        )
-        model_chain = audit_profile.model_chain
+        model_chain, audit_temperature = self._resolve_model_chain_and_temp()
         seen_models = set()
         for model in model_chain:
             model = (model or "").strip()
@@ -102,7 +135,7 @@ class ContentAuditor:
                         {"role": "system", "content": AUDIT_SYSTEM},
                         {"role": "user", "content": user_msg},
                     ],
-                    temperature=audit_profile.temperature if audit_profile.temperature is not None else config.TEMP_AUDIT,
+                    temperature=audit_temperature,
                     stream=False,
                 )
                 ch0 = resp.choices[0] if resp.choices else None

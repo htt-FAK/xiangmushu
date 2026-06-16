@@ -341,7 +341,7 @@ def _write_reports(rounds: list[dict], final_passed: bool) -> None:
                 "# 自动评测报告",
                 "",
                 f"- 生成时间：{generated_at}",
-                "- 裁判网关：DeepSeek TUI 同网关（https://aigw.fosunwealth.com/v1）",
+                "- 裁判网关：百炼 compatible-mode",
                 "- 裁判策略：UI 优先视觉模型，API 使用文本模型；失败后按模型序列降级。",
                 "- 视觉模型顺序：gpt-5.4 -> gemini-3.5-flash",
                 "- 文本模型顺序：gpt-5.4 -> qwen3.7-max -> deepseek-v4-pro",

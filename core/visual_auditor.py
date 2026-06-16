@@ -229,6 +229,8 @@ def audit_document_visual(
     docx_path: str,
     max_pages: int = 4,
     zoom: float = 1.5,
+    model_override: str | None = None,
+    strict_model_selection: bool = False,
 ) -> VisualAuditResult:
     """对生成的 Word 文档进行视觉审核（结构化文本审核，无需 LibreOffice）。
 
@@ -262,7 +264,7 @@ def audit_document_visual(
         _LOG.info("开始结构化视觉审核")
         # Use the configured visual audit model, then one fallback on empty output.
         client = config.openai_client_for_chat()
-        model = config.VISUAL_AUDIT_MODEL
+        model = (model_override or "").strip() or config.VISUAL_AUDIT_MODEL
 
         resp = chat_completions_create(
             client,
@@ -275,7 +277,7 @@ def audit_document_visual(
 
         ch0 = resp.choices[0] if resp.choices else None
         raw = (ch0.message.content if ch0 and ch0.message else "") or ""
-        if not raw.strip():
+        if not raw.strip() and not strict_model_selection:
             fallback_model = (getattr(config, "VISUAL_AUDIT_FALLBACK_MODEL", "") or "").strip()
             if fallback_model and fallback_model != model:
                 _LOG.warning("visual_audit_empty_primary model=%s fallback=%s", model, fallback_model)

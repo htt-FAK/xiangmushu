@@ -29,15 +29,15 @@ def check_model(client, model, name):
 
 
 print("\n" + "=" * 50)
-print("Testing DashScope")
+print("Testing Aliyun Bailian")
 print("=" * 50)
-dashscope_client = config.dashscope_backup_chat_client()
-if dashscope_client:
-    check_model(dashscope_client, config.LARGE_LLM_MODEL, f"DashScope {config.LARGE_LLM_MODEL}")
-    check_model(dashscope_client, config.SMALL_LLM_MODEL, f"DashScope {config.SMALL_LLM_MODEL}")
-    check_model(dashscope_client, config.VISUAL_AUDIT_MODEL, f"DashScope {config.VISUAL_AUDIT_MODEL}")
+bailian_client = config.openai_client_for_chat()
+if bailian_client:
+    check_model(bailian_client, config.LARGE_LLM_MODEL, f"Bailian {config.LARGE_LLM_MODEL}")
+    check_model(bailian_client, config.SMALL_LLM_MODEL, f"Bailian {config.SMALL_LLM_MODEL}")
+    check_model(bailian_client, config.VISUAL_AUDIT_MODEL, f"Bailian {config.VISUAL_AUDIT_MODEL}")
 else:
-    print("FAIL: DashScope client not configured")
+    print("FAIL: Bailian client not configured")
 
 
 print("\n" + "=" * 50)

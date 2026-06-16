@@ -406,38 +406,43 @@ def get_password_hash(email: str, db_path: str | None = None) -> str:
 
 def get_user_preferences(user_id: int, db_path: str | None = None) -> dict:
     if _use_mysql(db_path):
-        with mysql_transaction() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT COALESCE(p.preferred_language, u.preferred_language, 'zh') AS preferred_language,
-                           COALESCE(p.model_choices_json, u.model_choices_json) AS model_choices_json
-                    FROM users u
-                    LEFT JOIN user_preferences p ON p.user_id = u.id
-                    WHERE u.id = %s
-                    """,
-                    (user_id,),
-                )
-                row = cur.fetchone()
-        if row is None:
-            raise AuthError("User not found")
-        language = str(row.get("preferred_language") or "zh")
-        if language not in {"zh", "en"}:
-            language = "zh"
-        model_choices = _mysql_json(row.get("model_choices_json"))
-        warnings: dict[str, str] = {}
         try:
-            registry_choices = load_user_model_choices(user_id)
-            if registry_choices:
-                model_choices = registry_choices
-        except Exception as exc:
-            logger.warning("Falling back to JSON-backed model choices for user %s: %s", user_id, exc)
-            warning = "Model registry is unavailable; showing the last saved preferences without live validation."
-            warnings = {role: warning for role in model_choices}
-        result = {"language": language, "model_choices": model_choices}
-        if warnings:
-            result["warnings"] = warnings
-        return result
+            with mysql_transaction() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(p.preferred_language, u.preferred_language, 'zh') AS preferred_language,
+                               COALESCE(p.model_choices_json, u.model_choices_json) AS model_choices_json
+                        FROM users u
+                        LEFT JOIN user_preferences p ON p.user_id = u.id
+                        WHERE u.id = %s
+                        """,
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+            if row is None:
+                raise AuthError("User not found")
+            language = str(row.get("preferred_language") or "zh")
+            if language not in {"zh", "en"}:
+                language = "zh"
+            model_choices = _mysql_json(row.get("model_choices_json"))
+            warnings: dict[str, str] = {}
+            try:
+                registry_choices = load_user_model_choices(user_id)
+                if registry_choices:
+                    model_choices = registry_choices
+            except Exception as exc:
+                logger.warning("Falling back to JSON-backed model choices for user %s: %s", user_id, exc)
+                warning = "数据库连接降级：无法通过注册表验证，显示为最后一次保存的配置"
+                warnings = {role: warning for role in model_choices}
+            result = {"language": language, "model_choices": model_choices}
+            if warnings:
+                result["warnings"] = warnings
+            return result
+        except Exception as db_exc:
+            logger.exception("MySQL connection failed in get_user_preferences for user %s", user_id)
+            warnings = {"database": "数据库连接异常：无法连接至 MySQL 数据库。配置暂以降级默认值运行。"}
+            return {"language": "zh", "model_choices": {}, "warnings": warnings}
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT preferred_language, model_choices FROM users WHERE id = ?",

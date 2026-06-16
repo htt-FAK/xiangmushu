@@ -105,16 +105,14 @@ def _mask(s: str, keep: int = 6) -> str:
 
 def _client() -> OpenAI:
     if not config.chat_llm_configured():
-        raise SystemExit("未配置聊天通道：请设置 FOSUN_AIGW_API_KEY 或 DASHSCOPE_API_KEY / OPENAI_API_KEY。")
+        raise SystemExit("未配置聊天通道：请设置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY。")
     return config.openai_client_for_chat()
 
 
 def _print_config():
     print("=== 配置摘要 ===")
-    print(f"  聊天主通道: {'复星网关' if config.FOSUN_AIGW_API_KEY else 'OPENAI_BASE_URL'}")
-    print(f"  FOSUN_AIGW_BASE_URL: {config.FOSUN_AIGW_BASE_URL}")
-    print(f"  FOSUN_AIGW_API_KEY:  {_mask(config.FOSUN_AIGW_API_KEY)}")
-    print(f"  OPENAI_BASE_URL（无网关时）: {config.OPENAI_BASE_URL}")
+    print("  聊天主通道: 阿里云百炼 compatible-mode")
+    print(f"  OPENAI_BASE_URL: {config.OPENAI_BASE_URL}")
     print(f"  EMBEDDING_OPENAI_BASE_URL: {config.EMBEDDING_OPENAI_BASE_URL}")
     print(f"  DASHSCOPE_COMPAT_BASE:     {config.DASHSCOPE_COMPAT_BASE}")
     print(f"  DASHSCOPE_API_KEY: {_mask(config.DASHSCOPE_API_KEY)}")
@@ -278,7 +276,7 @@ def _run_probe_models(client: OpenAI, models: Optional[List[str]] = None) -> boo
     print("=== 网关模型能力探测 ===")
     print(f"  模型数: {len(models)} · 通道: {_client_base_label()}")
     print()
-    gw_only = bool(config.FOSUN_AIGW_API_KEY)
+    gw_only = False
     for model in models:
         row: Dict[str, Any] = {"model": model}
         for kind in ("chat", "vision", "search"):
@@ -324,7 +322,7 @@ def _run_probe_models(client: OpenAI, models: Optional[List[str]] = None) -> boo
     out_path = os.path.join(_ROOT, "data", "probe_gateway_models.md")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write("# 复星网关模型能力探测\n\n")
+        f.write("# 阿里云百炼模型能力探测\n\n")
         f.write(f"通道: {_client_base_label()}\n\n")
         if gw_only:
             f.write(
@@ -357,9 +355,7 @@ def _run_probe_models(client: OpenAI, models: Optional[List[str]] = None) -> boo
 
 
 def _client_base_label() -> str:
-    if config.FOSUN_AIGW_API_KEY:
-        return f"复星网关 {config.FOSUN_AIGW_BASE_URL}"
-    return f"OPENAI_BASE_URL {config.OPENAI_BASE_URL}"
+    return f"阿里云百炼 {config.OPENAI_BASE_URL}"
 
 
 def _vision_ping(client: OpenAI, model: Optional[str] = None) -> bool:
