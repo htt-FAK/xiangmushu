@@ -108,6 +108,18 @@ export default function GeneratePage() {
     [templates],
   );
 
+  const selectedProviderModels = useMemo(() => {
+    const choices = session.modelChoices ?? {};
+    return [
+      choices.main_writer,
+      choices.fast_writer,
+      enableWeb ? choices.web_search : null,
+      enableAudit ? choices.audit_text : null,
+    ];
+  }, [enableAudit, enableWeb, session.modelChoices]);
+
+  const { hasValidatedKey } = useApiKeyStatus(selectedProviderModels);
+
   const readiness = useMemo(
     () =>
       deriveGenerateReadiness({
@@ -195,18 +207,6 @@ export default function GeneratePage() {
     }
     return "";
   }, [preferenceWarnings]);
-
-  const selectedProviderModels = useMemo(() => {
-    const choices = session.modelChoices ?? {};
-    return [
-      choices.main_writer,
-      choices.fast_writer,
-      enableWeb ? choices.web_search : null,
-      enableAudit ? choices.audit_text : null,
-    ];
-  }, [enableAudit, enableWeb, session.modelChoices]);
-
-  const { hasValidatedKey } = useApiKeyStatus(selectedProviderModels);
 
   return (
     <>

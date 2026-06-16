@@ -203,6 +203,12 @@ export function BackgroundSessionsProvider({ children }: { children: ReactNode }
       if (session.status === "running") {
         ensureTemplateStream(session.session_id, session.last_seq);
       }
+    } else {
+      templateAbortRef.current?.abort();
+      templateAbortRef.current = null;
+      templateSubIdRef.current = null;
+      templateSessionRef.current = null;
+      clearTemplateAnalysisSession();
     }
 
     if (generationResult.status === "fulfilled" && generationResult.value.session) {
@@ -212,8 +218,18 @@ export function BackgroundSessionsProvider({ children }: { children: ReactNode }
       if (session.status === "running") {
         ensureGenerationStream(session.session_id, session.last_seq);
       }
+    } else {
+      if (genFetchTimerRef.current) {
+        clearTimeout(genFetchTimerRef.current);
+        genFetchTimerRef.current = null;
+      }
+      generationAbortRef.current?.abort();
+      generationAbortRef.current = null;
+      generationSubIdRef.current = null;
+      generationSessionRef.current = null;
+      clearGenerateSession();
     }
-  }, [ensureGenerationStream, ensureTemplateStream, setGenerateSession, setTemplateAnalysisSession]);
+  }, [clearGenerateSession, clearTemplateAnalysisSession, ensureGenerationStream, ensureTemplateStream, setGenerateSession, setTemplateAnalysisSession]);
 
   useEffect(() => {
     if (!auth.isAuthenticated) {
