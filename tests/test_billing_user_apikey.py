@@ -252,6 +252,67 @@ def test_generation_session_start_and_recovery_contract(tmp_path, monkeypatch):
     assert snapshot.json()["session"]["outputs"][0]["text"] == "测试内容"
 
 
+def test_generation_session_can_be_terminated(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
+    init_db(str(db_path))
+    user = get_or_create_user("terminate@example.com", db_path=str(db_path))
+    headers = _auth_headers(user)
+
+    session_manager._sessions.clear()
+    session_manager._active_by_user.clear()
+    session_manager._latest_by_user.clear()
+
+    monkeypatch.setattr(server, "_resolve_generation_request", lambda current_user, params: {"resolved": True})
+    monkeypatch.setattr(server, "_run_generation_session", lambda session_id, current_user, params, resolved: None)
+
+    class ImmediateThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            if self._target:
+                self._target(*self._args)
+
+    monkeypatch.setattr(server.threading, "Thread", ImmediateThread)
+
+    with TestClient(server.app) as client:
+        create = client.post(
+            "/api/generate/sessions",
+            headers=headers,
+            files={},
+            data={
+                "slug": "kb1",
+                "template": "demo.docx",
+                "word_limit": "300",
+                "top_k": "4",
+                "max_distance": "1.25",
+                "enable_web": "false",
+                "use_stream": "true",
+                "enable_audit": "false",
+                "enable_visual_audit": "false",
+                "custom_instructions": "",
+            },
+        )
+        assert create.status_code == 200
+        session_id = create.json()["session_id"]
+
+        terminated = client.post(f"/api/generate/sessions/{session_id}/terminate", headers=headers)
+        active = client.get("/api/generate/sessions/active", headers=headers)
+        snapshot = client.get(f"/api/generate/sessions/{session_id}", headers=headers)
+
+    assert terminated.status_code == 200
+    assert terminated.json()["ok"] is True
+    assert terminated.json()["session"]["status"] == "terminated"
+    assert snapshot.status_code == 200
+    assert snapshot.json()["session"]["status"] == "terminated"
+    assert snapshot.json()["session"]["last_error"]["code"] == "terminated"
+    assert active.status_code == 200
+    assert active.json()["session"]["status"] == "terminated"
+
+
 def test_generation_session_manager_recovers_persisted_snapshot(monkeypatch):
     manager = GenerationSessionManager()
     persisted = GenerationSession(

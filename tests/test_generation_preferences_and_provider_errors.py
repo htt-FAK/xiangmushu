@@ -165,7 +165,7 @@ def test_generate_from_bundle_raises_quota_error_without_fallback(monkeypatch):
     assert calls == ["quota-model"]
 
 
-def test_generate_from_bundle_keeps_non_quota_fallback(monkeypatch):
+def test_generate_from_bundle_does_not_fallback_on_non_quota_error(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
     monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"main_writer": "primary-model"})
     monkeypatch.setattr("config.MAIN_WRITER_FALLBACK_MODEL_1", "fallback-model")
@@ -207,7 +207,9 @@ def test_generate_from_bundle_keeps_non_quota_fallback(monkeypatch):
 
     monkeypatch.setattr("core.generator.chat_completions_create", fake_chat)
 
-    result = generator.generate_from_bundle(bundle)
-
-    assert result == "fallback success"
-    assert calls == ["primary-model", "fallback-model"]
+    try:
+        generator.generate_from_bundle(bundle)
+        assert False, "Expected RuntimeError for unavailable selected model"
+    except RuntimeError as exc:
+        assert "当前模型不可用，请到设置页更换模型或检查对应Key" in str(exc)
+    assert calls == ["primary-model"]
