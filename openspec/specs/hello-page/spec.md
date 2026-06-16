@@ -13,14 +13,15 @@ The application SHALL expose a main tab labeled「首页」as the first tab befo
 - **WHEN** the Streamlit app loads the main tab bar
 - **THEN** the first visible tab label is「首页」
 
-### Requirement: Home tab shows product overview and workflow
+### Requirement: Home tab shows phase-one product overview and workflow
 
-The home tab SHALL display a short product description and a numbered recommended workflow that references the three existing feature tabs.
+The home tab SHALL display a short product description and a numbered recommended workflow that reflects phase one as a knowledge-base-driven Word initial draft generator.
 
 #### Scenario: User reads onboarding on home tab
 
 - **WHEN** the user selects the「首页」tab
-- **THEN** the UI shows what the product does and ordered steps: configure KB → ingest in「知识库管理」→ template in「模板配置」→ generate in「生成预览」
+- **THEN** the UI shows that the product supports knowledge base ingestion, anchor template configuration, segmented generation, and Word export
+- **AND** the workflow references the three existing feature tabs in order: configure KB → ingest in「知识库管理」→ template in「模板配置」→ generate in「生成预览」
 
 ### Requirement: Home tab shows read-only environment summary
 
