@@ -47,3 +47,7 @@ frontend-*.log
 # One-off local validation files
 discipline_check.txt
 data/templates/not_a_docx.txt
+__dream_query.py
+
+# Local historical/personal data
+data/historical/
