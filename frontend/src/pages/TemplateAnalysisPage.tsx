@@ -14,7 +14,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   deleteTemplate,
-  fetchApiKeyStatus,
   fetchModelOptions,
   fetchTemplates,
   startTemplateAnalysisSession,
@@ -24,7 +23,7 @@ import { useBackgroundSessions } from "../backgroundSessions";
 import { Button, DetailOverlay, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { normalizeErrorMessage } from "../errors";
 import { useI18n } from "../i18n";
-import { flattenModelOptions, hasValidatedModelProvider, pickModel } from "../models";
+import { flattenModelOptions, pickModel } from "../models";
 import type {
   BillingRecord,
   FillTask,
@@ -33,6 +32,7 @@ import type {
   TemplateAnalysisSessionSnapshot,
   TemplateItem,
 } from "../types";
+import { useApiKeyStatus } from "../useApiKeyStatus";
 import { useWorkflow } from "../workflow";
 import { clsx } from "../utils";
 
@@ -164,10 +164,10 @@ export default function TemplateAnalysisPage() {
   const [listLoading, setListLoading] = useState(true);
   const [deleting, setDeleting] = useState("");
   const [error, setError] = useState("");
-  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
 
   const session = workflowState.templateAnalysis.session;
   const pendingFileName = workflowState.templateAnalysis.pendingFileName;
+  const { hasValidatedKey: hasApiKey } = useApiKeyStatus([visionModel, plannerModel]);
 
   const tasks = session?.tasks ?? [];
   const logs = session?.logs ?? [];
@@ -216,9 +216,6 @@ export default function TemplateAnalysisPage() {
 
   useEffect(() => {
     void refreshTemplates();
-    fetchApiKeyStatus()
-      .then((status) => setHasApiKey(hasValidatedModelProvider(status, [visionModel, plannerModel])))
-      .catch(() => setHasApiKey(null));
     fetchModelOptions()
       .then((options) => {
         const nextVisionConfig = options.vision_layout ?? options.vision;
@@ -233,7 +230,7 @@ export default function TemplateAnalysisPage() {
         setPlannerModel((current) => pickModel(nextPlannerModels, current));
       })
       .catch((err: unknown) => setError(normalizeErrorMessage(err, "加载模型选项配置失败。")));
-  }, [plannerModel, refreshTemplates, visionModel]);
+  }, [refreshTemplates]);
 
   useEffect(() => {
     const active = workflowState.templateAnalysis.session;
