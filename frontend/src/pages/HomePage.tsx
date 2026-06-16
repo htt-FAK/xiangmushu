@@ -1,20 +1,128 @@
 import { ArrowRight, Database, FileText, RefreshCcw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchApiKeyStatus, fetchKnowledgeBases, fetchKnowledgeSources, fetchTemplates } from "../api";
+import { fetchBillingSummary, fetchKnowledgeBases, fetchKnowledgeSources, fetchTemplates } from "../api";
 import { EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { formatDate, useAsyncData } from "../hooks";
 import { useI18n } from "../i18n";
+import { hasAnyValidatedProvider } from "../models";
+import type { BillingSummary } from "../types";
+import { useApiKeyStatus } from "../useApiKeyStatus";
 import { deriveGenerateReadiness } from "../workflow";
+
+const METRIC_ROTATE_MS = 2800;
+const METRIC_TRANSITION_MS = 800;
+const METRIC_RESUME_DELAY_MS = 400;
+const METRIC_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
+const joinClass = (...parts: Array<string | undefined>) => parts.filter(Boolean).join(" ");
+
+function BillingSummaryStat({
+  summary,
+  loading,
+  t,
+  className,
+}: {
+  summary: BillingSummary | null;
+  loading: boolean;
+  t: (key: string, ...args: Array<string | number>) => string;
+  className?: string;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+
+  const metrics = useMemo(() => {
+    if (loading || !summary) {
+      return [
+        { label: t("home.totalGenerations"), value: "..." },
+        { label: t("home.totalTokens"), value: "..." },
+        { label: t("home.totalCost"), value: "..." },
+      ];
+    }
+    const totalTokens = Number(summary.input_tokens || 0) + Number(summary.output_tokens || 0);
+    const numberFmt = new Intl.NumberFormat("zh-CN");
+    const currencyFmt = new Intl.NumberFormat("zh-CN", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    return [
+      {
+        label: t("home.totalGenerations"),
+        value: numberFmt.format(Number(summary.generation_count || 0)),
+      },
+      {
+        label: t("home.totalTokens"),
+        value: numberFmt.format(totalTokens),
+      },
+      {
+        label: t("home.totalCost"),
+        value: `¥ ${currencyFmt.format(Number(summary.cost_cny || 0))}`,
+      },
+    ];
+  }, [loading, summary, t]);
+
+  useEffect(() => {
+    if (loading || !summary || paused) return;
+    let rotateTimer = 0;
+    const resumeTimer = window.setTimeout(() => {
+      rotateTimer = window.setInterval(() => {
+        setActiveIndex((idx) => (idx + 1) % metrics.length);
+      }, METRIC_ROTATE_MS);
+    }, METRIC_RESUME_DELAY_MS);
+    return () => {
+      window.clearTimeout(resumeTimer);
+      if (rotateTimer) window.clearInterval(rotateTimer);
+    };
+  }, [loading, summary, paused, metrics.length]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [loading, summary]);
+
+  return (
+    <div
+      className={joinClass("min-w-0 border border-white/10 bg-night-850/80 p-3.5 md:p-4", className)}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+    >
+      <div className="relative h-[54px] overflow-hidden md:h-[62px]">
+        {metrics.map((item, index) => {
+          const prev = (activeIndex + metrics.length - 1) % metrics.length;
+          let motionClass = "translate-y-6 opacity-0";
+          if (index === activeIndex) motionClass = "translate-y-0 opacity-100";
+          else if (index === prev) motionClass = "-translate-y-6 opacity-0";
+          return (
+            <div
+              key={item.label}
+              className={joinClass("absolute inset-0 flex flex-col will-change-transform", motionClass)}
+              style={{
+                transitionDuration: `${METRIC_TRANSITION_MS}ms`,
+                transitionTimingFunction: METRIC_EASING,
+                transitionProperty: "transform, opacity",
+              }}
+            >
+              <p className="break-words text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500 md:text-xs md:normal-case md:tracking-normal">
+                {item.label}
+              </p>
+              <p className="mt-1.5 truncate font-display text-xl font-semibold leading-tight text-signal-amber md:mt-2 md:text-2xl">
+                {item.value}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function HomePage() {
   const { t } = useI18n();
   const templates = useAsyncData(fetchTemplates, []);
   const kbs = useAsyncData(fetchKnowledgeBases, []);
-  const [hasValidatedKey, setHasValidatedKey] = useState(false);
+  const billing = useAsyncData(fetchBillingSummary, []);
+  const { status: apiKeyStatus, hasValidatedKey } = useApiKeyStatus();
   const [hasKnowledgeSources, setHasKnowledgeSources] = useState(false);
 
-  const error = templates.error || kbs.error;
+  const error = templates.error || kbs.error || billing.error;
   const templateItems = templates.data ?? [];
   const kbItems = kbs.data ?? [];
   const readiness = deriveGenerateReadiness({
@@ -23,34 +131,6 @@ export default function HomePage() {
     hasKnowledgeSources,
     hasTemplate: templateItems.length > 0,
   });
-
-  const refreshApiKeyStatus = useCallback(() => {
-    fetchApiKeyStatus()
-      .then((status) => {
-        const dashscope = status.providers?.dashscope;
-        setHasValidatedKey(Boolean(dashscope?.has_key && dashscope?.validated));
-      })
-      .catch(() => setHasValidatedKey(false));
-  }, []);
-
-  useEffect(() => {
-    refreshApiKeyStatus();
-  }, [refreshApiKeyStatus]);
-
-  useEffect(() => {
-    const refresh = () => refreshApiKeyStatus();
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") refreshApiKeyStatus();
-    };
-    window.addEventListener("focus", refresh);
-    window.addEventListener("xiangmushu:apikey-status-changed", refresh);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener("xiangmushu:apikey-status-changed", refresh);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-    };
-  }, []);
 
   useEffect(() => {
     const firstSlug = kbItems[0]?.slug;
@@ -84,7 +164,12 @@ export default function HomePage() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4">
         <Stat label={t("home.templateCount")} value={templates.loading ? "..." : templateItems.length} />
         <Stat label={t("home.knowledgeCount")} value={kbs.loading ? "..." : kbItems.length} tone="lime" />
-        <Stat className="col-span-2 md:col-span-1" label={t("home.backendPort")} value="8502" tone="amber" />
+        <BillingSummaryStat
+          className="col-span-2 md:col-span-1"
+          summary={billing.data}
+          loading={billing.loading}
+          t={t}
+        />
       </div>
 
       <div className="mt-5 grid gap-5 md:mt-6 md:gap-6 xl:grid-cols-[1.05fr_0.95fr]">
@@ -101,7 +186,7 @@ export default function HomePage() {
           <div className="grid gap-3 md:grid-cols-2">
             <Link to="/settings" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-cyan/40">
               <p className="font-semibold text-white">1. {t("home.stepKey")}</p>
-              <p className="mt-1">{hasValidatedKey ? t("home.stepDone") : t("home.stepPending")}</p>
+              <p className="mt-1">{hasAnyValidatedProvider(apiKeyStatus) ? t("home.stepDone") : t("home.stepPending")}</p>
             </Link>
             <Link to="/knowledge" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-lime/40">
               <p className="font-semibold text-white">2. {t("home.stepKnowledge")}</p>

@@ -20,10 +20,28 @@ import type {
   UserPreferences,
 } from "./types";
 import { apiUrl } from "./apiBase";
-import { buildAuthHeaders } from "./auth";
+import { buildAuthHeaders, clearStoredToken } from "./auth";
 import { parseApiErrorMessage } from "./errors";
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+const TOKEN_EXPIRED_MESSAGE = "登录已过期，请重新登录";
+
+/**
+ * Centralized 401 handling: clear the token and redirect to the auth page
+ * (unless we are already there). Used by every authenticated request path.
+ */
+function handleUnauthorized() {
+  clearStoredToken();
+  const currentPath = window.location.pathname;
+  if (!currentPath.startsWith("/auth")) {
+    window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
+  }
+}
+
+/**
+ * Perform an authenticated fetch with merged auth headers and shared 401
+ * handling. Returns the raw Response for callers that need streaming/blobs.
+ */
+export async function authedFetch(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(apiUrl(path), {
     ...init,
     headers: {
@@ -32,40 +50,77 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (response.status === 401) {
-    window.localStorage.removeItem("xiangmushu.auth.token");
-    const currentPath = window.location.pathname;
-    if (!currentPath.startsWith("/auth")) {
-      window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
-    }
-    throw new Error("登录已过期，请重新登录");
+    handleUnauthorized();
+    throw new Error(TOKEN_EXPIRED_MESSAGE);
+  }
+  return response;
+}
+
+/**
+ * JSON request helper.
+ * - allowError=false (default): throws on non-OK with a translated message.
+ * - allowError=true: returns the parsed body even on error status (used for
+ *   validate/start-session endpoints that carry meaningful error payloads).
+ */
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options?: { allowError?: boolean },
+): Promise<T> {
+  const response = await authedFetch(path, init);
+  if (options?.allowError) {
+    const text = await response.text();
+    if (!text) return {} as T;
+    return JSON.parse(text) as T;
   }
   if (!response.ok) {
     const raw = await response.text();
-    const message = parseApiErrorMessage(raw, `HTTP ${response.status}`);
-    throw new Error(message);
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${response.status}`));
   }
   return (await response.json()) as T;
 }
 
-async function requestJsonAllowError<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiUrl(path), {
-    ...init,
-    headers: {
-      ...buildAuthHeaders(),
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (response.status === 401) {
-    window.localStorage.removeItem("xiangmushu.auth.token");
-    const currentPath = window.location.pathname;
-    if (!currentPath.startsWith("/auth")) {
-      window.location.href = `/auth?next=${encodeURIComponent(currentPath)}`;
-    }
-    throw new Error("登录已过期，请重新登录");
+function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(path, init);
+}
+
+function requestJsonAllowError<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(path, init, { allowError: true });
+}
+
+/**
+ * Generic Server-Sent-Events reader. Performs an authenticated request, then
+ * decodes the body stream, splits on the SSE record separator ("\n\n"), and
+ * dispatches each `data:` payload as a parsed JSON event.
+ */
+async function streamSSE<TEvent>(
+  path: string,
+  onEvent: (event: TEvent) => void,
+  init?: RequestInit,
+): Promise<void> {
+  const response = await authedFetch(path, init);
+  if (!response.ok || !response.body) {
+    const message = await response.text();
+    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
   }
-  const text = await response.text();
-  if (!text) return {} as T;
-  return JSON.parse(text) as T;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const eventText of events) {
+      const line = eventText.split("\n").find((item) => item.startsWith("data:"));
+      if (!line) continue;
+      onEvent(JSON.parse(line.slice(5).trim()) as TEvent);
+    }
+  }
 }
 
 export async function fetchTemplates(): Promise<TemplateItem[]> {
@@ -252,6 +307,25 @@ export async function fetchBillingSummary(): Promise<BillingSummary> {
   return requestJson<BillingSummary>("/api/billing/summary");
 }
 
+export const ADMIN_FORBIDDEN = "ADMIN_FORBIDDEN" as const;
+
+/**
+ * Fetch admin dashboard stats. Throws an Error whose message is
+ * `ADMIN_FORBIDDEN` when the server denies access (HTTP 403) so the page can
+ * render its dedicated forbidden state.
+ */
+export async function fetchAdminStats<T>(): Promise<T> {
+  const response = await authedFetch("/api/admin/stats");
+  if (response.status === 403) {
+    throw new Error(ADMIN_FORBIDDEN);
+  }
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${response.status}`));
+  }
+  return (await response.json()) as T;
+}
+
 export async function fetchHistoryArticles(params?: {
   query?: string;
   status?: "all" | "completed" | "review" | "failed";
@@ -268,9 +342,7 @@ export function downloadUrl(path: string) {
 }
 
 export async function handleDownload(path: string) {
-  const response = await fetch(apiUrl(path), {
-    headers: buildAuthHeaders(),
-  });
+  const response = await authedFetch(path);
   if (!response.ok) throw new Error("下载失败，请稍后重试");
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -300,100 +372,11 @@ export async function streamGenerate(
   form.append("enable_audit", String(params.enableAudit));
   form.append("enable_visual_audit", String(params.enableVisualAudit));
 
-  const response = await fetch(apiUrl("/api/generate"), {
+  return streamSSE<GenerateEvent>("/api/generate", onEvent, {
     method: "POST",
-    headers: buildAuthHeaders(),
     body: form,
     signal,
   });
-  if (!response.ok || !response.body) {
-    const message = await response.text();
-    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-    for (const eventText of events) {
-      const line = eventText
-        .split("\n")
-        .find((item) => item.startsWith("data:"));
-      if (!line) continue;
-      onEvent(JSON.parse(line.slice(5).trim()) as GenerateEvent);
-    }
-  }
-}
-
-async function streamSession(path: string, onEvent: (event: GenerateEvent) => void, signal?: AbortSignal) {
-  const response = await fetch(apiUrl(path), {
-    method: "GET",
-    headers: buildAuthHeaders(),
-    signal,
-  });
-  if (!response.ok || !response.body) {
-    const message = await response.text();
-    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-    for (const eventText of events) {
-      const line = eventText.split("\n").find((item) => item.startsWith("data:"));
-      if (!line) continue;
-      onEvent(JSON.parse(line.slice(5).trim()) as GenerateEvent);
-    }
-  }
-}
-
-async function streamTemplateSession(
-  path: string,
-  onEvent: (event: TemplateAnalysisEvent) => void,
-  signal?: AbortSignal,
-) {
-  const response = await fetch(apiUrl(path), {
-    method: "GET",
-    headers: buildAuthHeaders(),
-    signal,
-  });
-  if (!response.ok || !response.body) {
-    const message = await response.text();
-    throw new Error(parseApiErrorMessage(message, `HTTP ${response.status}`));
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-    for (const eventText of events) {
-      const line = eventText.split("\n").find((item) => item.startsWith("data:"));
-      if (!line) continue;
-      onEvent(JSON.parse(line.slice(5).trim()) as TemplateAnalysisEvent);
-    }
-  }
 }
 
 export async function startGenerateSession(params: GenerateParams): Promise<GenerationSessionStartResult> {
@@ -423,13 +406,23 @@ export async function fetchGenerationSession(sessionId: string): Promise<Generat
   return requestJson<GenerationSessionEnvelope>(`/api/generate/sessions/${encodeURIComponent(sessionId)}`);
 }
 
+export async function terminateGenerationSession(sessionId: string): Promise<GenerationSessionStartResult> {
+  return requestJson<GenerationSessionStartResult>(`/api/generate/sessions/${encodeURIComponent(sessionId)}/terminate`, {
+    method: "POST",
+  });
+}
+
 export async function streamGenerationSession(
   sessionId: string,
   onEvent: (event: GenerateEvent) => void,
   signal?: AbortSignal,
   afterSeq = 0,
 ) {
-  return streamSession(`/api/generate/sessions/${encodeURIComponent(sessionId)}/stream?after_seq=${afterSeq}`, onEvent, signal);
+  return streamSSE<GenerateEvent>(
+    `/api/generate/sessions/${encodeURIComponent(sessionId)}/stream?after_seq=${afterSeq}`,
+    onEvent,
+    { method: "GET", signal },
+  );
 }
 
 export async function streamTemplateAnalysisSession(
@@ -438,9 +431,9 @@ export async function streamTemplateAnalysisSession(
   signal?: AbortSignal,
   afterSeq = 0,
 ) {
-  return streamTemplateSession(
+  return streamSSE<TemplateAnalysisEvent>(
     `/api/template/analyze/sessions/${encodeURIComponent(sessionId)}/stream?after_seq=${afterSeq}`,
     onEvent,
-    signal,
+    { method: "GET", signal },
   );
 }

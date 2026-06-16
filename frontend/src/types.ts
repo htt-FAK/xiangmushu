@@ -222,6 +222,7 @@ export type GenerateEvent =
       verdict: string;
       issues: string[];
       revised: boolean;
+      is_model_audit?: boolean;
     }
   | { type: "billing"; index: number; billing: BillingRecord }
   | { type: "progress"; index: number; total: number }
@@ -245,13 +246,14 @@ export type GenerateEvent =
       billing?: GenerationBilling;
       billing_summary?: BillingSummary;
     }
+  | { type: "terminated"; seq?: number; message?: string }
   | { type: "error"; seq?: number; index?: number; terminal?: boolean; error: string | { code: string; message: string; retryable?: boolean; detail?: string } }
   | { type: "heartbeat"; seq?: number };
 
 export type GenerationSessionSnapshot = {
   session_id: string;
   user_id: number;
-  status: "running" | "done" | "error" | string;
+  status: "running" | "done" | "error" | "terminated" | string;
   currentStep: string;
   currentTask: string;
   progress: { done: number; total: number };
@@ -268,6 +270,7 @@ export type GenerationSessionSnapshot = {
   created_at: string;
   updated_at: string;
   last_seq: number;
+  terminate_requested?: boolean;
 };
 
 export type OutputBlockSnapshot = {

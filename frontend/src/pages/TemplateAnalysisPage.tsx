@@ -10,31 +10,30 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   deleteTemplate,
-  fetchActiveTemplateAnalysisSession,
   fetchApiKeyStatus,
   fetchModelOptions,
   fetchTemplates,
-  fetchTemplateAnalysisSession,
   startTemplateAnalysisSession,
   startTemplateReanalysisSession,
-  streamTemplateAnalysisSession,
 } from "../api";
+import { useBackgroundSessions } from "../backgroundSessions";
 import { Button, DetailOverlay, EmptyState, ErrorBanner, PageHeader, Panel, Stat } from "../components/ui";
 import { normalizeErrorMessage } from "../errors";
 import { useI18n } from "../i18n";
+import { flattenModelOptions, hasValidatedModelProvider, pickModel } from "../models";
 import type {
   BillingRecord,
   FillTask,
   ModelModuleConfig,
   ModelOption,
-  TemplateAnalysisEvent,
   TemplateAnalysisSessionSnapshot,
   TemplateItem,
 } from "../types";
+import { useWorkflow } from "../workflow";
 import { clsx } from "../utils";
 
 function taskLabel(task: FillTask, index: number, fallback: string) {
@@ -45,42 +44,9 @@ function taskBody(task: FillTask, fallback: string) {
   return task.description || task.prompt || fallback;
 }
 
-function flattenModelOptions(config?: ModelModuleConfig) {
-  const out: ModelOption[] = [];
-  const seen = new Set<string>();
-  for (const group of Object.values(config?.tiers ?? {})) {
-    for (const item of group) {
-      if (!item.model || seen.has(item.model)) continue;
-      seen.add(item.model);
-      out.push(item);
-    }
-  }
-  for (const item of config?.options ?? []) {
-    if (!item.model || seen.has(item.model)) continue;
-    seen.add(item.model);
-    out.push(item);
-  }
-  return out;
-}
-
-function pickModel(options: ModelOption[], current = "") {
-  if (current && options.some((item) => item.model === current)) return current;
-  return options.find((item) => item.recommended)?.model || options[0]?.model || "";
-}
-
 function formatTime(mtime?: number) {
   if (!mtime) return "-";
   return new Date(mtime * 1000).toLocaleString();
-}
-
-function mergeBilling(current: TemplateAnalysisSessionSnapshot["billing"], record: BillingRecord) {
-  const existing = current ?? { records: [], input_tokens: 0, output_tokens: 0, cost_cny: 0 };
-  return {
-    records: [...(existing.records ?? []), record],
-    input_tokens: (existing.input_tokens ?? 0) + (record.input_tokens ?? 0),
-    output_tokens: (existing.output_tokens ?? 0) + (record.output_tokens ?? 0),
-    cost_cny: Number(((existing.cost_cny ?? 0) + (record.cost_cny ?? 0)).toFixed(8)),
-  };
 }
 
 function sessionStatusTone(status: string) {
@@ -104,7 +70,7 @@ function ModelSelect({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+      <span className="mb-2 block text-xs font-semibold tracking-wide text-slate-500">
         {label}
       </span>
       <select
@@ -131,9 +97,9 @@ function BillingStrip({ records }: { records: BillingRecord[] }) {
   const cost = records.reduce((sum, item) => sum + (item.cost_cny || 0), 0);
   return (
     <div className="grid grid-cols-3 gap-3">
-      <Stat label="Input tokens" value={input} tone="cyan" />
-      <Stat label="Output tokens" value={output} tone="lime" />
-      <Stat label="Cost CNY" value={cost.toFixed(6)} tone="amber" />
+      <Stat label="输入 Tokens" value={input} tone="cyan" />
+      <Stat label="输出 Tokens" value={output} tone="lime" />
+      <Stat label="费用 (元)" value={cost.toFixed(6)} tone="amber" />
     </div>
   );
 }
@@ -182,6 +148,8 @@ function TaskCard({
 
 export default function TemplateAnalysisPage() {
   const { t } = useI18n();
+  const { state: workflowState, setTemplateAnalysisSession, setTemplatePendingFile } = useWorkflow();
+  const { ensureTemplateStream } = useBackgroundSessions();
   const [file, setFile] = useState<File | null>(null);
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState("");
@@ -191,14 +159,15 @@ export default function TemplateAnalysisPage() {
   const [plannerModels, setPlannerModels] = useState<ModelOption[]>([]);
   const [visionModel, setVisionModel] = useState("");
   const [plannerModel, setPlannerModel] = useState("");
-  const [session, setSession] = useState<TemplateAnalysisSessionSnapshot | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [listLoading, setListLoading] = useState(true);
   const [deleting, setDeleting] = useState("");
   const [error, setError] = useState("");
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
-  const streamAbortRef = useRef<AbortController | null>(null);
+
+  const session = workflowState.templateAnalysis.session;
+  const pendingFileName = workflowState.templateAnalysis.pendingFileName;
 
   const tasks = session?.tasks ?? [];
   const logs = session?.logs ?? [];
@@ -211,69 +180,26 @@ export default function TemplateAnalysisPage() {
   );
   const sessionRunning = session?.status === "running";
 
-  const applySessionSnapshot = useCallback((next: TemplateAnalysisSessionSnapshot | null) => {
-    setSession(next);
-    if (!next) return;
-    if (next.template) setSelectedTemplate(next.template);
-    if (next.vision_model) setVisionModel(next.vision_model);
-    if (next.planner_model) setPlannerModel(next.planner_model);
-  }, []);
+  const sessionStatusLabel = useCallback(
+    (status: string) => {
+      if (status === "running") return t("template.statusRunning");
+      if (status === "done") return t("template.statusDone");
+      if (status === "error") return t("template.statusError");
+      return status;
+    },
+    [t],
+  );
 
-  const applySessionEvent = useCallback((event: TemplateAnalysisEvent) => {
-    if (event.type === "heartbeat") return;
-    setSession((prev) => {
-      if (!prev) return prev;
-      const base = {
-        ...prev,
-        last_seq: event.seq ?? prev.last_seq,
-        updated_at: new Date().toISOString(),
-      };
-      if (event.type === "status") {
-        return {
-          ...base,
-          status: "running",
-          currentPhase: event.phase,
-          statusMessage: event.message,
-          logs: [...prev.logs, { phase: event.phase, message: event.message, created_at: new Date().toISOString() }],
-        };
-      }
-      if (event.type === "billing") {
-        return {
-          ...base,
-          billing: mergeBilling(prev.billing, event.billing),
-        };
-      }
-      if (event.type === "done") {
-        return {
-          ...base,
-          status: "done",
-          currentPhase: "done",
-          statusMessage: event.message || "Analysis complete",
-          template: event.template || prev.template,
-          mode: event.mode || prev.mode,
-          vision_status: event.vision_status || prev.vision_status,
-          tasks: event.tasks ?? prev.tasks,
-          billing: event.billing ?? prev.billing,
-          logs: [
-            ...prev.logs,
-            { phase: "done", message: event.message || "Analysis complete", created_at: new Date().toISOString() },
-          ],
-        };
-      }
-      const payload = typeof event.error === "string" ? { code: "template_analysis_error", message: event.error } : event.error;
-      return {
-        ...base,
-        status: "error",
-        currentPhase: "error",
-        statusMessage: payload.message || "Template analysis failed",
-        last_error: payload,
-        logs: [
-          ...prev.logs,
-          { phase: "error", message: payload.message || "Template analysis failed", created_at: new Date().toISOString() },
-        ],
-      };
-    });
-  }, []);
+  const applySessionSnapshot = useCallback(
+    (next: TemplateAnalysisSessionSnapshot | null) => {
+      setTemplateAnalysisSession(next);
+      if (!next) return;
+      if (next.template) setSelectedTemplate(next.template);
+      if (next.vision_model) setVisionModel(next.vision_model);
+      if (next.planner_model) setPlannerModel(next.planner_model);
+    },
+    [setTemplateAnalysisSession],
+  );
 
   const refreshTemplates = useCallback(async () => {
     setListLoading(true);
@@ -282,43 +208,16 @@ export default function TemplateAnalysisPage() {
       setTemplates(next);
       setSelectedTemplate((current) => current || next[0]?.name || "");
     } catch (err) {
-      setError(normalizeErrorMessage(err, "Failed to load templates."));
+      setError(normalizeErrorMessage(err, "加载模板列表失败。"));
     } finally {
       setListLoading(false);
     }
   }, []);
 
-  const subscribeSession = useCallback(
-    async (sessionId: string, afterSeq = 0) => {
-      streamAbortRef.current?.abort();
-      const controller = new AbortController();
-      streamAbortRef.current = controller;
-      try {
-        await streamTemplateAnalysisSession(sessionId, applySessionEvent, controller.signal, afterSeq);
-        if (!controller.signal.aborted) {
-          const latest = await fetchTemplateAnalysisSession(sessionId);
-          applySessionSnapshot(latest.session);
-        }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setError(normalizeErrorMessage(err, "Failed to stream template analysis."));
-        }
-      } finally {
-        if (streamAbortRef.current === controller) {
-          streamAbortRef.current = null;
-        }
-      }
-    },
-    [applySessionEvent, applySessionSnapshot],
-  );
-
   useEffect(() => {
     void refreshTemplates();
     fetchApiKeyStatus()
-      .then((status) => {
-        const dashscope = status.providers?.dashscope;
-        setHasApiKey(Boolean(dashscope?.has_key && dashscope?.validated));
-      })
+      .then((status) => setHasApiKey(hasValidatedModelProvider(status, [visionModel, plannerModel])))
       .catch(() => setHasApiKey(null));
     fetchModelOptions()
       .then((options) => {
@@ -333,20 +232,16 @@ export default function TemplateAnalysisPage() {
         setVisionModel((current) => pickModel(nextVisionModels, current));
         setPlannerModel((current) => pickModel(nextPlannerModels, current));
       })
-      .catch((err: unknown) => setError(normalizeErrorMessage(err, "Failed to load model options.")));
-    fetchActiveTemplateAnalysisSession()
-      .then((result) => {
-        if (!result.session) return;
-        applySessionSnapshot(result.session);
-        if (result.session.status === "running") {
-          void subscribeSession(result.session.session_id, result.session.last_seq);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      streamAbortRef.current?.abort();
-    };
-  }, [applySessionSnapshot, refreshTemplates, subscribeSession]);
+      .catch((err: unknown) => setError(normalizeErrorMessage(err, "加载模型选项配置失败。")));
+  }, [plannerModel, refreshTemplates, visionModel]);
+
+  useEffect(() => {
+    const active = workflowState.templateAnalysis.session;
+    if (!active) return;
+    if (active.template) setSelectedTemplate(active.template);
+    if (active.vision_model) setVisionModel(active.vision_model);
+    if (active.planner_model) setPlannerModel(active.planner_model);
+  }, [workflowState.templateAnalysis.session]);
 
   async function startSession(request: Promise<Awaited<ReturnType<typeof startTemplateAnalysisSession>>>) {
     setLoading(true);
@@ -358,13 +253,14 @@ export default function TemplateAnalysisPage() {
       }
       if (!result.ok || !result.session_id) {
         if (result.session_id && result.session?.status === "running") {
-          void subscribeSession(result.session_id, result.session.last_seq);
+          ensureTemplateStream(result.session_id, result.session.last_seq);
         }
-        throw new Error(result.message || "Template analysis request was not accepted.");
+        throw new Error(result.message || "分析模板的请求未被系统接纳。");
       }
       setFile(null);
+      setTemplatePendingFile("");
       await refreshTemplates();
-      await subscribeSession(result.session_id, result.session?.last_seq ?? 0);
+      ensureTemplateStream(result.session_id, result.session?.last_seq ?? 0);
     } catch (err) {
       setError(normalizeErrorMessage(err, t("template.analyze")));
     } finally {
@@ -390,9 +286,11 @@ export default function TemplateAnalysisPage() {
       await deleteTemplate(template);
       setTemplates((prev) => prev.filter((item) => item.name !== template));
       setSelectedTemplate((current) => (current === template ? "" : current));
-      setSession((prev) => (prev?.template === template ? null : prev));
+      if (session?.template === template) {
+        setTemplateAnalysisSession(null);
+      }
     } catch (err) {
-      setError(normalizeErrorMessage(err, "Failed to delete template."));
+      setError(normalizeErrorMessage(err, "删除模板失败。"));
     } finally {
       setDeleting("");
     }
@@ -409,13 +307,13 @@ export default function TemplateAnalysisPage() {
       {hasApiKey === false && (
         <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
           <p className="min-w-0 break-words text-sm font-semibold text-amber-100">
-            Template analysis requires a validated BYOK API key before it can run.
+            {t("template.byokRequired")}
           </p>
           <Link
             to="/settings"
             className="inline-flex min-h-11 items-center justify-center border border-signal-amber bg-signal-amber px-4 text-xs font-bold text-night-950 transition hover:bg-white sm:w-auto"
           >
-            Open settings
+            {t("template.openSettings")}
           </Link>
         </div>
       )}
@@ -431,6 +329,10 @@ export default function TemplateAnalysisPage() {
               <UploadCloud className="text-signal-cyan" size={25} />
             </div>
 
+            {pendingFileName && !file && !sessionRunning ? (
+              <p className="mt-3 text-sm text-signal-amber">{t("template.pendingFileHint", pendingFileName)}</p>
+            ) : null}
+
             <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center border border-dashed border-white/18 bg-night-950/60 px-5 py-8 text-center transition hover:border-signal-cyan/60">
               <FileUp className="mb-4 text-signal-cyan" size={34} />
               <span className="break-all font-display text-xl font-semibold text-white">
@@ -441,20 +343,24 @@ export default function TemplateAnalysisPage() {
                 className="sr-only"
                 type="file"
                 accept=".docx"
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  const next = event.target.files?.[0] ?? null;
+                  setFile(next);
+                  setTemplatePendingFile(next?.name ?? "");
+                }}
               />
             </label>
 
             <div className="mt-5 space-y-5">
               <ModelSelect
-                label="Vision model"
+                label={t("template.visionModel")}
                 value={visionModel}
                 options={visionModels}
                 onChange={setVisionModel}
                 warning={visionConfig?.warning}
               />
               <ModelSelect
-                label="Planner model"
+                label={t("template.plannerModel")}
                 value={plannerModel}
                 options={plannerModels}
                 onChange={setPlannerModel}
@@ -477,18 +383,18 @@ export default function TemplateAnalysisPage() {
           <Panel>
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <p className="font-display text-xl font-semibold text-white">Saved templates</p>
-                <p className="text-sm text-slate-500">Pick a template and rerun analysis with the current model pair.</p>
+                <p className="font-display text-xl font-semibold text-white">{t("template.savedTemplates")}</p>
+                <p className="text-sm text-slate-500">{t("template.savedTemplatesHint")}</p>
               </div>
               <FileText className="text-signal-lime" size={22} />
             </div>
 
             {listLoading ? (
               <div className="flex min-h-24 items-center justify-center text-slate-500">
-                <Loader2 className="mr-2 animate-spin" size={16} /> Loading templates...
+                <Loader2 className="mr-2 animate-spin" size={16} /> {t("template.loadingTemplates")}
               </div>
             ) : templates.length === 0 ? (
-              <EmptyState title="No templates yet" body="Upload a docx template to start analysis." />
+              <EmptyState title={t("template.noTemplates")} body={t("template.noTemplatesBody")} />
             ) : (
               <div className="space-y-2">
                 {templates.map((template) => {
@@ -508,7 +414,7 @@ export default function TemplateAnalysisPage() {
                         <span className="block break-all text-sm font-semibold text-white">{template.name}</span>
                         <span className="mt-1 block text-xs text-slate-500">
                           {formatTime(template.mtime)}
-                          {active ? " · selected" : ""}
+                          {active ? ` · ${t("template.selected")}` : ""}
                         </span>
                       </button>
                       <div className="flex flex-wrap gap-2">
@@ -517,20 +423,20 @@ export default function TemplateAnalysisPage() {
                           onClick={() => void onReanalyze(template.name)}
                           disabled={loading || !visionModel || !plannerModel || hasApiKey === false}
                           className="inline-flex h-10 items-center gap-2 border border-white/10 px-3 text-sm text-slate-300 hover:border-signal-cyan/50 hover:text-signal-cyan disabled:opacity-50"
-                          title="Reanalyze"
+                          title={t("template.reanalyze")}
                         >
                           {loading && active ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
-                          Reanalyze
+                          {t("template.reanalyze")}
                         </button>
                         <button
                           type="button"
                           onClick={() => void onDelete(template.name)}
                           disabled={Boolean(deleting)}
                           className="inline-flex h-10 items-center gap-2 border border-white/10 px-3 text-sm text-slate-300 hover:border-signal-rose/50 hover:text-signal-rose disabled:opacity-50"
-                          title="Delete template"
+                          title={t("template.delete")}
                         >
                           {deleting === template.name ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
-                          Delete
+                          {t("template.delete")}
                         </button>
                       </div>
                     </div>
@@ -549,7 +455,7 @@ export default function TemplateAnalysisPage() {
             </div>
             {session ? (
               <span className={clsx("border px-3 py-1 text-xs font-semibold", sessionStatusTone(session.status))}>
-                {session.status}
+                {sessionStatusLabel(session.status)}
               </span>
             ) : null}
           </div>
@@ -562,19 +468,19 @@ export default function TemplateAnalysisPage() {
                 <Stat label={t("template.taskCount")} value={tasks.length} />
                 <Stat label={t("template.wordTarget")} value={totalWords} tone="lime" />
                 <Stat label={t("template.mode")} value={session.mode || "-"} tone="amber" />
-                <Stat label="Phase" value={session.currentPhase || "-"} tone="cyan" />
+                <Stat label={t("template.analysisPhase")} value={session.currentPhase || "-"} tone="cyan" />
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 border border-white/10 bg-night-900/60 px-4 py-3 text-sm text-slate-200">
                 <div className="min-w-0">
-                  <p className="break-words font-semibold">{session.statusMessage || "Template analysis ready."}</p>
+                  <p className="break-words font-semibold">{session.statusMessage || t("template.statusReady")}</p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {session.template || selectedTemplate || "-"} · {logs.length} log entries
+                    {session.template || selectedTemplate || "-"} · {logs.length} {t("template.logEntries")}
                   </p>
                 </div>
                 <Button variant="ghost" className="min-h-10 gap-2 px-4 text-xs" onClick={() => setDetailOpen(true)}>
                   <MessageSquareText size={15} />
-                  View details
+                  {t("template.viewDetails")}
                 </Button>
               </div>
 
@@ -590,11 +496,11 @@ export default function TemplateAnalysisPage() {
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-white">
                     <MessageSquareText size={16} className="text-signal-cyan" />
-                    Recent trace
+                    {t("template.recentTrace")}
                   </div>
                   {previewLogs.length === 0 ? (
                     <div className="border border-dashed border-white/15 bg-night-950/60 px-4 py-5 text-sm text-slate-500">
-                      Waiting for session logs.
+                      {t("template.waitingLogs")}
                     </div>
                   ) : (
                     <div className="max-h-[280px] space-y-2 overflow-y-auto pr-1">
@@ -617,11 +523,11 @@ export default function TemplateAnalysisPage() {
                     ) : (
                       <CheckCircle2 size={16} className="text-signal-lime" />
                     )}
-                    Task overview
+                    {t("template.taskOverview")}
                   </div>
                   {previewTasks.length === 0 ? (
                     <div className="border border-dashed border-white/15 bg-night-950/60 px-4 py-5 text-sm text-slate-500">
-                      Waiting for identified fill tasks.
+                      {t("template.waitingTasks")}
                     </div>
                   ) : (
                     <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
@@ -656,7 +562,7 @@ export default function TemplateAnalysisPage() {
             <Stat label={t("template.taskCount")} value={tasks.length} />
             <Stat label={t("template.wordTarget")} value={totalWords} tone="lime" />
             <Stat label={t("template.mode")} value={session.mode || "-"} tone="amber" />
-            <Stat label="Status" value={session.status} tone={session.status === "error" ? "rose" : session.status === "done" ? "lime" : "cyan"} />
+            <Stat label={t("template.analysisStatus")} value={sessionStatusLabel(session.status)} tone={session.status === "error" ? "rose" : session.status === "done" ? "lime" : "cyan"} />
           </div>
 
           {billingRecords.length > 0 ? <BillingStrip records={billingRecords} /> : null}
@@ -664,10 +570,10 @@ export default function TemplateAnalysisPage() {
           <Panel className="min-w-0">
             <div className="mb-3 flex items-center gap-2">
               <MessageSquareText size={17} className="text-signal-cyan" />
-              <p className="font-display text-xl font-semibold text-white">Full trace</p>
+              <p className="font-display text-xl font-semibold text-white">{t("template.fullTrace")}</p>
             </div>
             {logs.length === 0 ? (
-              <EmptyState title="No trace yet" body="The analysis stream will appear here as events arrive." />
+              <EmptyState title={t("template.noTrace")} body={t("template.noTraceBody")} />
             ) : (
               <div className="space-y-3">
                 {logs.map((log, index) => (
@@ -686,7 +592,7 @@ export default function TemplateAnalysisPage() {
           <Panel className="min-w-0">
             <div className="mb-3 flex items-center gap-2">
               <ListChecks size={17} className="text-signal-lime" />
-              <p className="font-display text-xl font-semibold text-white">All fill tasks</p>
+              <p className="font-display text-xl font-semibold text-white">{t("template.allFillTasks")}</p>
             </div>
             {tasks.length === 0 ? (
               <EmptyState title={t("template.empty")} body={t("template.emptyBody")} />

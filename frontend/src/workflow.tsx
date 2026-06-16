@@ -11,6 +11,7 @@ import type {
   GenerateParams,
   GenerationSessionSnapshot,
   KnowledgeSourceStats,
+  TemplateAnalysisSessionSnapshot,
   UploadResult,
 } from "./types";
 
@@ -24,6 +25,10 @@ type WorkflowState = {
     qualityMode: "balanced" | "quality" | "speed";
     session: GenerationSessionSnapshot | null;
   };
+  templateAnalysis: {
+    session: TemplateAnalysisSessionSnapshot | null;
+    pendingFileName: string;
+  };
   knowledge: {
     selectedSlug: string;
     uploadResults: UploadResult[];
@@ -35,8 +40,11 @@ type WorkflowContextValue = {
   state: WorkflowState;
   setGenerateSelections: (patch: Partial<WorkflowState["generate"]>) => void;
   setGenerateSession: (session: GenerationSessionSnapshot | null) => void;
+  setTemplateAnalysisSession: (session: TemplateAnalysisSessionSnapshot | null) => void;
+  setTemplatePendingFile: (name: string) => void;
   setKnowledgeState: (patch: Partial<WorkflowState["knowledge"]>) => void;
   clearGenerateSession: () => void;
+  clearTemplateAnalysisSession: () => void;
 };
 
 const defaultState: WorkflowState = {
@@ -46,6 +54,10 @@ const defaultState: WorkflowState = {
     generationBrief: "",
     qualityMode: "balanced",
     session: null,
+  },
+  templateAnalysis: {
+    session: null,
+    pendingFileName: "",
   },
   knowledge: {
     selectedSlug: "",
@@ -63,6 +75,7 @@ function loadState(): WorkflowState {
     const parsed = JSON.parse(raw) as Partial<WorkflowState>;
     return {
       generate: { ...defaultState.generate, ...(parsed.generate ?? {}) },
+      templateAnalysis: { ...defaultState.templateAnalysis, ...(parsed.templateAnalysis ?? {}) },
       knowledge: { ...defaultState.knowledge, ...(parsed.knowledge ?? {}) },
     };
   } catch {
@@ -91,6 +104,27 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const setTemplateAnalysisSession = useCallback((session: TemplateAnalysisSessionSnapshot | null) => {
+    setState((prev) => ({
+      ...prev,
+      templateAnalysis: { ...prev.templateAnalysis, session },
+    }));
+  }, []);
+
+  const setTemplatePendingFile = useCallback((name: string) => {
+    setState((prev) => ({
+      ...prev,
+      templateAnalysis: { ...prev.templateAnalysis, pendingFileName: name },
+    }));
+  }, []);
+
+  const clearTemplateAnalysisSession = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      templateAnalysis: { ...prev.templateAnalysis, session: null },
+    }));
+  }, []);
+
   const setKnowledgeState = useCallback((patch: Partial<WorkflowState["knowledge"]>) => {
     setState((prev) => ({
       ...prev,
@@ -110,10 +144,22 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
       state,
       setGenerateSelections,
       setGenerateSession,
+      setTemplateAnalysisSession,
+      setTemplatePendingFile,
       setKnowledgeState,
       clearGenerateSession,
+      clearTemplateAnalysisSession,
     }),
-    [clearGenerateSession, setGenerateSelections, setGenerateSession, setKnowledgeState, state],
+    [
+      clearGenerateSession,
+      clearTemplateAnalysisSession,
+      setGenerateSelections,
+      setGenerateSession,
+      setKnowledgeState,
+      setTemplateAnalysisSession,
+      setTemplatePendingFile,
+      state,
+    ],
   );
 
   return <WorkflowContext.Provider value={value}>{children}</WorkflowContext.Provider>;

@@ -13,8 +13,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { ErrorBanner, PageHeader, Panel } from "../components/ui";
-import { apiUrl } from "../apiBase";
-import { buildAuthHeaders } from "../auth";
+import { ADMIN_FORBIDDEN, fetchAdminStats } from "../api";
 
 type DailyStat = { day: string; generations: number; cost: number; input_tokens: number; output_tokens: number };
 type ModelStat = { model: string; count: number; cost: number };
@@ -178,16 +177,14 @@ export default function AdminPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(apiUrl("/api/admin/stats"), { headers: buildAuthHeaders() })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(res.status === 403 ? t("admin.forbidden") : String(res.status));
-        return res.json();
-      })
+    fetchAdminStats<AdminStats>()
       .then((data) => {
-        if (!cancelled) setStats(data as AdminStats);
+        if (!cancelled) setStats(data);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message === ADMIN_FORBIDDEN ? t("admin.forbidden") : message);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

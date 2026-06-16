@@ -90,6 +90,8 @@ function Shell() {
   const { state: workflowState } = useWorkflow();
   const activeSession = workflowState.generate.session;
   const activeGeneration = activeSession?.status === "running";
+  const activeTemplateSession = workflowState.templateAnalysis.session;
+  const activeTemplateAnalysis = activeTemplateSession?.status === "running";
 
   function handleLogout() {
     auth.logout();
@@ -138,7 +140,7 @@ function Shell() {
               </NavLink>
             );
           })}
-          {auth.userEmail === "3406847927@qq.com" && (
+          {auth.isAdmin && (
             <NavLink
               to="/admin"
               className={({ isActive }) =>
@@ -199,6 +201,18 @@ function Shell() {
               </span>
               <Button className="min-h-10 px-3 text-xs" variant="ghost" onClick={() => navigate("/generate")}>
                 {t("app.returnToGeneration")}
+              </Button>
+            </div>
+          </div>
+        )}
+        {activeTemplateAnalysis && (
+          <div className="border-b border-signal-lime/20 bg-signal-lime/10 px-4 py-3 text-sm text-lime-100 md:px-8">
+            <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3">
+              <span>
+                {t("app.activeTemplateAnalysis")}: {activeTemplateSession?.currentPhase || activeTemplateSession?.statusMessage || "..."}
+              </span>
+              <Button className="min-h-10 px-3 text-xs" variant="ghost" onClick={() => navigate("/template")}>
+                {t("app.returnToTemplate")}
               </Button>
             </div>
           </div>

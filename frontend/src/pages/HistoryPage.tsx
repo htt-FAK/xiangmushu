@@ -99,7 +99,7 @@ export default function HistoryPage() {
 
   const selected = articles.find((item) => item.id === selectedId) ?? articles[0];
   const hasFilters = Boolean(query.trim()) || status !== "all";
-  const emptyMessage = hasFilters ? "No records match the current filters." : t("history.empty");
+  const emptyMessage = hasFilters ? "没有符合当前筛选条件的历史记录。" : t("history.empty");
 
   return (
     <div className="space-y-4 md:space-y-5">
@@ -122,7 +122,7 @@ export default function HistoryPage() {
           )}
         >
           <Archive size={15} />
-          {availability.available ? t("history.backendBadge") : "Backend unavailable"}
+          {availability.available ? t("history.backendBadge") : "后端服务未连接"}
         </div>
       </header>
 
@@ -190,11 +190,11 @@ export default function HistoryPage() {
             {loading ? (
               <div className="flex min-h-28 items-center justify-center text-slate-500">
                 <Loader2 className="mr-2 animate-spin" size={16} />
-                Loading history...
+                正在加载历史记录...
               </div>
             ) : !availability.available ? (
               <div className="border border-dashed border-signal-amber/30 bg-night-950/60 p-5 text-sm text-slate-300">
-                History records are not available right now.
+                当前无法获取历史记录。
               </div>
             ) : articles.length === 0 ? (
               <div className="border border-dashed border-white/15 bg-night-950/60 p-5 text-sm text-slate-500">
@@ -226,7 +226,7 @@ export default function HistoryPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                       <span>{formatDate(article.createdAt)}</span>
-                      <span>{formatTokenCount(articleTotalTokens(article))} tokens</span>
+                      <span>{formatTokenCount(articleTotalTokens(article))} 字符 (Tokens)</span>
                       <span>{formatHistoryCost(article.costCny)}</span>
                     </div>
                   </button>
@@ -250,10 +250,10 @@ export default function HistoryPage() {
                 ) : (
                   <p className="mt-1 text-sm text-slate-500">
                     {loading
-                      ? "Waiting for history data..."
+                      ? "正在加载历史数据..."
                       : availability.available
                         ? emptyMessage
-                        : "No selectable record while history is unavailable."}
+                        : "暂无可选的历史记录。"}
                   </p>
                 )}
               </div>

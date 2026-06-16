@@ -6,6 +6,8 @@ import { AuthProvider } from "./auth";
 import { I18nProvider } from "./i18n";
 import "./styles.css";
 import { WorkflowProvider } from "./workflow";
+import { BackgroundSessionsProvider } from "./backgroundSessions";
+import { ToastProvider } from "./components/Toast";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -13,7 +15,11 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <AuthProvider>
         <I18nProvider>
           <WorkflowProvider>
-            <App />
+            <ToastProvider>
+              <BackgroundSessionsProvider>
+                <App />
+              </BackgroundSessionsProvider>
+            </ToastProvider>
           </WorkflowProvider>
         </I18nProvider>
       </AuthProvider>

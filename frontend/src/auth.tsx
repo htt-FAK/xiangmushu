@@ -43,6 +43,7 @@ type AuthContextValue = {
   isAuthenticated: boolean;
   validating: boolean;
   userEmail: string;
+  isAdmin: boolean;
   language: Language;
   setToken: (token: string) => void;
   setLanguage: (language: Language) => Promise<void>;
@@ -56,6 +57,10 @@ export function getStoredToken() {
   return window.localStorage.getItem(TOKEN_KEY) ?? "";
 }
 
+export function clearStoredToken() {
+  window.localStorage.removeItem(TOKEN_KEY);
+}
+
 export function buildAuthHeaders(): HeadersInit {
   const token = getStoredToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -65,9 +70,21 @@ function normalizeLanguage(value: unknown): Language {
   return value === "en" ? "en" : "zh";
 }
 
+function bearerHeaders(tokenValue: string): HeadersInit {
+  return { Authorization: `Bearer ${tokenValue}` };
+}
+
+async function fetchMe(tokenValue: string): Promise<{ email?: string; is_admin?: boolean }> {
+  const response = await fetch(apiUrl("/api/auth/me"), {
+    headers: bearerHeaders(tokenValue),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as { email?: string; is_admin?: boolean };
+}
+
 async function fetchUserPreferences(tokenValue: string): Promise<Language> {
   const response = await fetch(apiUrl("/api/user/preferences"), {
-    headers: { Authorization: `Bearer ${tokenValue}` },
+    headers: bearerHeaders(tokenValue),
   });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
@@ -80,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState(() => getStoredToken());
   const [validating, setValidating] = useState(true);
   const [userEmail, setUserEmail] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
   const [language, setLanguageState] = useState<Language>("zh");
 
   // Validate token on mount — if invalid, clear it
@@ -90,32 +108,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    fetch(apiUrl("/api/auth/me"), {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (res) => {
+    fetchMe(token)
+      .then(async (data) => {
         if (cancelled) return;
-        if (!res.ok) {
-          window.localStorage.removeItem(TOKEN_KEY);
-          setTokenState("");
-          setUserEmail("");
-          setLanguageState("zh");
-        } else {
-          const data = await res.json();
-          setUserEmail(data.email ?? "");
-          try {
-            const nextLanguage = await fetchUserPreferences(token);
-            if (!cancelled) setLanguageState(nextLanguage);
-          } catch {
-            if (!cancelled) setLanguageState("zh");
-          }
+        setUserEmail(data.email ?? "");
+        setIsAdmin(Boolean(data.is_admin));
+        try {
+          const nextLanguage = await fetchUserPreferences(token);
+          if (!cancelled) setLanguageState(nextLanguage);
+        } catch {
+          if (!cancelled) setLanguageState("zh");
         }
       })
       .catch(() => {
         if (!cancelled) {
-          window.localStorage.removeItem(TOKEN_KEY);
+          clearStoredToken();
           setTokenState("");
           setUserEmail("");
+          setIsAdmin(false);
           setLanguageState("zh");
         }
       })
@@ -130,13 +140,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setToken = useCallback((value: string) => {
     window.localStorage.setItem(TOKEN_KEY, value);
     setTokenState(value);
-    void fetch(apiUrl("/api/auth/me"), {
-      headers: { Authorization: `Bearer ${value}` },
-    })
-      .then(async (res) => {
-        if (!res.ok) return;
-        const data = await res.json();
+    void fetchMe(value)
+      .then((data) => {
         setUserEmail(data.email ?? "");
+        setIsAdmin(Boolean(data.is_admin));
       })
       .catch(() => undefined);
     void fetchUserPreferences(value)
@@ -177,9 +184,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    window.localStorage.removeItem(TOKEN_KEY);
+    clearStoredToken();
     setTokenState("");
     setUserEmail("");
+    setIsAdmin(false);
     setLanguageState("zh");
   }, []);
 
@@ -189,13 +197,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: !validating && Boolean(token),
       validating,
       userEmail,
+      isAdmin,
       language,
       setToken,
       setLanguage,
       refreshPreferences,
       logout,
     }),
-    [language, logout, refreshPreferences, setLanguage, setToken, token, validating, userEmail],
+    [language, logout, refreshPreferences, setLanguage, setToken, token, validating, userEmail, isAdmin],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

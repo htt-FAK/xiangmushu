@@ -4,6 +4,7 @@ import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreference
 import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
 import { useI18n } from "../i18n";
+import { flattenModelOptions as flattenOptions, preferredModel } from "../models";
 import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap, ProviderApiKeyStatus } from "../types";
 
 const MODEL_ROLE_ORDER = ["main_writer", "web_search", "fast_writer", "vision_layout", "template_planner", "audit_text"];
@@ -43,30 +44,6 @@ const PROVIDERS: Array<{
     badge: "文本 / 搜索 / 视觉",
   },
 ];
-
-function flattenOptions(config?: ModelModuleConfig): ModelOption[] {
-  const seen = new Set<string>();
-  const out: ModelOption[] = [];
-  for (const group of Object.values(config?.tiers ?? {})) {
-    for (const item of group) {
-      if (!item.model || seen.has(item.model)) continue;
-      seen.add(item.model);
-      out.push(item);
-    }
-  }
-  for (const item of config?.options ?? []) {
-    if (!item.model || seen.has(item.model)) continue;
-    seen.add(item.model);
-    out.push(item);
-  }
-  return out;
-}
-
-function preferredModel(config?: ModelModuleConfig, current = "") {
-  const options = flattenOptions(config);
-  if (current && options.some((item) => item.model === current)) return current;
-  return options.find((item) => item.recommended)?.model || options[0]?.model || current;
-}
 
 function ModelSelector({
   moduleKey,
