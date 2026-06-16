@@ -226,6 +226,28 @@ def _article_from_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def count_generated_articles(user_id: int) -> int:
+    """Return the number of persisted generated documents for a user."""
+    if not mysql_enabled():
+        return 0
+    try:
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS cnt
+                    FROM generated_articles
+                    WHERE owner_user_id = %s AND deleted_at IS NULL
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return int(row["cnt"] or 0)
+    except Exception as exc:
+        LOG.warning("Generated article count failed for user %s: %s", user_id, exc)
+        return 0
+
+
 def list_history_articles(user_id: int, *, status: str = "all", query: str = "") -> list[dict[str, Any]]:
     if not mysql_enabled():
         return []

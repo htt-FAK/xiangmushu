@@ -148,6 +148,8 @@ AI_MODEL_PRICING: dict[str, dict[str, float]] = {
     "qwen-plus": {"input": 0.0008, "output": 0.002},
     "qwen-turbo": {"input": 0.0003, "output": 0.0006},
     "qwen3.6-flash": {"input": 0.0003, "output": 0.0006},
+    "qwen3.5-plus": {"input": 0.0008, "output": 0.002},
+    "qwen3.5-flash": {"input": 0.0003, "output": 0.0006},
     "deepseek-v4-flash": {"input": 0.0003, "output": 0.0006},
     "deepseek-v4-pro": {"input": 0.001, "output": 0.002},
     "qwen3.7-plus": {"input": 0.0008, "output": 0.002},

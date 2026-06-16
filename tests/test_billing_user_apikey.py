@@ -44,8 +44,35 @@ def test_billing_calculation_and_summary_scoped_by_user(tmp_path, monkeypatch):
     data = response.json()
     assert data["input_tokens"] == 1000
     assert data["output_tokens"] == 500
-    assert data["generation_count"] == 1
+    assert data["generation_count"] == 0
     assert data["cost_cny"] == 0.0018
+
+
+def test_billing_summary_recomputes_cost_for_unpriced_model_records(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
+    init_db(str(db_path))
+    user = get_or_create_user("cost@example.com", db_path=str(db_path))
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO billing_records(user_id, model, input_tokens, output_tokens, cost_cny, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user.id, "qwen3.5-plus", 1000, 500, 0.0, "2026-06-16T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    from core.billing import billing_summary
+
+    summary = billing_summary(user.id, str(db_path))
+    assert summary["input_tokens"] == 1000
+    assert summary["output_tokens"] == 500
+    assert summary["generation_count"] == 0
+    assert summary["cost_cny"] == calculate_cost_cny("qwen3.5-plus", 1000, 500)
+    assert summary["cost_cny"] > 0
 
 
 def test_user_api_key_is_encrypted_statused_and_deleted(tmp_path, monkeypatch):

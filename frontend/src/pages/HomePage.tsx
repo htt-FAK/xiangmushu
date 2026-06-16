@@ -7,6 +7,7 @@ import { formatDate, useAsyncData } from "../hooks";
 import { useI18n } from "../i18n";
 import { hasAnyValidatedProvider } from "../models";
 import type { BillingSummary } from "../types";
+import { useAuth } from "../auth";
 import { useApiKeyStatus } from "../useApiKeyStatus";
 import { deriveGenerateReadiness } from "../workflow";
 
@@ -116,9 +117,10 @@ function BillingSummaryStat({
 
 export default function HomePage() {
   const { t } = useI18n();
+  const { userEmail } = useAuth();
   const templates = useAsyncData(fetchTemplates, []);
   const kbs = useAsyncData(fetchKnowledgeBases, []);
-  const billing = useAsyncData(fetchBillingSummary, []);
+  const billing = useAsyncData(fetchBillingSummary, [userEmail]);
   const { status: apiKeyStatus, hasValidatedKey } = useApiKeyStatus();
   const [hasKnowledgeSources, setHasKnowledgeSources] = useState(false);
 

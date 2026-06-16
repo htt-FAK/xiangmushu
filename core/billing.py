@@ -189,47 +189,58 @@ def record_billing(
     }
 
 
+def _aggregate_billing_rows(rows: list[Any]) -> tuple[int, int, float]:
+    input_tokens = 0
+    output_tokens = 0
+    cost_cny = 0.0
+    for row in rows:
+        model = str(row["model"] if isinstance(row, dict) else row[0] or "")
+        inp = int((row["input_tokens"] if isinstance(row, dict) else row[1]) or 0)
+        out = int((row["output_tokens"] if isinstance(row, dict) else row[2]) or 0)
+        input_tokens += inp
+        output_tokens += out
+        cost_cny += calculate_cost_cny(model, inp, out)
+    return input_tokens, output_tokens, round(cost_cny, 8)
+
+
 def billing_summary(user_id: int, db_path: str | None = None) -> dict[str, Any]:
+    from core.history import count_generated_articles
+
+    generation_count = count_generated_articles(user_id)
     if _use_mysql(db_path):
         with mysql_transaction() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT
-                        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                        COALESCE(SUM(cost_cny), 0) AS cost_cny,
-                        COUNT(*) AS generation_count
+                    SELECT model, input_tokens, output_tokens
                     FROM billing_records
                     WHERE owner_user_id = %s
                     """,
                     (user_id,),
                 )
-                row = cur.fetchone()
+                rows = cur.fetchall()
+        input_tokens, output_tokens, cost_cny = _aggregate_billing_rows(rows)
         return {
-            "input_tokens": int(row["input_tokens"] or 0),
-            "output_tokens": int(row["output_tokens"] or 0),
-            "cost_cny": round(float(row["cost_cny"] or 0), 8),
-            "generation_count": int(row["generation_count"] or 0),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_cny": cost_cny,
+            "generation_count": generation_count,
         }
     with _connect(db_path) as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
-            SELECT
-                COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(cost_cny), 0) AS cost_cny,
-                COUNT(*) AS generation_count
+            SELECT model, input_tokens, output_tokens
             FROM billing_records
             WHERE user_id = ?
             """,
             (user_id,),
-        ).fetchone()
+        ).fetchall()
+    input_tokens, output_tokens, cost_cny = _aggregate_billing_rows(rows)
     return {
-        "input_tokens": int(row["input_tokens"] or 0),
-        "output_tokens": int(row["output_tokens"] or 0),
-        "cost_cny": round(float(row["cost_cny"] or 0), 8),
-        "generation_count": int(row["generation_count"] or 0),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_cny": cost_cny,
+        "generation_count": generation_count,
     }
 
 
