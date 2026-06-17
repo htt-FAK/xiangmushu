@@ -529,6 +529,53 @@ def load_provider_api_key_validation(
         return {}
 
 
+def update_provider_api_key_validation(
+    user_id: int,
+    provider_code: str,
+    validation: dict[str, Any],
+    db_path: str | None = None,
+) -> bool:
+    now = iso(utc_now())
+    encoded = json.dumps(validation or {}, ensure_ascii=False)
+    validated = bool((validation or {}).get("ok"))
+    status_value = "validated" if validated else "invalid"
+    if _use_mysql(db_path):
+        with mysql_transaction() as conn:
+            provider_id = _provider_id_for_code(conn, provider_code)
+            if provider_id is None:
+                return False
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE provider_credentials
+                    SET status = %s, validation_json = %s, validated_at = %s, updated_at = %s
+                    WHERE owner_user_id = %s AND provider_id = %s
+                    """,
+                    (
+                        status_value,
+                        encoded,
+                        utc_now().replace(tzinfo=None),
+                        utc_now().replace(tzinfo=None),
+                        user_id,
+                        provider_id,
+                    ),
+                )
+                return bool(cur.rowcount)
+    with _connect(db_path) as conn:
+        result = conn.execute(
+            """
+            UPDATE user_provider_api_keys
+            SET status = ?, validation_json = ?, updated_at = ?
+            WHERE user_id = ? AND provider_code = ?
+            """,
+            (status_value, encoded, now, user_id, provider_code),
+        )
+        if provider_code == "dashscope" and result.rowcount == 0:
+            return False
+        conn.commit()
+    return bool(result.rowcount)
+
+
 def load_provider_api_key(user_id: int, provider_code: str, db_path: str | None = None) -> str | None:
     if _use_mysql(db_path):
         with mysql_transaction() as conn:
