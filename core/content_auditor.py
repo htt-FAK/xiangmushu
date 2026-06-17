@@ -64,6 +64,15 @@ class ContentAuditor:
             if str(v or "").strip()
         }
         self._strict_model_selection = bool(strict_model_selection)
+        self.last_usage: Any = None
+        self.last_model: str = ""
+
+    def pop_last_usage(self) -> tuple[str, Any]:
+        usage = self.last_usage
+        model = self.last_model
+        self.last_usage = None
+        self.last_model = ""
+        return model, usage
 
     def _resolve_model_chain_and_temp(self) -> tuple[List[str], float]:
         """Resolve the audit model chain and temperature.
@@ -117,6 +126,8 @@ class ContentAuditor:
 
         raw = ""
         last_error: Optional[Exception] = None
+        self.last_usage = None
+        self.last_model = ""
         model_chain, audit_temperature = self._resolve_model_chain_and_temp()
         seen_models = set()
         for model in model_chain:
@@ -139,6 +150,8 @@ class ContentAuditor:
                     stream=False,
                 )
                 ch0 = resp.choices[0] if resp.choices else None
+                self.last_usage = getattr(resp, "usage", None)
+                self.last_model = str(getattr(resp, "model", None) or model)
                 raw = (ch0.message.content if ch0 and ch0.message else "") or ""
                 if raw.strip():
                     break

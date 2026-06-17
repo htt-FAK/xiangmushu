@@ -29,6 +29,8 @@ def test_content_auditor_strict_model_selection_only_calls_selected_model(monkey
     def fake_chat(_client, **kwargs):
         calls.append(str(kwargs["model"]))
         return SimpleNamespace(
+            model=str(kwargs["model"]),
+            usage={"input_tokens": 12, "output_tokens": 8},
             choices=[
                 SimpleNamespace(
                     message=SimpleNamespace(content=""),
@@ -60,5 +62,8 @@ def test_content_auditor_strict_model_selection_only_calls_selected_model(monkey
     )
 
     assert calls == ["deepseek-v4-flash"]
+    model, usage = auditor.pop_last_usage()
+    assert model == "deepseek-v4-flash"
+    assert usage == {"input_tokens": 12, "output_tokens": 8}
     assert result.parse_ok is False
     assert result.issues

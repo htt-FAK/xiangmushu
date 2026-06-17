@@ -100,6 +100,41 @@ def test_generation_bundle_web_enabled_keeps_main_writer(monkeypatch):
     assert bundle.route_meta["native_web_search"] is False
 
 
+def test_generation_bundle_collects_web_usage_only_when_not_cached(monkeypatch):
+    monkeypatch.setattr("config.FULL_RECALL_MODE", False)
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"web_search": "mimo-v2.5"})
+    monkeypatch.setattr(
+        "core.generator.fetch_web_evidence",
+        lambda *args, **kwargs: WebEvidenceResult(
+            profile=None,
+            usage={"input_tokens": 200, "output_tokens": 40},
+            model="mimo-v2.5",
+            cached=False,
+        ),
+    )
+    vs = DummyVectorStore([], count=1)
+    generator = ContentGenerator(vs, user_id=7)
+
+    _ = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=True, retrieval_max_distance=1.0)
+    usages = generator.pop_all_usages()
+
+    assert usages == [("mimo-v2.5", {"input_tokens": 200, "output_tokens": 40})]
+
+    monkeypatch.setattr(
+        "core.generator.fetch_web_evidence",
+        lambda *args, **kwargs: WebEvidenceResult(
+            profile=None,
+            usage={"input_tokens": 99, "output_tokens": 11},
+            model="mimo-v2.5",
+            cached=True,
+        ),
+    )
+    _ = generator.prepare_generation_bundle(_task(), top_k=4, enable_web=True, retrieval_max_distance=1.0)
+    cached_usages = generator.pop_all_usages()
+
+    assert cached_usages == []
+
+
 def test_generation_bundle_uses_user_lightweight_model_for_strong_rag(monkeypatch):
     monkeypatch.setattr("config.FULL_RECALL_MODE", False)
     monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"fast_writer": "user-light-model"})

@@ -97,6 +97,28 @@ def test_fetch_web_evidence_uses_mimo_native_web_search_tools(monkeypatch):
     assert resolved_clients[0] is marker_client
 
 
+def test_fetch_web_evidence_returns_usage_and_model(monkeypatch):
+    class _Message:
+        content = '{"facts":[{"claim":"支持信息。","source":"s","confidence":"high"}],"gaps":[]}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+        model = "mimo-v2.5"
+        usage = {"input_tokens": 120, "output_tokens": 30}
+
+    monkeypatch.setattr("core.web_search_agent.chat_completions_create", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"web_search": "mimo-v2.5"})
+
+    result = fetch_web_evidence(object(), _task(), user_id=7)
+
+    assert result.model == "mimo-v2.5"
+    assert result.usage == {"input_tokens": 120, "output_tokens": 30}
+    assert result.cached is False
+
+
 def test_session_web_evidence_cache_reuses_result(monkeypatch):
     calls = 0
 

@@ -230,6 +230,7 @@ class ContentGenerator:
         self._web_cache = SessionWebEvidenceCache()
         self.last_usage: Any = None
         self.last_model: str = ""
+        self._collected_usages: list[tuple[str, Any]] = []
 
     @staticmethod
     def _client_for_api_key(api_key: str) -> Any:
@@ -275,6 +276,17 @@ class ContentGenerator:
         self.last_usage = None
         self.last_model = ""
         return model, usage
+
+    def _collect_usage(self, model: str, usage: Any) -> None:
+        model_id = str(model or "").strip()
+        if not model_id or usage is None:
+            return
+        self._collected_usages.append((model_id, usage))
+
+    def pop_all_usages(self) -> list[tuple[str, Any]]:
+        items = list(self._collected_usages)
+        self._collected_usages.clear()
+        return items
 
     def _candidate_models(
         self,
@@ -439,6 +451,8 @@ class ContentGenerator:
                 user_id=self._user_id,
                 cache=self._web_cache,
             )
+            if not web_result.cached:
+                self._collect_usage(web_result.model, web_result.usage)
             evidence_pack.web_facts = list(web_result.facts)
             evidence_pack.gaps.extend(web_result.gaps)
             if web_result.error:
@@ -880,9 +894,10 @@ class ContentGenerator:
 
         if acc_len <= 0:
             _LOG.warning("content_gen_stream_empty model=%s", model)
-            raise RuntimeError(f"所选模型无有效输出：{model}")
+            raise RuntimeError("当前模型不可用，请到设置页更换模型或检查对应Key")
 
         self.last_model = self.last_model or model
+        self._collect_usage(self.last_model, self.last_usage)
         _ensure_gen_logger()
         _LOG.info(
             "content_gen_stream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",
@@ -963,7 +978,7 @@ class ContentGenerator:
             text = (ch0.message.content if ch0 and ch0.message else "") or ""
             if not text.strip():
                 _LOG.warning("content_gen_nonstream_empty model=%s", model)
-                raise RuntimeError(f"所选模型无有效输出：{model}")
+                raise RuntimeError("当前模型不可用，请到设置页更换模型或检查对应Key")
             if self._is_error_content(text):
                 quota_error = self._quota_error_for(text, model, bundle.route_meta)
                 if quota_error is not None:
@@ -972,6 +987,7 @@ class ContentGenerator:
                 raise RuntimeError("当前模型不可用，请到设置页更换模型或检查对应Key")
             self.last_usage = getattr(resp, "usage", None)
             self.last_model = str(getattr(resp, "model", None) or model)
+            self._collect_usage(self.last_model, self.last_usage)
             _ensure_gen_logger()
             _LOG.info(
                 "content_gen_nonstream_done task_id=%s chapter=%s model=%s native_web=%s approx_chars=%s",

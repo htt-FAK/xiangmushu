@@ -40,6 +40,8 @@ class WebEvidenceResult:
     raw_text: str = ""
     error: str = ""
     cached: bool = False
+    usage: Any = None
+    model: str = ""
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -179,7 +181,14 @@ def fetch_web_evidence(
         ch0 = response.choices[0] if response.choices else None
         raw = (ch0.message.content if ch0 and ch0.message else "") or ""
         facts, gaps = parse_web_evidence(raw)
-        result = WebEvidenceResult(facts=facts, gaps=gaps, profile=profile, raw_text=raw)
+        result = WebEvidenceResult(
+            facts=facts,
+            gaps=gaps,
+            profile=profile,
+            raw_text=raw,
+            usage=getattr(response, "usage", None),
+            model=str(getattr(response, "model", None) or profile.model),
+        )
     except Exception as exc:
         _LOG.warning("web_evidence_error task_id=%s err=%s", task.task_id, exc)
         result = WebEvidenceResult(profile=profile, error=str(exc))
