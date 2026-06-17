@@ -25,6 +25,7 @@ const dict: Record<Language, Record<string, string>> = {
     "nav.settings": "设置",
     "nav.admin": "数据面板",
     "nav.signOut": "退出登录",
+    "nav.more": "更多",
     "lang.switch": "切换语言",
 
     "login.eyebrow": "安全访问",
@@ -456,6 +457,7 @@ const dict: Record<Language, Record<string, string>> = {
     "nav.settings": "Settings",
     "nav.admin": "Dashboard",
     "nav.signOut": "Sign out",
+    "nav.more": "More",
     "lang.switch": "Switch language",
 
     "login.eyebrow": "Secure Access",

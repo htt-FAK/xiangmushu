@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, Play, ShieldCheck, Square } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, Play, ShieldCheck, Sparkles, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -8,6 +8,7 @@ import {
   fetchUserPreferences,
 } from "../api";
 import { Button } from "../components/ui";
+import { useMediaQuery } from "../hooks";
 import { useI18n } from "../i18n";
 import type { GenerateParams, KnowledgeBase, KnowledgeSourceStats, TemplateItem } from "../types";
 import { useApiKeyStatus } from "../useApiKeyStatus";
@@ -234,6 +235,82 @@ export default function GeneratePage() {
     return "";
   }, [preferenceWarnings]);
 
+  // P0 mobile layout: on <xl while a run is active, promote RunOverview + live
+  // output to the top and collapse SetupPanel into an expandable summary so the
+  // step progress + current task + stop button fit the first screen. Desktop
+  // (>= xl) is never "mobile" here, so the two-column grid is untouched.
+  const isMobile = useMediaQuery("(max-width: 1279px)");
+  const mobileRunning = isMobile && busy;
+  const qualityModeLabel =
+    qualityMode === "quality"
+      ? t("generate.modeQuality")
+      : qualityMode === "speed"
+        ? t("generate.modeSpeed")
+        : t("generate.modeBalanced");
+  const selectedKbTitle = knowledgeItems.find((item) => item.value === slug)?.title || t("generate.noKnowledge");
+
+  const setupPanelEl = (
+    <SetupPanel
+      knowledgeItems={knowledgeItems}
+      templateItems={templateItems}
+      slug={slug}
+      template={template}
+      qualityMode={qualityMode}
+      generationBrief={generationBrief}
+      enableWeb={enableWeb}
+      enableAudit={enableAudit}
+      enableVisualAudit={enableVisualAudit}
+      recommendedConfig={recommendedConfig}
+      busy={busy}
+      onSlugChange={setSlug}
+      onTemplateChange={setTemplate}
+      onQualityModeChange={setQualityMode}
+      onGenerationBriefChange={setGenerationBrief}
+      onToggleWeb={markOverride(setEnableWeb)}
+      onToggleAudit={markOverride(setEnableAudit)}
+      onToggleVisualAudit={markOverride(setEnableVisualAudit)}
+    />
+  );
+
+  const runOverviewEl = (
+    <RunOverview
+      running={running}
+      regeneratingIndex={session.regeneratingIndex}
+      busy={busy}
+      currentStep={session.currentStep}
+      currentTask={session.currentTask}
+      progress={session.progress}
+      percent={session.percent}
+      visualScore={session.visualScore}
+      visualTarget={VISUAL_TARGET}
+      runBilling={session.runBilling}
+      downloadPath={session.downloadPath}
+      reportPath={session.reportPath}
+      reportSummary={session.reportSummary}
+      postFillChecks={session.postFillChecks}
+      outputs={session.outputs}
+      qualityMode={qualityMode}
+      onDownloadError={() => session.setNotice({ kind: "plain", message: t("generate.downloadFailed") })}
+      compact={mobileRunning}
+    />
+  );
+
+  const outputListEl = (
+    <OutputList
+      outputs={session.outputs}
+      taskName={taskName}
+      regeneratingIndex={session.regeneratingIndex}
+      running={running}
+      currentTask={session.currentTask}
+      busy={busy}
+      progress={session.progress}
+      onRegenerate={session.regenerateSection}
+      traceOpen={traceOpen}
+      onOpenTrace={() => setTraceOpen(true)}
+      onCloseTrace={() => setTraceOpen(false)}
+    />
+  );
+
   return (
     <>
       <header className="mb-4 grid gap-3 border-b border-white/10 pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
@@ -300,66 +377,32 @@ export default function GeneratePage() {
         </div>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+      {mobileRunning ? (
         <div className="space-y-5">
-          <SetupPanel
-            knowledgeItems={knowledgeItems}
-            templateItems={templateItems}
-            slug={slug}
-            template={template}
-            qualityMode={qualityMode}
-            generationBrief={generationBrief}
-            enableWeb={enableWeb}
-            enableAudit={enableAudit}
-            enableVisualAudit={enableVisualAudit}
-            recommendedConfig={recommendedConfig}
-            busy={busy}
-            onSlugChange={setSlug}
-            onTemplateChange={setTemplate}
-            onQualityModeChange={setQualityMode}
-            onGenerationBriefChange={setGenerationBrief}
-            onToggleWeb={markOverride(setEnableWeb)}
-            onToggleAudit={markOverride(setEnableAudit)}
-            onToggleVisualAudit={markOverride(setEnableVisualAudit)}
-          />
+          {runOverviewEl}
+          {outputListEl}
+          <details className="group">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border border-white/10 bg-white/[0.045] px-4 py-3 text-sm shadow-panel backdrop-blur">
+              <span className="flex min-w-0 items-center gap-2 font-semibold text-white">
+                <Sparkles size={16} className="shrink-0 text-signal-cyan" />
+                <span className="min-w-0 truncate">
+                  {t("generate.setupTitle")} · {selectedKbTitle} · {template || t("generate.noTemplates")} · {qualityModeLabel}
+                </span>
+              </span>
+              <ChevronDown size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="mt-3">{setupPanelEl}</div>
+          </details>
         </div>
-
-        <div className="min-w-0 space-y-5">
-          <RunOverview
-            running={running}
-            regeneratingIndex={session.regeneratingIndex}
-            busy={busy}
-            currentStep={session.currentStep}
-            currentTask={session.currentTask}
-            progress={session.progress}
-            percent={session.percent}
-            visualScore={session.visualScore}
-            visualTarget={VISUAL_TARGET}
-            runBilling={session.runBilling}
-            downloadPath={session.downloadPath}
-            reportPath={session.reportPath}
-            reportSummary={session.reportSummary}
-            postFillChecks={session.postFillChecks}
-            outputs={session.outputs}
-            qualityMode={qualityMode}
-            onDownloadError={() => session.setNotice({ kind: "plain", message: t("generate.downloadFailed") })}
-          />
-
-          <OutputList
-            outputs={session.outputs}
-            taskName={taskName}
-            regeneratingIndex={session.regeneratingIndex}
-            running={running}
-            currentTask={session.currentTask}
-            busy={busy}
-            progress={session.progress}
-            onRegenerate={session.regenerateSection}
-            traceOpen={traceOpen}
-            onOpenTrace={() => setTraceOpen(true)}
-            onCloseTrace={() => setTraceOpen(false)}
-          />
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="space-y-5">{setupPanelEl}</div>
+          <div className="min-w-0 space-y-5">
+            {runOverviewEl}
+            {outputListEl}
+          </div>
         </div>
-      </div>
+      )}
 
       {confirmOpen && (
         <ConfirmModal

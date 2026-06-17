@@ -5,9 +5,11 @@ import {
   FileSearch,
   Home,
   LogOut,
+  Menu,
   PanelLeft,
   Settings,
   Sparkles,
+  X,
 } from "lucide-react";
 import {
   Navigate,
@@ -43,6 +45,14 @@ const nav = [
   { to: "/history", labelKey: "nav.history", icon: History },
   { to: "/knowledge", labelKey: "nav.knowledge", icon: Database },
   { to: "/settings", labelKey: "nav.settings", icon: Settings },
+];
+
+// P0 mobile bottom bar: only high-frequency entries; the rest open the More sheet.
+// Desktop sidebar (`aside`) still renders the full `nav` above and is unaffected.
+const mobileBarItems = [
+  { to: "/", labelKey: "nav.home", icon: Home },
+  { to: "/generate", labelKey: "nav.generate", icon: Sparkles },
+  { to: "/history", labelKey: "nav.history", icon: History },
 ];
 
 function ProtectedRoute({ children }: { children: ReactElement }) {
@@ -87,11 +97,26 @@ function Shell() {
   const auth = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
   const { state: workflowState } = useWorkflow();
   const activeSession = workflowState.generate.session;
   const activeGeneration = activeSession?.status === "running";
   const activeTemplateSession = workflowState.templateAnalysis.session;
   const activeTemplateAnalysis = activeTemplateSession?.status === "running";
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  // Close the mobile "More" sheet whenever the route changes.
+  useEffect(() => setMoreOpen(false), [location.pathname]);
+
+  // Secondary destinations surfaced in the mobile "More" bottom sheet.
+  const moreSheetItems = [
+    { to: "/template", labelKey: "nav.template", icon: FileSearch },
+    { to: "/knowledge", labelKey: "nav.knowledge", icon: Database },
+    { to: "/settings", labelKey: "nav.settings", icon: Settings },
+    ...(auth.isAdmin
+      ? [{ to: "/admin", labelKey: "nav.admin", icon: BarChart3 }]
+      : []),
+  ];
 
   function handleLogout() {
     auth.logout();
@@ -194,31 +219,45 @@ function Shell() {
           </div>
         </header>
         {activeGeneration && (
-          <div className="border-b border-signal-cyan/20 bg-signal-cyan/10 px-4 py-3 text-sm text-cyan-100 md:px-8">
-            <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3">
-              <span>
-                {t("app.activeGeneration")}: {activeSession?.currentTask || "..."} ({activeSession?.progress.done ?? 0}/{activeSession?.progress.total ?? 0})
+          <div className="border-b border-signal-cyan/20 bg-signal-cyan/10 px-4 py-2.5 text-sm text-cyan-100 md:px-8 md:py-3">
+            <div className="mx-auto flex w-full max-w-7xl flex-nowrap items-center justify-between gap-2 md:flex-wrap md:gap-3">
+              <span
+                className="min-w-0 flex-1 truncate md:whitespace-normal"
+                title={`${t("app.activeGeneration")}: ${activeSession?.currentTask || "..."} (${activeSession?.progress.done ?? 0}/${activeSession?.progress.total ?? 0})`}
+              >
+                <span className="md:hidden">
+                  ({activeSession?.progress.done ?? 0}/{activeSession?.progress.total ?? 0}) {activeSession?.currentTask || "..."}
+                </span>
+                <span className="hidden md:inline">
+                  {t("app.activeGeneration")}: {activeSession?.currentTask || "..."} ({activeSession?.progress.done ?? 0}/{activeSession?.progress.total ?? 0})
+                </span>
               </span>
-              <Button className="min-h-10 px-3 text-xs" variant="ghost" onClick={() => navigate("/generate")}>
+              <Button className="min-h-12 shrink-0 px-3 text-xs md:min-h-10" variant="ghost" onClick={() => navigate("/generate")}>
                 {t("app.returnToGeneration")}
               </Button>
             </div>
           </div>
         )}
         {activeTemplateAnalysis && (
-          <div className="border-b border-signal-lime/20 bg-signal-lime/10 px-4 py-3 text-sm text-lime-100 md:px-8">
-            <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3">
-              <span>
-                {t("app.activeTemplateAnalysis")}: {activeTemplateSession?.currentPhase || activeTemplateSession?.statusMessage || "..."}
+          <div className="border-b border-signal-lime/20 bg-signal-lime/10 px-4 py-2.5 text-sm text-lime-100 md:px-8 md:py-3">
+            <div className="mx-auto flex w-full max-w-7xl flex-nowrap items-center justify-between gap-2 md:flex-wrap md:gap-3">
+              <span
+                className="min-w-0 flex-1 truncate md:whitespace-normal"
+                title={`${t("app.activeTemplateAnalysis")}: ${activeTemplateSession?.currentPhase || activeTemplateSession?.statusMessage || "..."}`}
+              >
+                <span className="md:hidden">{activeTemplateSession?.currentPhase || activeTemplateSession?.statusMessage || "..."}</span>
+                <span className="hidden md:inline">
+                  {t("app.activeTemplateAnalysis")}: {activeTemplateSession?.currentPhase || activeTemplateSession?.statusMessage || "..."}
+                </span>
               </span>
-              <Button className="min-h-10 px-3 text-xs" variant="ghost" onClick={() => navigate("/template")}>
+              <Button className="min-h-12 shrink-0 px-3 text-xs md:min-h-10" variant="ghost" onClick={() => navigate("/template")}>
                 {t("app.returnToTemplate")}
               </Button>
             </div>
           </div>
         )}
         <PullToRefresh>
-        <main className="mx-auto w-full max-w-7xl px-4 pb-36 pt-5 overscroll-y-contain md:px-8 md:pb-10 md:pt-10">
+        <main className="mx-auto w-full max-w-7xl px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] pt-5 overscroll-y-contain md:px-8 md:pb-10 md:pt-10">
           <Suspense
             fallback={
               <div className="py-12 text-sm font-semibold tracking-widest text-slate-400 uppercase">
@@ -241,8 +280,8 @@ function Shell() {
         </PullToRefresh>
 
         <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-night-950/92 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-1.5 backdrop-blur-md lg:hidden">
-          <div className="grid grid-cols-6 gap-1">
-            {nav.map((item) => {
+          <div className="grid grid-cols-4 gap-1">
+            {mobileBarItems.map((item) => {
               const Icon = item.icon;
               return (
                 <NavLink
@@ -251,7 +290,7 @@ function Shell() {
                   end={item.to === "/"}
                   className={({ isActive }) =>
                     clsx(
-                      "relative flex min-h-14 flex-col items-center justify-center gap-0.5 overflow-hidden border px-1 text-[11px] font-semibold leading-tight transition active:scale-[0.98]",
+                      "relative flex min-h-14 flex-col items-center justify-center gap-0.5 border px-2 text-[12px] font-semibold leading-tight transition active:scale-[0.98]",
                       isActive
                         ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan shadow-glow before:absolute before:left-1/2 before:top-0 before:h-0.5 before:w-7 before:-translate-x-1/2 before:bg-signal-cyan before:shadow-[0_0_18px_rgba(54,242,230,0.75)]"
                         : "border-transparent text-slate-500 hover:bg-white/[0.035] hover:text-slate-300 active:text-signal-cyan/80",
@@ -259,12 +298,88 @@ function Shell() {
                   }
                 >
                   <Icon size={17} strokeWidth={2.2} />
-                  <span className="max-w-full truncate">{t(item.labelKey)}</span>
+                  <span className="max-w-full whitespace-nowrap">{t(item.labelKey)}</span>
                 </NavLink>
               );
             })}
+            <button
+              key="more"
+              type="button"
+              onClick={() => setMoreOpen(true)}
+              className={clsx(
+                "relative flex min-h-14 flex-col items-center justify-center gap-0.5 border px-2 text-[12px] font-semibold leading-tight transition active:scale-[0.98]",
+                moreOpen
+                  ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan shadow-glow before:absolute before:left-1/2 before:top-0 before:h-0.5 before:w-7 before:-translate-x-1/2 before:bg-signal-cyan before:shadow-[0_0_18px_rgba(54,242,230,0.75)]"
+                  : "border-transparent text-slate-500 hover:bg-white/[0.035] hover:text-slate-300 active:text-signal-cyan/80",
+              )}
+            >
+              <Menu size={17} strokeWidth={2.2} />
+              <span className="max-w-full whitespace-nowrap">{t("nav.more")}</span>
+            </button>
           </div>
         </nav>
+
+        {moreOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <button
+              type="button"
+              aria-label={t("generate.close")}
+              className="absolute inset-0 cursor-default bg-night-950/80 backdrop-blur-sm"
+              onClick={() => setMoreOpen(false)}
+            />
+            <div className="absolute inset-x-0 bottom-0 border-t border-white/10 bg-night-900/95 pb-[max(env(safe-area-inset-bottom),0.5rem)] shadow-panel backdrop-blur-xl">
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-cyan">
+                  {t("nav.more")}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setMoreOpen(false)}
+                  aria-label={t("generate.close")}
+                  className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 p-3">
+                {moreSheetItems.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      onClick={() => setMoreOpen(false)}
+                      className={({ isActive }) =>
+                        clsx(
+                          "flex min-h-14 flex-col items-center justify-center gap-1.5 border px-3 text-sm font-semibold transition",
+                          isActive
+                            ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan"
+                            : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white",
+                        )
+                      }
+                    >
+                      <Icon size={20} />
+                      <span className="whitespace-nowrap">{t(item.labelKey)}</span>
+                    </NavLink>
+                  );
+                })}
+              </div>
+              <div className="p-3 pt-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    handleLogout();
+                  }}
+                  className="flex min-h-12 w-full items-center justify-center gap-2 border border-signal-rose/40 bg-signal-rose/10 px-4 text-sm font-semibold text-signal-rose transition hover:bg-signal-rose hover:text-white"
+                >
+                  <LogOut size={18} />
+                  <span className="whitespace-nowrap">{t("nav.signOut")}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

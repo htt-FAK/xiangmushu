@@ -121,7 +121,7 @@ export function OutputList({
                 {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
               </Button>
             </div>
-            <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+            <div className="max-h-[50vh] space-y-3 overflow-y-auto pr-1 sm:max-h-[420px]">
               <OutputBlocks {...blocksProps} actionsEnabled={false} preview={true} />
             </div>
           </div>

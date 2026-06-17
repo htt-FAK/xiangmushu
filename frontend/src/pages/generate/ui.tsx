@@ -90,11 +90,13 @@ export function StepIndicator({
   label,
   icon,
   currentStep,
+  className,
 }: {
   step: GenerateStep;
   label: string;
   icon: ReactNode;
   currentStep: GenerateStep;
+  className?: string;
 }) {
   const isActive = currentStep === step;
   const isCompleted = stepOrder.indexOf(currentStep) > stepOrder.indexOf(step);
@@ -108,6 +110,7 @@ export function StepIndicator({
           : isCompleted
             ? "border-signal-lime/50 bg-signal-lime/5 text-signal-lime"
             : "border-white/10 bg-night-950/50 text-slate-500",
+        className,
       )}
     >
       <div className="shrink-0">{icon}</div>
