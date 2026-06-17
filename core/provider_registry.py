@@ -86,6 +86,8 @@ KNOWN_MODEL_DISPLAY_NAMES: dict[str, str] = {
     "qwen3.5-flash": "Qwen 3.5 Flash",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
     "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-chat": "DeepSeek Chat",
+    "deepseek-reasoner": "DeepSeek Reasoner",
     "mimo-v2.5-pro": "MiMo V2.5 Pro",
     "mimo-v2.5-pro-ultraspeed": "MiMo V2.5 Pro UltraSpeed",
     "mimo-v2.5": "MiMo V2.5",
@@ -104,18 +106,18 @@ ROLE_PROVIDER_MATRIX: dict[str, tuple[str, ...]] = {
 }
 STRICT_PROVIDER_ROLE_MODELS: dict[str, dict[str, tuple[str, ...]]] = {
     "deepseek": {
-        "main_writer": ("deepseek-v4-pro",),
+        "main_writer": ("deepseek-v4-pro", "deepseek-v4-flash"),
         "fast_writer": ("deepseek-v4-flash",),
         "template_planner": ("deepseek-v4-flash",),
         "audit_text": ("deepseek-v4-flash",),
     },
     "mimo": {
-        "main_writer": ("mimo-v2.5-pro",),
-        "fast_writer": ("mimo-v2.5-pro-ultraspeed",),
-        "web_search": ("mimo-v2.5-pro",),
+        "main_writer": ("mimo-v2.5-pro", "mimo-v2.5"),
+        "fast_writer": ("mimo-v2.5",),
+        "web_search": ("mimo-v2.5-pro", "mimo-v2.5"),
         "vision_layout": ("mimo-v2.5",),
-        "template_planner": ("mimo-v2.5-pro",),
-        "audit_text": ("mimo-v2.5-pro",),
+        "template_planner": ("mimo-v2.5-pro", "mimo-v2.5"),
+        "audit_text": ("mimo-v2.5-pro", "mimo-v2.5"),
     },
 }
 
@@ -219,12 +221,12 @@ def role_seed_model_ids(role: str) -> list[str]:
     if default_model and default_model not in models:
         models.append(default_model)
     curated: dict[str, list[str]] = {
-        "main_writer": ["qwen3.7-plus", "deepseek-v4-pro", "mimo-v2.5-pro"],
-        "fast_writer": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro-ultraspeed"],
-        "web_search": ["qwen3.7-plus", "mimo-v2.5-pro"],
+        "main_writer": ["qwen3.7-plus", "deepseek-v4-pro", "deepseek-v4-flash", "mimo-v2.5-pro", "mimo-v2.5"],
+        "fast_writer": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5"],
+        "web_search": ["qwen3.7-plus", "mimo-v2.5-pro", "mimo-v2.5"],
         "vision_layout": ["qwen3.7-plus", "mimo-v2.5"],
-        "template_planner": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro"],
-        "audit_text": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro"],
+        "template_planner": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro", "mimo-v2.5"],
+        "audit_text": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro", "mimo-v2.5"],
         "embedding": ["text-embedding-v4"],
     }
     for model in curated.get(role_key, []):

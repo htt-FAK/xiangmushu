@@ -46,8 +46,14 @@ def test_catalog_seed_candidates_prefer_role_specific_models_and_skip_unsupporte
 
     rows = provider_registry.catalog_seed_candidates()
 
-    assert [item["model"] for item in rows] == ["deepseek-v4-pro", "qwen3.7-plus", "mimo-v2.5-pro"]
-    assert [item["provider_code"] for item in rows] == ["deepseek", "dashscope", "mimo"]
+    assert [item["model"] for item in rows] == [
+        "deepseek-v4-pro",
+        "qwen3.7-plus",
+        "deepseek-v4-flash",
+        "mimo-v2.5-pro",
+        "mimo-v2.5",
+    ]
+    assert [item["provider_code"] for item in rows] == ["deepseek", "dashscope", "deepseek", "mimo", "mimo"]
 
 
 def test_catalog_seed_candidates_fall_back_to_legacy_module_and_default(monkeypatch):
@@ -86,11 +92,12 @@ def test_catalog_seed_candidates_fall_back_to_legacy_module_and_default(monkeypa
         "deepseek-v4-flash",
         "qwen3.6-flash",
         "mimo-v2.5-pro",
+        "mimo-v2.5",
     ]
     assert [item["model"] for item in rows if item["role"] == "embedding"] == ["text-embedding-v4"]
 
 
-def test_build_seed_plan_preserves_existing_disabled_state(monkeypatch):
+def test_build_seed_plan_syncs_enabled_state_to_seed_target(monkeypatch):
     monkeypatch.setattr(seed_model_catalog, "mysql_enabled", lambda: True)
     monkeypatch.setattr(seed_model_catalog, "mysql_health_check", lambda: {"ok": True})
     monkeypatch.setattr(
@@ -141,10 +148,11 @@ def test_build_seed_plan_preserves_existing_disabled_state(monkeypatch):
 
     assert plan["counts"]["update"] == 1
     assert plan["operations"][0]["action"] == "update"
-    assert plan["operations"][0]["enabled"] is False
+    assert plan["operations"][0]["enabled"] is True
+    assert plan["operations"][0]["diff"]["enabled"] == {"from": False, "to": True}
 
 
-def test_build_seed_plan_disables_legacy_deepseek_rows(monkeypatch):
+def test_build_seed_plan_disables_legacy_deepseek_and_mimo_rows(monkeypatch):
     monkeypatch.setattr(seed_model_catalog, "mysql_enabled", lambda: True)
     monkeypatch.setattr(seed_model_catalog, "mysql_health_check", lambda: {"ok": True})
     monkeypatch.setattr(
@@ -229,6 +237,21 @@ def test_build_seed_plan_disables_legacy_deepseek_rows(monkeypatch):
                 "provider_code": "deepseek",
                 "provider_enabled": 0,
             },
+            {
+                "id": 22,
+                "provider_id": 13,
+                "model_id": "mimo-v2.5-pro-ultraspeed",
+                "display_name": "MiMo V2.5 Pro UltraSpeed",
+                "role_key": "main_writer",
+                "enabled": 1,
+                "capabilities_json": ["text"],
+                "input_price_per_1k": 0.0,
+                "output_price_per_1k": 0.0,
+                "context_window": None,
+                "config_json": {},
+                "provider_code": "mimo",
+                "provider_enabled": 0,
+            },
         ],
     )
 
@@ -237,10 +260,11 @@ def test_build_seed_plan_disables_legacy_deepseek_rows(monkeypatch):
     disable_ops = [op for op in plan["operations"] if op["action"] == "disable_legacy"]
     insert_ops = [op for op in plan["operations"] if op["action"] == "insert"]
 
-    assert plan["counts"]["disable_legacy"] == 2
+    assert plan["counts"]["disable_legacy"] == 3
     assert {(op["provider_code"], op["model"]) for op in disable_ops} == {
         ("deepseek", "deepseek-chat"),
         ("deepseek", "deepseek-reasoner"),
+        ("mimo", "mimo-v2.5-pro-ultraspeed"),
     }
     assert {(op["provider_code"], op["model"], op["enabled"]) for op in insert_ops} == {
         ("dashscope", "qwen3.7-plus", True),

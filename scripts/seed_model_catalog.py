@@ -129,11 +129,14 @@ def build_seed_plan() -> dict[str, Any]:
             )
             continue
         normalized_existing = _normalized_existing(existing)
+        target_enabled = _seed_enabled_for_provider(provider)
         diffs = {
             field: {"from": normalized_existing[field], "to": normalized_candidate[field]}
             for field in normalized_candidate
             if normalized_existing[field] != normalized_candidate[field]
         }
+        if bool(existing.get("enabled")) != bool(target_enabled):
+            diffs["enabled"] = {"from": bool(existing.get("enabled")), "to": bool(target_enabled)}
         if diffs:
             counts["update"] += 1
             operations.append(
@@ -143,7 +146,7 @@ def build_seed_plan() -> dict[str, Any]:
                     "model": candidate["model"],
                     "provider_code": candidate["provider_code"],
                     "provider_id": int(provider["id"]),
-                    "enabled": bool(existing.get("enabled")),
+                    "enabled": bool(target_enabled),
                     "diff": diffs,
                     **normalized_candidate,
                 }
@@ -170,7 +173,7 @@ def build_seed_plan() -> dict[str, Any]:
         model = str(row.get("model_id") or "").strip()
         if provider_code not in managed_providers or role not in managed_roles:
             continue
-        if provider_code != "deepseek":
+        if provider_code not in {"deepseek", "mimo"}:
             continue
         if (provider_code, role, model) in supported_keys:
             continue
@@ -180,7 +183,7 @@ def build_seed_plan() -> dict[str, Any]:
         operations.append(
             {
                 "action": "disable_legacy",
-                "reason": "unsupported_deepseek_model",
+                "reason": f"unsupported_{provider_code}_model",
                 "row_id": int(row["id"]),
                 "role": role,
                 "model": model,
@@ -237,6 +240,7 @@ def apply_seed_plan(plan: dict[str, Any]) -> dict[str, Any]:
                             input_price_per_1k = %s,
                             output_price_per_1k = %s,
                             context_window = %s,
+                            enabled = %s,
                             config_json = %s
                         WHERE provider_id = %s AND model_id = %s AND role_key = %s
                         """,
@@ -246,6 +250,7 @@ def apply_seed_plan(plan: dict[str, Any]) -> dict[str, Any]:
                             op["input_price_per_1k"],
                             op["output_price_per_1k"],
                             op["context_window"],
+                            1 if op.get("enabled") else 0,
                             op["config"],
                             int(op["provider_id"]),
                             op["model"],
