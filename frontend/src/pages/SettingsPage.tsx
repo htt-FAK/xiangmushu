@@ -1,6 +1,6 @@
 import { Check, ChevronDown, Cpu, KeyRound, Languages, Loader2, Star, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreferences, saveApiKey, updateUserPreferences, validateApiKey } from "../api";
+import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreferences, saveApiKey, testApiKey, updateUserPreferences, validateApiKey } from "../api";
 import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -163,6 +163,8 @@ export default function SettingsPage() {
   const [modelWarnings, setModelWarnings] = useState<Record<string, string>>({});
   const [modelLoading, setModelLoading] = useState(true);
   const [modelSaving, setModelSaving] = useState(false);
+  const [testingProvider, setTestingProvider] = useState<ProviderCode | null>(null);
+  const [providerTestMessages, setProviderTestMessages] = useState<Record<string, string>>({});
   const modelSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const providerStatuses = status?.providers ?? {};
@@ -291,6 +293,29 @@ export default function SettingsPage() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function runProviderTest(providerCode: ProviderCode) {
+    if (!providerStatuses[providerCode]?.has_key || testingProvider) return;
+    setTestingProvider(providerCode);
+    setError("");
+    try {
+      const next = await testApiKey(providerCode);
+      setStatus(next);
+      await refreshModelSettings();
+      const message = next.validation?.ok ? "测试通过，可正常调用当前已选模型。" : (next.validation?.message ?? "测试失败");
+      setProviderTestMessages((prev) => ({ ...prev, [providerCode]: message }));
+      if (!next.validation?.ok) {
+        setError(message);
+      }
+      window.dispatchEvent(new CustomEvent("xiangmushu:apikey-status-changed", { detail: next }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setProviderTestMessages((prev) => ({ ...prev, [providerCode]: message }));
+      setError(message);
+    } finally {
+      setTestingProvider(null);
     }
   }
 
@@ -429,6 +454,17 @@ export default function SettingsPage() {
                     <KeyRound size={17} />
                     {item?.has_key ? t("settings.replaceKey") : t("settings.addKey")}
                   </Button>
+                  {item?.has_key ? (
+                    <Button
+                      className="min-h-12 w-full"
+                      variant="ghost"
+                      onClick={() => void runProviderTest(provider.code)}
+                      disabled={saving || testingProvider === provider.code}
+                    >
+                      {testingProvider === provider.code ? <Loader2 className="animate-spin" size={17} /> : <Check size={17} />}
+                      {testingProvider === provider.code ? "测试中" : "一键测试"}
+                    </Button>
+                  ) : null}
                   <Button className="min-h-12 w-full" variant="danger" onClick={() => void removeKey(provider.code)} disabled={!item?.has_key || saving}>
                     {saving ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />}
                     {t("settings.deleteKey")}
@@ -442,6 +478,9 @@ export default function SettingsPage() {
                     {provider.linkLabel}
                   </a>
                 </div>
+                {providerTestMessages[provider.code] ? (
+                  <p className="text-xs leading-5 text-slate-400">{providerTestMessages[provider.code]}</p>
+                ) : null}
               </div>
             </Panel>
           );

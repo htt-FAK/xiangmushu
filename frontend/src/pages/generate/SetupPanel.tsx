@@ -26,7 +26,6 @@ export function SetupPanel({
   enableVisualAudit,
   recommendedConfig,
   busy,
-  hasOutputs,
   onSlugChange,
   onTemplateChange,
   onQualityModeChange,
@@ -46,7 +45,6 @@ export function SetupPanel({
   enableVisualAudit: boolean;
   recommendedConfig: RecommendedConfig | null;
   busy: boolean;
-  hasOutputs: boolean;
   onSlugChange: (value: string) => void;
   onTemplateChange: (value: string) => void;
   onQualityModeChange: (value: QualityMode) => void;
@@ -56,7 +54,7 @@ export function SetupPanel({
   onToggleVisualAudit: (value: boolean) => void;
 }) {
   const { t } = useI18n();
-  const isLocked = busy || hasOutputs;
+  const isLocked = busy;
 
   const advancedToggles = [
     { label: t("generate.enableWeb"), desc: t("generate.enableWebDesc"), value: enableWeb, onChange: onToggleWeb },

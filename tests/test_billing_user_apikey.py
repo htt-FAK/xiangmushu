@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import config
 import server
 from core.auth import create_access_token, get_or_create_user, init_db
-from core.billing import TokenUsage, calculate_cost_cny, load_user_api_key, record_billing
+from core.billing import TokenUsage, calculate_cost_cny, load_provider_api_key_validation, load_user_api_key, record_billing
 from core.generation_sessions import GenerationSession, GenerationSessionManager, session_manager
 
 
@@ -13,7 +13,7 @@ def _auth_headers(user):
     return {"Authorization": f"Bearer {create_access_token(user)}"}
 
 
-def _ok_validation(api_key, provider_code="dashscope"):
+def _ok_validation(api_key, provider_code="dashscope", user_id=None):
     return {
         "ok": True,
         "code": "ok",
@@ -213,6 +213,47 @@ def test_user_api_key_validation_endpoint_surfaces_quota_message(tmp_path, monke
     assert data["code"] == "quota_exceeded"
     assert "quota" in data["message"]
     assert data["retryable"] is False
+
+
+def test_user_apikey_test_endpoint_validates_saved_provider_key(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setattr(config, "USER_API_KEY_ENCRYPTION_KEY", "stable-test-secret")
+    monkeypatch.setattr(server, "validate_user_api_key", _ok_validation)
+    init_db(str(db_path))
+    user = get_or_create_user("test-endpoint@example.com", db_path=str(db_path))
+    headers = _auth_headers(user)
+
+    with TestClient(server.app) as client:
+        saved = client.post("/api/user/apikey", json={"api_key": "sk-deepseek", "provider_code": "deepseek"}, headers=headers)
+        tested = client.post("/api/user/apikey/test", json={"provider_code": "deepseek"}, headers=headers)
+
+    assert saved.status_code == 200
+    assert tested.status_code == 200
+    data = tested.json()
+    assert data["ok"] is True
+    assert data["validation"]["provider_code"] == "deepseek"
+    assert data["providers"]["deepseek"]["validated"] is True
+    validation = load_provider_api_key_validation(user.id, "deepseek", str(db_path))
+    assert validation.get("ok") is True
+
+
+def test_user_apikey_test_endpoint_requires_saved_key(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setattr(config, "AUTH_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "AUTH_JWT_SECRET", "test-secret")
+    init_db(str(db_path))
+    user = get_or_create_user("test-empty-provider@example.com", db_path=str(db_path))
+    headers = _auth_headers(user)
+
+    with TestClient(server.app) as client:
+        tested = client.post("/api/user/apikey/test", json={"provider_code": "mimo"}, headers=headers)
+
+    assert tested.status_code == 422
+    data = tested.json()
+    assert data["code"] == "invalid_api_key"
+    assert data["provider_code"] == "mimo"
 
 
 def test_generation_session_start_and_recovery_contract(tmp_path, monkeypatch):

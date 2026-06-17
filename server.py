@@ -70,11 +70,13 @@ from core.billing import (
     delete_provider_api_key,
     delete_user_api_key,
     get_user_api_key_status,
+    load_provider_api_key,
     load_user_api_key,
     normalize_usage,
     provider_api_key_status_map,
     record_billing,
     save_user_api_key,
+    update_provider_api_key_validation,
 )
 from core.api_key_validation import validate_user_api_key
 from core.audit_log import (
@@ -323,6 +325,10 @@ def _raise_auth_http(exc: Exception) -> None:
 
 class ApiKeyRequest(BaseModel):
     api_key: str
+    provider_code: str | None = None
+
+
+class ApiKeyProviderRequest(BaseModel):
     provider_code: str | None = None
 
 
@@ -1539,6 +1545,37 @@ async def user_apikey_validate(
     if result.get("ok"):
         return result
     return JSONResponse(result, status_code=validation_http_status(result))
+
+
+@app.post("/api/user/apikey/test")
+async def user_apikey_test_saved(
+    payload: ApiKeyProviderRequest,
+    current_user: User = Depends(get_current_user),
+):
+    provider_code = _provider_code_or_default(payload.provider_code)
+    api_key = load_provider_api_key(current_user.id, provider_code)
+    if not api_key:
+        result = {
+            "ok": False,
+            "code": "invalid_api_key",
+            "message": "当前 Provider 尚未保存 API Key，请先在设置页填写并保存。",
+            "retryable": False,
+            "validated_model": None,
+            "provider_code": provider_code,
+            "probes": [],
+        }
+        return JSONResponse(result, status_code=validation_http_status(result))
+    try:
+        result = validate_user_api_key(api_key, provider_code, current_user.id)
+    except TypeError:
+        result = validate_user_api_key(api_key)
+    update_provider_api_key_validation(current_user.id, provider_code, result)
+    if result.get("ok"):
+        return {"ok": True, "validation": result, **_provider_status_payload(current_user.id)}
+    return JSONResponse(
+        {"ok": False, "validation": result, **_provider_status_payload(current_user.id)},
+        status_code=validation_http_status(result),
+    )
 
 
 @app.post("/api/user/apikey")

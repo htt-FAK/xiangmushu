@@ -274,6 +274,14 @@ export async function saveApiKey(apiKey: string, providerCode = "dashscope"): Pr
   });
 }
 
+export async function testApiKey(providerCode = "dashscope"): Promise<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }> {
+  return requestJsonAllowError<ApiKeyStatus & { ok: boolean; validation?: ApiKeyValidationResult }>("/api/user/apikey/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_code: providerCode }),
+  });
+}
+
 export async function deleteApiKey(providerCode = "dashscope"): Promise<ApiKeyStatus & { ok: boolean }> {
   return requestJson<ApiKeyStatus & { ok: boolean }>(`/api/user/apikey?provider_code=${encodeURIComponent(providerCode)}`, {
     method: "DELETE",

@@ -1,5 +1,5 @@
 import { AlertTriangle, Loader2, Play, ShieldCheck, Square } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   fetchKnowledgeBases,
@@ -86,6 +86,15 @@ export default function GeneratePage() {
   });
   const { busy, running } = session;
 
+  const refreshPreferences = useCallback(() => {
+    fetchUserPreferences()
+      .then((prefs) => {
+        session.setModelChoices(prefs.model_choices ?? {});
+        setPreferenceWarnings(prefs.warnings ?? {});
+      })
+      .catch(() => undefined);
+  }, [session]);
+
   const recommendedConfig = useMemo<RecommendedConfig | null>(() => {
     if (!template || !slug) return null;
     const kb = kbs.find((item) => item.slug === slug) as (KnowledgeBase & { document_count?: number }) | undefined;
@@ -131,6 +140,14 @@ export default function GeneratePage() {
     [hasValidatedKey, kbs.length, selectedKnowledgeStats?.source_count, templates.length],
   );
 
+  useEffect(() => {
+    if (!hasValidatedKey) return;
+    if (session.notice?.message === t("generate.providerUnavailableHint")) {
+      session.dismissNotice();
+    }
+    refreshPreferences();
+  }, [hasValidatedKey, refreshPreferences, session, t]);
+
   // Initial load: templates, knowledge bases, user preferences, and active session recovery.
   useEffect(() => {
     Promise.allSettled([fetchTemplates(), fetchKnowledgeBases()]).then(([templateResult, kbResult]) => {
@@ -148,16 +165,25 @@ export default function GeneratePage() {
       session.reportFailedLoads(failures);
     });
 
-    fetchUserPreferences()
-      .then((prefs) => {
-        session.setModelChoices(prefs.model_choices ?? {});
-        setPreferenceWarnings(prefs.warnings ?? {});
-      })
-      .catch(() => undefined);
+    refreshPreferences();
 
     session.recoverActiveSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshPreferences();
+    };
+    window.addEventListener("focus", refreshPreferences);
+    window.addEventListener("xiangmushu:apikey-status-changed", refreshPreferences);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshPreferences);
+      window.removeEventListener("xiangmushu:apikey-status-changed", refreshPreferences);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refreshPreferences]);
 
   useEffect(() => {
     setGenerateSelections({ slug, template, generationBrief, qualityMode });
@@ -245,7 +271,7 @@ export default function GeneratePage() {
       {providerWarning ? (
         <div className="mb-4 flex items-start gap-2 border border-signal-amber/40 bg-signal-amber/10 px-4 py-3 text-sm text-amber-100">
           <AlertTriangle className="mt-0.5 shrink-0 text-signal-amber" size={16} />
-          <p>{t("generate.providerUnavailableHint")}</p>
+          <p>{providerWarning}</p>
         </div>
       ) : null}
 
@@ -288,7 +314,6 @@ export default function GeneratePage() {
             enableVisualAudit={enableVisualAudit}
             recommendedConfig={recommendedConfig}
             busy={busy}
-            hasOutputs={session.outputs.length > 0}
             onSlugChange={setSlug}
             onTemplateChange={setTemplate}
             onQualityModeChange={setQualityMode}
