@@ -16,6 +16,13 @@
 [![Build: Vite](https://img.shields.io/badge/Build-Vite-646CFF.svg)](https://vitejs.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
+<br>
+
+<a href="http://118.126.102.143/settings" target="_blank" rel="noopener"><img src="https://img.shields.io/badge/🚀%20在线体验-Live%20Demo-orange?style=for-the-badge" alt="Live Demo"></a>
+
+<sub>*Public test environment, available until November 2026.*<br>
+*公开测试环境，可用至 2026 年 11 月。*</sub>
+
 </div>
 
 ---
