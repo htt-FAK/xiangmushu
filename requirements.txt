@@ -1,6 +1,8 @@
 streamlit>=1.40.0
 python-docx==1.1.2
 chromadb==0.5.0
+# chromadb 0.5.0 uses np.float_/np.int_ deprecated in NumPy 2.0
+numpy<2
 overrides>=7.7.0
 openai==1.25.0
 # openai 1.25 与 httpx 0.28+ 不兼容（Client 不再接受 proxies → TypeError）
