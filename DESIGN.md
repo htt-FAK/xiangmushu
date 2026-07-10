@@ -492,26 +492,29 @@ These are the **currently-used** `[x]` values — any new arbitrary value should
 
 These deviations from the current system were flagged during the Phase 0 audit. Each has a priority and a proposed consolidation path.
 
-| # | Deviation | Impact | Fix | Priority |
-|---|-----------|--------|-----|----------|
-| 1 | 5 different night-950 opacities | Visual noise | Consolidate to 1 solid value | 🔴 High |
-| 2 | 4 different white opacities | Visual noise | Consolidate to 2 levels | 🔴 High |
-| 3 | 11 icon sizes | Visual noise | Consolidate to 4 (16/20/24/32) | 🔴 High |
-| 4 | Login `backdrop-blur-2xl` | Perf + consistency | Remove | 🔴 High |
-| 5 | `rounded-lg` in LoginForm | Consistency | Remove (all sharp) | 🔴 High |
-| 6 | No DESIGN.md until now | Foundation | Resolved ✅ | — |
-| 7 | Stats use proportional numbers | Readability | Add `tabular-nums` | 🟡 Medium |
-| 8 | No `max-w-[65ch]` on body text | Readability | Add on description paragraphs | 🟡 Medium |
-| 9 | Native `<select>` | Consistency | Build custom dropdown | 🟡 Medium |
-| 10 | `shadow-panel` in pure black | Aesthetic | Tint to night-950 | 🟢 Low |
-| 11 | Login `rounded-lg` badge | Consistency | Remove | 🟢 Low |
-| 12 | 生成舱 naming | Clarity | Consider 生成工作台 | 🟢 Low |
-| 13 | Hardcoded Chinese in code | i18n | Move to i18n.ts | 🟡 Medium |
-| 14 | Skip-to-content link missing | A11y | Add | 🟡 Medium |
-| 15 | Modal focus trap missing | A11y | Add | 🟡 Medium |
-| 16 | `<html lang>` not dynamic | A11y | Add | 🟢 Low |
-| 17 | Button variants lacking | UX | Add secondary + link | 🟢 Low |
-| 18 | Signal colors overused in views | Visual hierarchy | One accent per page | 🟡 Medium |
+**Status: 18 / 19 items fixed. 1 deferred (custom `<select>` dropdown — native browser select is acceptable for now).**
+
+| # | Deviation | Impact | Fix | Priority | Status |
+|---|-----------|--------|-----|----------|--------|
+| 1 | 5 different night-950 opacities | Visual noise | Consolidate to 1 solid value | 🔴 High | ✅ Fixed |
+| 2 | 4 different white opacities | Visual noise | Consolidate to 2 levels | 🔴 High | ✅ Fixed |
+| 3 | 11 icon sizes | Visual noise | Consolidate to 4 (16/20/24/32) | 🔴 High | ✅ Fixed |
+| 4 | Login `backdrop-blur-2xl` | Perf + consistency | Remove | 🔴 High | ✅ Fixed |
+| 5 | `rounded-lg` in LoginForm | Consistency | Remove (all sharp) | 🔴 High | ✅ Fixed |
+| 6 | No DESIGN.md until now | Foundation | Resolved | — | ✅ Done |
+| 7 | Stats use proportional numbers | Readability | Add `tabular-nums` | 🟡 Medium | ✅ Fixed |
+| 8 | No `max-w-[65ch]` on body text | Readability | Add on description paragraphs | 🟡 Medium | ✅ Fixed |
+| 9 | Native `<select>` | Consistency | Build custom dropdown | 🟡 Medium | ⏸️ Deferred |
+| 10 | `shadow-panel` in pure black | Aesthetic | Tint to night-950 | 🟢 Low | ✅ Fixed |
+| 11 | Login `rounded-lg` badge | Consistency | Remove | 🟢 Low | ✅ Fixed |
+| 12 | 生成舱 naming | Clarity | Changed to 生成工作台 | 🟢 Low | ✅ Fixed |
+| 13 | Hardcoded Chinese in code | i18n | Moved 52 strings to i18n.ts | 🟡 Medium | ✅ Fixed |
+| 14 | Skip-to-content link missing | A11y | Added to Shell | 🟡 Medium | ✅ Fixed |
+| 15 | Modal focus trap missing | A11y | Added useFocusTrap hook | 🟡 Medium | ✅ Fixed |
+| 16 | `<html lang>` not dynamic | A11y | Sync in I18nProvider | 🟢 Low | ✅ Fixed |
+| 17 | Button variants lacking | UX | Added secondary + link | 🟢 Low | ✅ Fixed |
+| 18 | Signal colors overused in views | Visual hierarchy | One accent per page unified | 🟡 Medium | ✅ Fixed |
+| 19 | Decorative icons lack aria-hidden | A11y | Added to 128 icons (17 files) | 🟢 Low | ✅ Fixed |
 
 ---
 
