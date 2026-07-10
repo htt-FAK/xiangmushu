@@ -1,13 +1,13 @@
 # Architecture
 
-> Engineering reference for the xiangmushu document generation system.
+> Engineering reference for the Local RAG-assisted Proposal Writing Platform (智能文档生成系统).
 > Last updated: 2026-07-10 (post Firecrawl keyless MCP migration, commit d16966a).
 
 ---
 
 ## Overview
 
-xiangmushu is a local RAG-assisted writing system for structured application documents (project proposals, fund prospectuses, compliance disclosures). Users ingest institutional materials into a vector knowledge base, upload a Word template with anchors or blank fields, and the system generates body text segment-by-segment via LLM, then fills results back into the Word template for download. The backend is a single-process FastAPI server; the frontend is a React SPA.
+The Local RAG-assisted Proposal Writing Platform is a local RAG-assisted writing system for structured application documents (project proposals, fund prospectuses, compliance disclosures). Users ingest institutional materials into a vector knowledge base, upload a Word template with anchors or blank fields, and the system generates body text segment-by-segment via LLM, then fills results back into the Word template for download. The backend is a single-process FastAPI server; the frontend is a React SPA.
 
 ---
 

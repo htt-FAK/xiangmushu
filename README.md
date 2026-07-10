@@ -1,9 +1,9 @@
 <div align="center">
 
-# 项目树 / xiangmushu
+# 智能文档生成系统
 
 ### 智能项目计划书（申报类文档）生成系统
-### Intelligent Application & Proposal Document Generation System
+### Local RAG-assisted Proposal Writing Platform
 
 **本地化 RAG 辅助写作系统：机构材料入库为向量知识库，Word 模板锚点自动解析，LLM 逐段生成正文并回填到 Word 定稿。**
 
@@ -28,11 +28,11 @@
 
 ---
 
-## 🇨🇳 为什么需要项目树
+## 🇨🇳 为什么需要智能文档生成系统
 
 申报类文档（项目计划书、基金说明书、合规披露表）版式固定、章节重复性高，但事实与合规约束极严。机构材料散落在 Word、PDF、PPT、扫描件中，缺乏统一检索入口；模板由法务或合规提供，必须以 Word 定稿。纯大模型从零撰写容易产生与机构材料不一致的幻觉；完全依赖人工摘抄则周期长、易遗漏。
 
-| 痛点 | 项目树的对策 |
+| 痛点 | 智能文档生成系统的对策 |
 |:---|:---|
 | **P1** 多格式资料难以统一检索 | 解析 docx / pdf / pptx / 图片，分块后入 Chroma 向量库，按语义检索 |
 | **P2** 模板空位形态多样（空白、下划线、表格格） | 锚点 `{{NAME}}` 精确绑定；无锚点时小模型 JSON 分析结构 |
@@ -40,11 +40,11 @@
 | **P4** 知识库覆盖不足时仍要写满 | Firecrawl 免费联网补料（无需 API key）；提示词要求无据处显式声明，不得杜撰关键事实 |
 | **P5** 交付物必须是可编辑 Word | `python-docx` 结构化回填 + 轻量清理 Markdown 痕迹 |
 
-## 🇬🇧 Why xiangmushu
+## 🇬🇧 Why Choose the Local RAG-assisted Proposal Writing Platform
 
 Application documents (project proposals, fund prospectuses, compliance disclosures) have fixed layouts and highly repetitive sections, but strict factual and compliance constraints. Institutional materials are scattered across Word, PDF, PPT, and scans with no unified search entry point. Templates come from legal or compliance teams and must be finalized in Word. Pure LLM drafting from scratch tends to hallucinate facts inconsistent with institutional materials; relying entirely on manual extraction is slow and error-prone.
 
-| Pain Point | How xiangmushu Solves It |
+| Pain Point | How It Solves It |
 |:---|:---|
 | **P1** Multi-format materials are hard to search uniformly | Parse docx / pdf / pptx / images, chunk and ingest into Chroma vector store, retrieve by semantic similarity |
 | **P2** Template blanks come in many forms (empty fields, underlines, table cells) | Anchor `{{NAME}}` for precise binding; small-model JSON analysis when no anchors present |
@@ -598,8 +598,8 @@ This project is open-sourced under the [MIT License](LICENSE).
 
 <div align="center">
 
-**项目树** 让申报文档写作从「人工摘抄」走向「RAG 辅助 + 结构化回填」。
+**智能文档生成系统** 让申报文档写作从「人工摘抄」走向「RAG 辅助 + 结构化回填」。
 
-**xiangmushu** turns proposal document writing from "manual copy-paste" into "RAG-assisted + structured fill-back".
+**Local RAG-assisted Proposal Writing Platform** turns proposal document writing from "manual copy-paste" into "RAG-assisted + structured fill-back".
 
 </div>

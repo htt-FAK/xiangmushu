@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Python backend (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ['3.11']
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_password
+          MYSQL_DATABASE: xiangmushu_ci
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1 --silent" --health-interval=10s --health-timeout=5s --health-retries=20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests (core modules, no external services)
+        env:
+          PERSISTENCE_MODE: sqlite
+          PERSISTENCE_SQLITE_FALLBACK: "1"
+          FIRECRAWL_ENABLED: "0"
+          DASHSCOPE_API_KEY: ci_placeholder_not_used
+        run: |
+          pytest -q --tb=short
+
+      - name: Run offline smoke tests (no API, no network)
+        env:
+          PERSISTENCE_MODE: sqlite
+          PERSISTENCE_SQLITE_FALLBACK: "1"
+          FIRECRAWL_ENABLED: "0"
+        run: |
+          python smoke_test_models.py --offline
+
+  frontend:
+    name: Frontend build (Node 20)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check & build
+        working-directory: frontend
+        run: npm run build
