@@ -1,0 +1,95 @@
+# Line ending normalization
+# ========================
+# Repo stores LF. Checkout converts to the OS-native line ending.
+# See: https://git-scm.com/docs/gitattributes#_text
+
+# Auto-detect text vs binary, convert text to native on checkout
+* text=auto
+
+# Explicit text handling for source files (defense-in-depth)
+*.py     text
+*.pyi    text
+*.ipynb  text
+*.ts     text
+*.tsx    text
+*.js     text
+*.jsx    text
+*.mjs    text
+*.cjs    text
+*.json   text
+*.jsonl  text
+*.md     text
+*.mdx    text
+*.txt    text
+*.yml    text
+*.yaml   text
+*.toml   text
+*.ini    text
+*.cfg    text
+*.conf   text
+*.xml    text
+*.html   text
+*.css    text
+*.scss   text
+*.less   text
+*.sql    text
+*.csv    text
+*.env*   text
+*.example text
+.gitignore text
+.gitattributes text
+.editorconfig text
+
+# Force specific line endings where the OS matters
+*.sh   text eol=lf
+*.bash text eol=lf
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary files — never touch
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.svg   binary
+*.ico   binary
+*.bmp   binary
+*.tiff  binary
+*.tif   binary
+*.pdf   binary
+*.docx  binary
+*.xlsx  binary
+*.pptx  binary
+*.doc   binary
+*.xls   binary
+*.ppt   binary
+*.zip   binary
+*.tar   binary
+*.gz    binary
+*.tgz   binary
+*.bz2   binary
+*.xz    binary
+*.7z    binary
+*.rar   binary
+*.sqlite3 binary
+*.db    binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+
+# Node
+node_modules/ -text
+*.min.js -text
+*.min.css -text
+
+# Python
+__pycache__/ -text
+*.pyc -text
+*.egg-info/ -text
+*.whl -text
+venv/ -text
+.venv/ -text
