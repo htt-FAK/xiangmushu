@@ -75,15 +75,19 @@ export function Button({
   variant = "primary",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "ghost" | "danger";
+  variant?: "primary" | "secondary" | "ghost" | "danger" | "link";
 }) {
   const variantClass = {
     primary:
       "border-signal-cyan/70 bg-signal-cyan text-night-950 shadow-glow hover:bg-white",
+    secondary:
+      "border-white/20 bg-white/[0.08] text-white hover:bg-white/[0.14] hover:border-white/30",
     ghost:
       "border-white/10 bg-white/[0.055] text-slate-100 hover:border-signal-cyan/50 hover:text-signal-cyan",
     danger:
       "border-signal-rose/50 bg-signal-rose/10 text-signal-rose hover:bg-signal-rose hover:text-white",
+    link:
+      "border-transparent bg-transparent text-signal-cyan hover:underline hover:text-white focus-visible:ring-1 focus-visible:ring-signal-cyan/50 px-2 min-h-9",
   }[variant];
 
   return (
@@ -181,7 +185,7 @@ export function DetailOverlay({
           className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
           aria-label="Close"
         >
-          <X size={20} />
+          <X aria-hidden="true" size={20} />
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">

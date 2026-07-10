@@ -248,7 +248,7 @@ export default function LoginPage() {
         <div className="grid w-full gap-6 md:gap-8 lg:grid-cols-[0.92fr_1.08fr] lg:items-center">
           <section>
             <div className="mb-4 inline-flex h-11 w-11 items-center justify-center border border-signal-cyan/60 bg-signal-cyan text-night-950 shadow-glow md:mb-6 md:h-12 md:w-12">
-              <ShieldCheck size={24} />
+              <ShieldCheck aria-hidden="true" size={24} />
             </div>
             <p className="font-display text-xs font-semibold uppercase tracking-[0.22em] text-signal-cyan md:tracking-[0.26em]">
               {t("login.eyebrow")}
@@ -261,14 +261,14 @@ export default function LoginPage() {
 
           <section className="w-full max-w-xl justify-self-end border border-white/12 bg-night-900 p-4 shadow-[0_24px_90px_rgba(5,6,10,0.5)] sm:p-5 md:p-8">
             <div className="mb-4 flex items-start gap-3 border border-white/10 bg-white/[0.025] p-3.5 md:mb-5 md:p-4">
-              <Sparkles className="mt-0.5 shrink-0 text-signal-lime" size={20} />
+              <Sparkles aria-hidden="true" className="mt-0.5 shrink-0 text-signal-lime" size={20} />
               <p className="text-sm leading-6 text-slate-300">{intro}</p>
             </div>
 
             <ErrorBanner message={error} />
             {resendMsg && (
               <div className="mb-3 flex items-center gap-2  border border-signal-lime/30 bg-signal-lime/10 px-3 py-2 text-sm font-medium text-signal-lime">
-                <CheckCircle2 size={16} />
+                <CheckCircle2 aria-hidden="true" size={16} />
                 {resendMsg}
               </div>
             )}
@@ -277,12 +277,12 @@ export default function LoginPage() {
               <form className="space-y-4 md:space-y-5" onSubmit={handleEntry}>
                 <Field label={t("login.email")}>
                   <div className="group relative">
-                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <AtSign aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
                   </div>
                 </Field>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading}>
-                  <Mail size={16} />
+                  <Mail aria-hidden="true" size={16} />
                   {loading ? t("login.sending") : t("login.sendCode")}
                 </Button>
               </form>
@@ -292,18 +292,18 @@ export default function LoginPage() {
               <form className="space-y-4 md:space-y-5" onSubmit={handleLogin}>
                 <Field label={t("login.email")}>
                   <div className="group relative">
-                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <AtSign aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
                   </div>
                 </Field>
                 <Field label={t("login.password")}>
                   <div className="group relative">
-                    <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <LockKeyhole aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} required />
                   </div>
                 </Field>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading}>
-                  <LockKeyhole size={16} />
+                  <LockKeyhole aria-hidden="true" size={16} />
                   {loading ? t("login.verifying") : t("login.login")}
                 </Button>
                 <div className="flex justify-between text-sm font-semibold">
@@ -317,19 +317,19 @@ export default function LoginPage() {
               <form className="space-y-4 md:space-y-5" onSubmit={handleSignupStart}>
                 <Field label={t("login.email")}>
                   <div className="group relative">
-                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <AtSign aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
                   </div>
                 </Field>
                 <Field label={t("login.password")}>
                   <div className="group relative">
-                    <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <LockKeyhole aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} required />
                   </div>
-                  <p className={clsx("mt-2 flex items-center gap-2 text-xs font-semibold", isPasswordValid ? "text-signal-lime" : "text-signal-rose")}>{isPasswordValid && <CheckCircle2 size={14} />}{isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}</p>
+                  <p className={clsx("mt-2 flex items-center gap-2 text-xs font-semibold", isPasswordValid ? "text-signal-lime" : "text-signal-rose")}>{isPasswordValid && <CheckCircle2 aria-hidden="true" size={14} />}{isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}</p>
                 </Field>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || !isPasswordValid}>
-                  <Mail size={16} />
+                  <Mail aria-hidden="true" size={16} />
                   {loading ? t("login.sending") : t("login.sendCode")}
                 </Button>
                 <div className="flex justify-between text-sm font-semibold">
@@ -346,7 +346,7 @@ export default function LoginPage() {
                 </Field>
                 <Field label={t("login.code")}>
                   <div className="group relative">
-                    <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <KeyRound aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10 tracking-[0.24em]" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder={t("login.codePlaceholder")} required />
                   </div>
                 </Field>
@@ -356,7 +356,7 @@ export default function LoginPage() {
                   </button>
                 </div>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || code.length !== 6}>
-                  <ShieldCheck size={16} />
+                  <ShieldCheck aria-hidden="true" size={16} />
                   {loading ? t("login.verifying") : t("login.verify")}
                 </Button>
               </form>
@@ -366,12 +366,12 @@ export default function LoginPage() {
               <form className="space-y-4 md:space-y-5" onSubmit={handleRecoveryStart}>
                 <Field label={t("login.email")}>
                   <div className="group relative">
-                    <AtSign className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <AtSign aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} required />
                   </div>
                 </Field>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading}>
-                  <Mail size={16} />
+                  <Mail aria-hidden="true" size={16} />
                   {loading ? t("login.sending") : t("login.sendResetCode")}
                 </Button>
                 <button className="text-sm font-semibold text-slate-400 transition hover:text-signal-cyan" onClick={() => go("login")} type="button">{t("login.backToLogin")}</button>
@@ -385,12 +385,12 @@ export default function LoginPage() {
                 </Field>
                 <Field label={t("login.code")}>
                   <div className="group relative">
-                    <KeyRound className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <KeyRound aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10 tracking-[0.24em]" inputMode="numeric" maxLength={6} pattern="[0-9]{6}" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder={t("login.codePlaceholder")} required />
                   </div>
                 </Field>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || code.length !== 6}>
-                  <ShieldCheck size={16} />
+                  <ShieldCheck aria-hidden="true" size={16} />
                   {loading ? t("login.verifying") : t("login.verify")}
                 </Button>
               </form>
@@ -400,13 +400,13 @@ export default function LoginPage() {
               <form className="space-y-4 md:space-y-5" onSubmit={handleRecoveryComplete}>
                 <Field label={t("login.newPassword")}>
                   <div className="group relative">
-                    <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
+                    <LockKeyhole aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 transition group-focus-within:text-signal-cyan" size={16} />
                     <Input className="pl-10" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.newPasswordPlaceholder")} required />
                   </div>
-                  <p className={clsx("mt-2 flex items-center gap-2 text-xs font-semibold", isPasswordValid ? "text-signal-lime" : "text-signal-rose")}>{isPasswordValid && <CheckCircle2 size={14} />}{isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}</p>
+                  <p className={clsx("mt-2 flex items-center gap-2 text-xs font-semibold", isPasswordValid ? "text-signal-lime" : "text-signal-rose")}>{isPasswordValid && <CheckCircle2 aria-hidden="true" size={14} />}{isPasswordValid ? t("login.passwordStrong") : t("login.passwordRule")}</p>
                 </Field>
                 <Button className="min-h-12 w-full border-signal-cyan bg-signal-cyan font-bold shadow-[0_0_0_1px_rgba(54,242,230,0.22),0_18px_54px_rgba(54,242,230,0.18)]" type="submit" disabled={loading || !isPasswordValid || !recoveryToken}>
-                  <ShieldCheck size={16} />
+                  <ShieldCheck aria-hidden="true" size={16} />
                   {loading ? t("login.verifying") : t("login.resetPassword")}
                 </Button>
               </form>

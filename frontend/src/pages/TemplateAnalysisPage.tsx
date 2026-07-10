@@ -324,7 +324,7 @@ export default function TemplateAnalysisPage() {
                 <p className="font-display text-2xl font-semibold text-white">{t("template.upload")}</p>
                 <p className="text-sm text-slate-500">{t("template.uploadHint")}</p>
               </div>
-              <UploadCloud className="text-signal-cyan" size={24} />
+              <UploadCloud aria-hidden="true" className="text-signal-cyan" size={24} />
             </div>
 
             {pendingFileName && !file && !sessionRunning ? (
@@ -332,7 +332,7 @@ export default function TemplateAnalysisPage() {
             ) : null}
 
             <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center border border-dashed border-white/18 bg-night-950 px-5 py-8 text-center transition hover:border-signal-cyan/60">
-              <FileUp className="mb-4 text-signal-cyan" size={32} />
+              <FileUp aria-hidden="true" className="mb-4 text-signal-cyan" size={32} />
               <span className="break-all font-display text-xl font-semibold text-white">
                 {file ? file.name : t("template.chooseFile")}
               </span>
@@ -372,7 +372,7 @@ export default function TemplateAnalysisPage() {
                 onClick={onAnalyzeUpload}
                 disabled={!file || !visionModel || !plannerModel || loading || hasApiKey === false}
               >
-                {loading ? <Loader2 className="animate-spin" size={16} /> : <ListChecks size={16} />}
+                {loading ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <ListChecks aria-hidden="true" size={16} />}
                 {loading ? t("template.analyzing") : t("template.analyze")}
               </Button>
             </div>
@@ -384,12 +384,12 @@ export default function TemplateAnalysisPage() {
                 <p className="font-display text-xl font-semibold text-white">{t("template.savedTemplates")}</p>
                 <p className="text-sm text-slate-500">{t("template.savedTemplatesHint")}</p>
               </div>
-              <FileText className="text-signal-lime" size={24} />
+              <FileText aria-hidden="true" className="text-signal-cyan" size={24} />
             </div>
 
             {listLoading ? (
               <div className="flex min-h-24 items-center justify-center text-slate-500">
-                <Loader2 className="mr-2 animate-spin" size={16} /> {t("template.loadingTemplates")}
+                <Loader2 aria-hidden="true" className="mr-2 animate-spin" size={16} /> {t("template.loadingTemplates")}
               </div>
             ) : templates.length === 0 ? (
               <EmptyState title={t("template.noTemplates")} body={t("template.noTemplatesBody")} />
@@ -423,7 +423,7 @@ export default function TemplateAnalysisPage() {
                           className="inline-flex h-10 items-center gap-2 border border-white/10 px-3 text-sm text-slate-300 hover:border-signal-cyan/50 hover:text-signal-cyan disabled:opacity-50"
                           title={t("template.reanalyze")}
                         >
-                          {loading && active ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+                          {loading && active ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <RefreshCw aria-hidden="true" size={16} />}
                           {t("template.reanalyze")}
                         </button>
                         <button
@@ -433,7 +433,7 @@ export default function TemplateAnalysisPage() {
                           className="inline-flex h-10 items-center gap-2 border border-white/10 px-3 text-sm text-slate-300 hover:border-signal-rose/50 hover:text-signal-rose disabled:opacity-50"
                           title={t("template.delete")}
                         >
-                          {deleting === template.name ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+                          {deleting === template.name ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <Trash2 aria-hidden="true" size={16} />}
                           {t("template.delete")}
                         </button>
                       </div>
@@ -477,7 +477,7 @@ export default function TemplateAnalysisPage() {
                   </p>
                 </div>
                 <Button variant="ghost" className="min-h-10 gap-2 px-4 text-xs" onClick={() => setDetailOpen(true)}>
-                  <MessageSquareText size={16} />
+                  <MessageSquareText aria-hidden="true" size={16} />
                   {t("template.viewDetails")}
                 </Button>
               </div>
@@ -493,7 +493,7 @@ export default function TemplateAnalysisPage() {
               <div className="grid gap-4 xl:grid-cols-2">
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <MessageSquareText size={16} className="text-signal-cyan" />
+                    <MessageSquareText aria-hidden="true" size={16} className="text-signal-cyan" />
                     {t("template.recentTrace")}
                   </div>
                   {previewLogs.length === 0 ? (
@@ -515,11 +515,11 @@ export default function TemplateAnalysisPage() {
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-sm font-semibold text-white">
                     {session.status === "error" ? (
-                      <AlertTriangle size={16} className="text-signal-rose" />
+                      <AlertTriangle aria-hidden="true" size={16} className="text-signal-rose" />
                     ) : sessionRunning ? (
-                      <Loader2 size={16} className="animate-spin text-signal-cyan" />
+                      <Loader2 aria-hidden="true" size={16} className="animate-spin text-signal-cyan" />
                     ) : (
-                      <CheckCircle2 size={16} className="text-signal-lime" />
+                      <CheckCircle2 aria-hidden="true" size={16} className="text-signal-lime" />
                     )}
                     {t("template.taskOverview")}
                   </div>
@@ -553,7 +553,7 @@ export default function TemplateAnalysisPage() {
         <DetailOverlay
           title={session.template || t("template.results")}
           subtitle={session.statusMessage || session.currentPhase || ""}
-          icon={<MessageSquareText size={20} />}
+          icon={<MessageSquareText aria-hidden="true" size={20} />}
           onClose={() => setDetailOpen(false)}
         >
           <div className="grid gap-3 md:grid-cols-4">
@@ -567,7 +567,7 @@ export default function TemplateAnalysisPage() {
 
           <Panel className="min-w-0">
             <div className="mb-3 flex items-center gap-2">
-              <MessageSquareText size={16} className="text-signal-cyan" />
+              <MessageSquareText aria-hidden="true" size={16} className="text-signal-cyan" />
               <p className="font-display text-xl font-semibold text-white">{t("template.fullTrace")}</p>
             </div>
             {logs.length === 0 ? (
@@ -589,7 +589,7 @@ export default function TemplateAnalysisPage() {
 
           <Panel className="min-w-0">
             <div className="mb-3 flex items-center gap-2">
-              <ListChecks size={16} className="text-signal-lime" />
+              <ListChecks aria-hidden="true" size={16} className="text-signal-lime" />
               <p className="font-display text-xl font-semibold text-white">{t("template.allFillTasks")}</p>
             </div>
             {tasks.length === 0 ? (

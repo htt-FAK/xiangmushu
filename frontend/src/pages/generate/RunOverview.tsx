@@ -43,7 +43,7 @@ function DownloadButton({
   const Icon = variant === "primary" ? Download : FileText;
   const base =
     variant === "primary"
-      ? "border border-signal-lime bg-signal-lime text-night-950 hover:bg-signal-lime/90"
+      ? "border border-signal-cyan bg-signal-cyan text-night-950 hover:bg-signal-cyan/90"
       : "border border-white/10 bg-white/[0.055] text-slate-100 hover:bg-white/10";
   return (
     <button
@@ -64,7 +64,7 @@ function DownloadButton({
         }
       }}
     >
-      {downloading ? <Loader2 className="animate-spin" size={size} /> : <Icon size={size} />}
+      {downloading ? <Loader2 aria-hidden="true" className="animate-spin" size={size} /> : <Icon aria-hidden="true" size={size} />}
       {label}
     </button>
   );
@@ -126,16 +126,16 @@ export function RunOverview({
       <Panel className="min-w-0">
         {running && (
           <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5 max-sm:flex max-sm:overflow-x-auto max-sm:snap-x max-sm:pb-1">
-            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="retrieval" label={t("generate.stepRetrieval")} icon={<Database size={16} />} />
-            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="analysis" label={t("generate.stepAnalysis")} icon={<FileSearch size={16} />} />
-            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="generation" label={t("generate.stepGeneration")} icon={<PenTool size={16} />} />
-            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="audit" label={t("generate.stepAudit")} icon={<ShieldCheck size={16} />} />
-            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="done" label={t("generate.stepDone")} icon={<CheckCircle2 size={16} />} />
+            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="retrieval" label={t("generate.stepRetrieval")} icon={<Database aria-hidden="true" size={16} />} />
+            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="analysis" label={t("generate.stepAnalysis")} icon={<FileSearch aria-hidden="true" size={16} />} />
+            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="generation" label={t("generate.stepGeneration")} icon={<PenTool aria-hidden="true" size={16} />} />
+            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="audit" label={t("generate.stepAudit")} icon={<ShieldCheck aria-hidden="true" size={16} />} />
+            <StepIndicator className="max-sm:min-w-[160px] max-sm:shrink-0 max-sm:snap-start" currentStep={currentStep} step="done" label={t("generate.stepDone")} icon={<CheckCircle2 aria-hidden="true" size={16} />} />
           </div>
         )}
 
         <SectionTitle
-          icon={<Gauge size={20} />}
+          icon={<Gauge aria-hidden="true" size={20} />}
           title={t("generate.runOverview")}
           hint={compact ? undefined : t("generate.runOverviewHint")}
           action={
@@ -205,10 +205,10 @@ export function RunOverview({
           <details className="group min-w-0 border border-white/10 bg-white/[0.045] shadow-panel backdrop-blur">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm">
               <span className="flex min-w-0 items-center gap-2 font-semibold text-white">
-                <FileCheck2 size={16} className="shrink-0 text-signal-cyan" />
+                <FileCheck2 aria-hidden="true" size={16} className="shrink-0 text-signal-cyan" />
                 {t("generate.acceptance")}
               </span>
-              <ChevronDown size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
+              <ChevronDown aria-hidden="true" size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
             </summary>
             <div className="space-y-4 border-t border-white/10 p-4">
               {(downloadPath || reportPath) && (
@@ -251,7 +251,7 @@ export function RunOverview({
           </details>
         ) : (
         <Panel className="min-w-0">
-          <SectionTitle icon={<FileCheck2 size={20} />} title={t("generate.acceptance")} hint={t("generate.acceptanceHint")} />
+          <SectionTitle icon={<FileCheck2 aria-hidden="true" size={20} />} title={t("generate.acceptance")} hint={t("generate.acceptanceHint")} />
 
           {(downloadPath || reportPath) && (
             <div className="mb-5 flex flex-wrap gap-3">
@@ -299,10 +299,10 @@ export function RunOverview({
           <details className="group min-w-0 border border-white/10 bg-white/[0.045] shadow-panel backdrop-blur">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm">
               <span className="flex min-w-0 items-center gap-2 font-semibold text-white">
-                <Search size={16} className="shrink-0 text-signal-cyan" />
+                <Search aria-hidden="true" size={16} className="shrink-0 text-signal-cyan" />
                 {t("generate.auditPanelTitle")}
               </span>
-              <ChevronDown size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
+              <ChevronDown aria-hidden="true" size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
             </summary>
             <div className="space-y-3 border-t border-white/10 p-4">
               <div className="grid gap-3 grid-cols-3">
@@ -341,7 +341,7 @@ export function RunOverview({
           </details>
         ) : (
         <Panel className="min-w-0">
-          <SectionTitle icon={<Search size={20} />} title={t("generate.auditPanelTitle")} hint={t("generate.auditPanelHint")} />
+          <SectionTitle icon={<Search aria-hidden="true" size={20} />} title={t("generate.auditPanelTitle")} hint={t("generate.auditPanelHint")} />
           <div className="grid gap-3 md:grid-cols-3">
             <div className="border border-white/10 bg-night-950 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.visualTarget")}</p>

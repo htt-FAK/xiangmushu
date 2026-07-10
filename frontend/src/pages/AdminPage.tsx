@@ -134,7 +134,7 @@ function MetricBlock({
           </p>
         </div>
         <div className={`border ${classes.border} ${classes.bg} p-2 ${classes.text}`}>
-          <Icon size={20} strokeWidth={1.7} />
+          <Icon aria-hidden="true" size={20} strokeWidth={1.7} />
         </div>
       </div>
       {subValue && (
@@ -160,7 +160,7 @@ function SectionTitle({ icon: Icon, title, tone = "cyan" }: { icon: LucideIcon; 
   return (
     <div className="mb-4 flex items-center justify-between gap-4 border-b border-white/10 pb-3">
       <h2 className="flex items-center gap-2 font-display text-base font-semibold uppercase tracking-[0.18em] text-white">
-        <Icon size={16} className={classes.text} strokeWidth={1.8} />
+        <Icon aria-hidden="true" size={16} className={classes.text} strokeWidth={1.8} />
         {title}
       </h2>
       <span className={`h-1.5 w-1.5 ${classes.bar}`} />
@@ -232,7 +232,7 @@ export default function AdminPage() {
       {error === t("admin.forbidden") && (
         <Panel className="border-signal-rose/35 bg-night-950/80 p-6 shadow-none">
           <div className="flex items-center gap-3 text-signal-rose">
-            <ShieldAlert size={20} />
+            <ShieldAlert aria-hidden="true" size={20} />
             <p className="font-display text-sm font-semibold uppercase tracking-[0.22em]">{t("admin.forbidden")}</p>
           </div>
         </Panel>
@@ -254,7 +254,7 @@ export default function AdminPage() {
               icon={Zap}
               label={t("admin.totalGenerations")}
               value={stats.total_generations}
-              tone="lime"
+              tone="cyan"
               className="lg:col-span-4"
             />
             <MetricBlock
@@ -302,7 +302,7 @@ export default function AdminPage() {
                         className="border-b border-white/[0.06] text-sm text-slate-300 transition hover:bg-signal-cyan/[0.07] hover:text-white"
                       >
                         <td className="px-4 py-3 font-mono text-xs text-slate-400 tabular-nums">{day.day}</td>
-                        <td className="px-4 py-3 text-right font-mono text-signal-lime tabular-nums">
+                        <td className="px-4 py-3 text-right font-mono text-signal-cyan tabular-nums">
                           {formatInteger(day.generations)}
                         </td>
                         <td className="px-4 py-3 text-right font-mono text-amber-400 tabular-nums">
@@ -323,14 +323,14 @@ export default function AdminPage() {
           </Panel>
 
           <Panel className="bg-night-950/80 shadow-none backdrop-blur-none">
-            <SectionTitle icon={Cpu} title={t("admin.topModels")} tone="lime" />
+            <SectionTitle icon={Cpu} title={t("admin.topModels")} tone="cyan" />
             {stats.top_models.length === 0 ? (
               <EmptyTerminalState label={t("admin.noData")} />
             ) : (
               <div className="space-y-3">
                 {stats.top_models.map((model, index) => {
                   const pct = (model.count / maxModelCount) * 100;
-                  const tone = index === 0 ? "lime" : index === 1 ? "cyan" : "amber";
+                  const tone = index === 0 ? "cyan" : index === 1 ? "white" : "amber";
                   const classes = toneClass[tone];
 
                   return (
@@ -362,15 +362,15 @@ export default function AdminPage() {
 
           <div className="grid gap-3 border border-white/10 bg-night-950 p-4 text-xs text-slate-500 md:grid-cols-3">
             <div className="flex items-center gap-2 font-mono tabular-nums">
-              <Gauge size={16} className="text-signal-cyan" />
+              <Gauge aria-hidden="true" size={16} className="text-signal-cyan" />
               {t("admin.colGenerations")} {formatInteger(stats.total_generations)}
             </div>
             <div className="flex items-center gap-2 font-mono tabular-nums">
-              <Activity size={16} className="text-signal-lime" />
+              <Activity aria-hidden="true" size={16} className="text-signal-cyan" />
               {t("admin.colInputTokens")} {formatTokens(stats.total_input_tokens)}
             </div>
             <div className="flex items-center gap-2 font-mono tabular-nums">
-              <Activity size={16} className="text-amber-400" />
+              <Activity aria-hidden="true" size={16} className="text-amber-400" />
               {t("admin.colOutputTokens")} {formatTokens(stats.total_output_tokens)}
             </div>
           </div>

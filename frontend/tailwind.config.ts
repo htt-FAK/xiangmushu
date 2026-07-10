@@ -41,7 +41,7 @@ const config: Config = {
         ],
       },
       boxShadow: {
-        panel: "0 18px 60px rgba(0, 0, 0, 0.34)",
+        panel: "0 18px 60px rgba(5, 6, 10, 0.5)",
         glow: "0 0 0 1px rgba(54, 242, 230, 0.18), 0 0 20px rgba(54, 242, 230, 0.12)",
       },
     },

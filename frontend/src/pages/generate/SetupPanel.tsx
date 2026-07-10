@@ -80,7 +80,7 @@ export function SetupPanel({
 
   return (
     <Panel className="min-w-0">
-      <SectionTitle icon={<Sparkles size={20} />} title={t("generate.setupTitle")} hint={t("generate.setupHint")} />
+      <SectionTitle icon={<Sparkles aria-hidden="true" size={20} />} title={t("generate.setupTitle")} hint={t("generate.setupHint")} />
 
       <div className="space-y-3 transition-all duration-200">
         <SetupField label={t("generate.knowledge")} compact={true}>
@@ -127,7 +127,7 @@ export function SetupPanel({
           </select>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
             <span className="break-words">{template || t("generate.noTemplates")}</span>
-            <Link to="/template" className="font-semibold text-signal-lime transition hover:text-white">
+            <Link to="/template" className="font-semibold text-signal-cyan transition hover:text-white">
               {t("generate.goTemplate")}
             </Link>
           </div>
@@ -135,7 +135,7 @@ export function SetupPanel({
 
         {recommendedConfig && !isLocked && (
           <div className="mb-2 flex items-start gap-2 border border-dashed border-signal-cyan/30 bg-signal-cyan/5 px-3 py-2.5 text-xs">
-            <Sparkles className="mt-0.5 shrink-0 text-signal-cyan" size={14} />
+            <Sparkles aria-hidden="true" className="mt-0.5 shrink-0 text-signal-cyan" size={14} />
             <div className="min-w-0">
               <p className="font-semibold text-signal-cyan">{t("generate.smartDefaultsActive")}</p>
               <p className="mt-0.5 break-words text-slate-400">
@@ -219,7 +219,7 @@ export function SetupPanel({
           />
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
             <span className="flex min-w-0 items-center gap-2">
-              <MessageSquareText className="shrink-0 text-signal-cyan" size={16} />
+              <MessageSquareText aria-hidden="true" className="shrink-0 text-signal-cyan" size={16} />
               <span className="break-words">{t("generate.instructionsHint")}</span>
             </span>
             <span className="shrink-0">{generationBrief.length}/1200</span>

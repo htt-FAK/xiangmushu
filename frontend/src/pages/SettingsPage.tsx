@@ -98,9 +98,9 @@ function ModelSelector({
           <span className="flex items-center gap-1.5 truncate">
             {selectedLabel}
             {selectedOption?.provider_name ? <span className="text-xs text-slate-500">({selectedOption.provider_name})</span> : null}
-            {selectedOption?.recommended ? <Star size={12} className="shrink-0 fill-signal-lime text-signal-lime" /> : null}
+            {selectedOption?.recommended ? <Star aria-hidden="true" size={12} className="shrink-0 fill-signal-lime text-signal-lime" /> : null}
           </span>
-          <ChevronDown size={14} className={`shrink-0 text-slate-500 transition ${open ? "rotate-180" : ""}`} />
+          <ChevronDown aria-hidden="true" size={14} className={`shrink-0 text-slate-500 transition ${open ? "rotate-180" : ""}`} />
         </button>
       </div>
 
@@ -130,7 +130,7 @@ function ModelSelector({
                 {option.recommended ? (
                   <span className="rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">{t("settings.modelRecommended")}</span>
                 ) : null}
-                {selected === option.model ? <Check size={14} className="text-signal-lime" /> : null}
+                {selected === option.model ? <Check aria-hidden="true" size={14} className="text-signal-lime" /> : null}
               </span>
             </button>
           ))}
@@ -349,7 +349,7 @@ export default function SettingsPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime md:h-11 md:w-11">
-                <Languages size={20} />
+                <Languages aria-hidden="true" size={20} />
               </div>
               <div className="min-w-0">
                 <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("settings.languageCardTitle")}</h2>
@@ -374,7 +374,7 @@ export default function SettingsPage() {
                 >
                   <span className="flex items-center justify-between gap-3">
                     <span className="font-display text-lg font-semibold md:text-xl">{t(`settings.language.${item}.title`)}</span>
-                    {active ? <Check size={19} className="text-signal-lime" /> : null}
+                    {active ? <Check aria-hidden="true" size={19} className="text-signal-lime" /> : null}
                   </span>
                   <span className="mt-1.5 block text-sm leading-6 text-slate-400 md:mt-2">{t(`settings.language.${item}.body`)}</span>
                 </button>
@@ -387,13 +387,13 @@ export default function SettingsPage() {
       <Panel className="relative z-40 overflow-visible mb-5 md:mb-6">
         <div className="mb-4 flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime md:h-11 md:w-11">
-            <Cpu size={20} />
+            <Cpu aria-hidden="true" size={20} />
           </div>
           <div className="min-w-0">
             <h2 className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("settings.modelCardTitle")}</h2>
             <p className="mt-0.5 text-sm text-slate-400">{t("settings.modelCardBody")}</p>
           </div>
-          {modelSaving ? <Loader2 className="ml-auto animate-spin text-signal-lime" size={16} /> : null}
+          {modelSaving ? <Loader2 aria-hidden="true" className="ml-auto animate-spin text-signal-lime" size={16} /> : null}
         </div>
 
         {modelLoading ? (
@@ -432,14 +432,14 @@ export default function SettingsPage() {
                     <h2 className="break-words font-display text-xl font-semibold text-white">{t(provider.titleKey)}</h2>
                     <p className="mt-1 text-sm text-slate-400">{providerStatusText(item, loading, t)}</p>
                   </div>
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/12 text-signal-cyan">
-                    <KeyRound size={20} />
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-lime/40 bg-signal-lime/12 text-signal-lime">
+                    <KeyRound aria-hidden="true" size={20} />
                   </div>
                 </div>
 
                 {item?.has_key && item.key_preview ? (
-                  <div className="inline-flex items-center gap-2 border border-white/10 bg-night-950 px-3 py-2 font-mono text-sm tracking-wide text-signal-cyan">
-                    <KeyRound size={14} />
+                  <div className="inline-flex items-center gap-2 border border-white/10 bg-night-950 px-3 py-2 font-mono text-sm tracking-wide text-signal-lime">
+                    <KeyRound aria-hidden="true" size={14} />
                     <span>{item.key_preview}</span>
                   </div>
                 ) : null}
@@ -449,7 +449,7 @@ export default function SettingsPage() {
                   <div className="space-y-2 text-xs leading-5 text-slate-400">
                     <p>Base URL: `https://api.xiaomimimo.com/v1`</p>
                     <p>{t("settings.mimoBillingNote")}</p>
-                    <a className="text-signal-cyan underline" href="https://platform.xiaomimimo.com/console/plugin?userId=2933868983" target="_blank" rel="noreferrer">
+                    <a className="text-signal-lime underline" href="https://platform.xiaomimimo.com/console/plugin?userId=2933868983" target="_blank" rel="noreferrer">
                       {t("settings.mimoPluginLink")}
                     </a>
                   </div>
@@ -458,7 +458,7 @@ export default function SettingsPage() {
 
                 <div className="grid gap-2.5">
                   <Button className="min-h-12 w-full" onClick={() => openDialog(provider.code)} disabled={saving}>
-                    <KeyRound size={16} />
+                    <KeyRound aria-hidden="true" size={16} />
                     {item?.has_key ? t("settings.replaceKey") : t("settings.addKey")}
                   </Button>
                   {item?.has_key ? (
@@ -468,16 +468,16 @@ export default function SettingsPage() {
                       onClick={() => void runProviderTest(provider.code)}
                       disabled={saving || testingProvider === provider.code}
                     >
-                      {testingProvider === provider.code ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+                      {testingProvider === provider.code ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <Check aria-hidden="true" size={16} />}
                       {testingProvider === provider.code ? t("settings.providerTesting") : t("settings.providerRunTest")}
                     </Button>
                   ) : null}
                   <Button className="min-h-12 w-full" variant="danger" onClick={() => void removeKey(provider.code)} disabled={!item?.has_key || saving}>
-                    {saving ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+                    {saving ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <Trash2 aria-hidden="true" size={16} />}
                     {t("settings.deleteKey")}
                   </Button>
                   <a
-                    className="inline-flex min-h-12 items-center justify-center border border-white/10 bg-white/[0.055] px-4 text-sm font-semibold text-signal-cyan hover:border-signal-cyan/50"
+                    className="inline-flex min-h-12 items-center justify-center border border-white/10 bg-white/[0.055] px-4 text-sm font-semibold text-signal-lime hover:border-signal-lime/50"
                     href={provider.link}
                     target="_blank"
                     rel="noreferrer"
@@ -507,7 +507,7 @@ export default function SettingsPage() {
                 className="flex h-10 w-10 items-center justify-center border border-white/10 text-slate-400 hover:border-white/30 hover:text-white"
                 aria-label={t("settings.cancel")}
               >
-                <X size={20} />
+                <X aria-hidden="true" size={20} />
               </button>
             </div>
 
@@ -535,20 +535,20 @@ export default function SettingsPage() {
             <div className="mt-4 border border-white/10 bg-night-950/65 p-3 text-sm">
               {apiKeyStage === "idle" ? <p className="text-slate-400">{t("settings.confirmKeyHint")}</p> : null}
               {apiKeyStage === "validating" ? (
-                <p className="inline-flex items-center gap-2 text-signal-cyan">
+                <p className="inline-flex items-center gap-2 text-signal-lime">
                   <Loader2 className="animate-spin" size={16} />
                   {t("settings.validatingKey")}
                 </p>
               ) : null}
               {apiKeyStage === "saving" ? (
-                <p className="inline-flex items-center gap-2 text-signal-cyan">
+                <p className="inline-flex items-center gap-2 text-signal-lime">
                   <Loader2 className="animate-spin" size={16} />
                   {t("settings.savingKey")}
                 </p>
               ) : null}
               {apiKeyStage === "saved" ? (
                 <p className="inline-flex items-center gap-2 text-signal-lime">
-                  <Check size={16} />
+                  <Check aria-hidden="true" size={16} />
                   {t("settings.keySavedDone")}
                 </p>
               ) : null}
@@ -577,7 +577,7 @@ export default function SettingsPage() {
                 {apiKeyStage === "saved" ? t("settings.done") : t("settings.cancel")}
               </Button>
               <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={confirmSave} disabled={!canConfirm || saving || apiKeyStage === "saved"}>
-                {saving ? <Loader2 className="animate-spin" size={16} /> : <KeyRound size={16} />}
+                {saving ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <KeyRound aria-hidden="true" size={16} />}
                 {apiKeyStage === "validating" ? t("settings.providerTesting") : apiKeyStage === "saving" ? t("settings.saving") : apiKeyStage === "saved" ? t("settings.saved") : t("settings.confirm")}
               </Button>
             </div>

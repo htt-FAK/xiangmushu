@@ -3,6 +3,7 @@ import {
   createElement,
   type ReactNode,
   useContext,
+  useEffect,
   useMemo,
 } from "react";
 import { useAuth, type Language } from "./auth";
@@ -19,7 +20,7 @@ const dict: Record<Language, Record<string, string>> = {
     "app.returnToTemplate": "返回模板页",
     "nav.home": "首页",
     "nav.template": "模板分析",
-    "nav.generate": "生成舱",
+    "nav.generate": "生成工作台",
     "nav.history": "生成记录",
     "nav.knowledge": "知识库",
     "nav.settings": "设置",
@@ -151,7 +152,7 @@ const dict: Record<Language, Record<string, string>> = {
     "template.analysisStatus": "分析状态",
     "generate.toastDone": "文档生成已完成，可前往生成页下载",
 
-    "generate.eyebrow": "生成舱",
+    "generate.eyebrow": "生成工作台",
     "generate.title": "选择资料、模板和要求，一键生成文档",
     "generate.description": "先确认知识库和 Word 模板，再补充生成要求；高级参数默认收起，运行状态和结果集中显示在右侧。",
     "generate.knowledge": "知识库",
@@ -505,7 +506,7 @@ const dict: Record<Language, Record<string, string>> = {
     "app.returnToTemplate": "Back to Template",
     "nav.home": "Home",
     "nav.template": "Template Analysis",
-    "nav.generate": "Generation Bay",
+    "nav.generate": "Generation Workbench",
     "nav.history": "History",
     "nav.knowledge": "Knowledge Base",
     "nav.settings": "Settings",
@@ -637,7 +638,7 @@ const dict: Record<Language, Record<string, string>> = {
     "template.analysisStatus": "Status",
     "generate.toastDone": "Document generation complete — open Generate to download",
 
-    "generate.eyebrow": "Generation Bay",
+    "generate.eyebrow": "Generation Workbench",
     "generate.title": "Choose sources, template, and requirements to generate a document",
     "generate.description": "Confirm the knowledge base and Word template, add optional instructions, and keep advanced controls collapsed until needed.",
     "generate.knowledge": "Knowledge base",
@@ -1002,6 +1003,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     () => ({ language, setLanguage, t }),
     [language, setLanguage, t],
   );
+
+  useEffect(() => {
+    const htmlLang = language === "en" ? "en-US" : "zh-CN";
+    document.documentElement.setAttribute("lang", htmlLang);
+    document.title = t("app.title", t("app.subtitle"));
+  }, [language, t]);
 
   return createElement(I18nContext.Provider, { value }, children);
 }

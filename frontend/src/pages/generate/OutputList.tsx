@@ -58,7 +58,7 @@ function OutputBlocks({
                   disabled={busy}
                   onClick={() => onRegenerate(index)}
                 >
-                  {regeneratingIndex === index ? <Loader2 className="animate-spin" size={16} /> : <RotateCcw size={16} />}
+                  {regeneratingIndex === index ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <RotateCcw aria-hidden="true" size={16} />}
                   {regeneratingIndex === index ? t("generate.regenerating") : t("generate.regenerateChapter")}
                 </Button>
               ) : undefined
@@ -101,7 +101,7 @@ export function OutputList({
   return (
     <>
       <Panel className="min-w-0">
-        <SectionTitle icon={<BookOpen size={20} />} title={t("generate.outputTitle")} hint={t("generate.outputHint")} />
+        <SectionTitle icon={<BookOpen aria-hidden="true" size={20} />} title={t("generate.outputTitle")} hint={t("generate.outputHint")} />
         {outputs.length === 0 ? (
           <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
         ) : (
@@ -117,7 +117,7 @@ export function OutputList({
                 className="min-h-10 gap-2 border border-white/10 bg-white/[0.025] px-4 text-xs font-semibold text-slate-300 hover:border-white/25 hover:text-white"
                 onClick={onOpenTrace}
               >
-                <MessageSquareText size={16} />
+                <MessageSquareText aria-hidden="true" size={16} />
                 {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
               </Button>
             </div>
@@ -132,7 +132,7 @@ export function OutputList({
         <DetailOverlay
           title={t("generate.traceTitle")}
           subtitle={running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
-          icon={<MessageSquareText size={20} />}
+          icon={<MessageSquareText aria-hidden="true" size={20} />}
           onClose={onCloseTrace}
         >
           <OutputBlocks {...blocksProps} actionsEnabled={true} />

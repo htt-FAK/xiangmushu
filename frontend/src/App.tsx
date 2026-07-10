@@ -146,7 +146,7 @@ function Shell() {
       <aside className="fixed bottom-0 left-0 top-0 z-20 hidden w-72 border-r border-white/10 bg-night-900 px-5 py-6 lg:block">
         <div className="mb-9 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center border border-signal-cyan/50 bg-signal-cyan text-night-950">
-            <PanelLeft size={20} />
+            <PanelLeft aria-hidden="true" size={20} />
           </div>
           <div>
             <p className="font-display text-lg font-semibold leading-tight text-white">
@@ -173,7 +173,7 @@ function Shell() {
                   )
                 }
               >
-                <Icon size={20} />
+                <Icon aria-hidden="true" size={20} />
                 {t(item.labelKey)}
               </NavLink>
             );
@@ -190,7 +190,7 @@ function Shell() {
                 )
               }
             >
-              <BarChart3 size={20} />
+              <BarChart3 aria-hidden="true" size={20} />
               {t("nav.admin")}
             </NavLink>
           )}
@@ -204,7 +204,7 @@ function Shell() {
               "border-white/5 bg-white/[0.025] text-slate-400 hover:border-white/20 hover:text-white hover:text-signal-cyan/80",
             )}
           >
-            <Github size={20} />
+            <Github aria-hidden="true" size={20} />
             {t("nav.github", "GitHub")}
           </a>
         </div>
@@ -219,7 +219,7 @@ function Shell() {
             </p>
           </div>
           <Button className="w-full" variant="ghost" onClick={handleLogout}>
-            <LogOut size={16} />
+            <LogOut aria-hidden="true" size={16} />
             {t("nav.signOut")}
           </Button>
         </div>
@@ -238,9 +238,10 @@ function Shell() {
               className="flex h-10 w-10 shrink-0 items-center justify-center border border-white/10 bg-white/[0.025] text-slate-400 transition hover:border-white/25 hover:text-white active:border-signal-cyan/40 active:text-signal-cyan"
               onClick={handleLogout}
               title={t("nav.signOut")}
+              aria-label={t("nav.signOut")}
               type="button"
             >
-              <LogOut size={16} />
+              <LogOut aria-hidden="true" size={16} />
             </button>
           </div>
         </header>
@@ -323,7 +324,7 @@ function Shell() {
                     )
                   }
                 >
-                  <Icon size={16} strokeWidth={2.2} />
+                  <Icon aria-hidden="true" size={16} strokeWidth={2.2} />
                   <span className="max-w-full whitespace-nowrap">{t(item.labelKey)}</span>
                 </NavLink>
               );
@@ -339,7 +340,7 @@ function Shell() {
                   : "border-transparent text-slate-500 hover:bg-white/[0.025] hover:text-slate-300 active:text-signal-cyan/80",
               )}
             >
-              <Menu size={16} strokeWidth={2.2} />
+              <Menu aria-hidden="true" size={16} strokeWidth={2.2} />
               <span className="max-w-full whitespace-nowrap">{t("nav.more")}</span>
             </button>
           </div>
@@ -364,7 +365,7 @@ function Shell() {
                   aria-label={t("generate.close")}
                   className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
                 >
-                  <X size={20} />
+                  <X aria-hidden="true" size={20} />
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-2 p-3">
@@ -384,7 +385,7 @@ function Shell() {
                           "border-white/10 bg-white/[0.025] text-slate-300 hover:border-white/25 hover:text-white hover:text-signal-cyan/80",
                         )}
                       >
-                        <Icon size={20} />
+                        <Icon aria-hidden="true" size={20} />
                         <span className="whitespace-nowrap">{t("nav.github", "GitHub")}</span>
                       </a>
                     );
@@ -403,7 +404,7 @@ function Shell() {
                         )
                       }
                     >
-                      <Icon size={20} />
+                      <Icon aria-hidden="true" size={20} />
                       <span className="whitespace-nowrap">{t(item.labelKey)}</span>
                     </NavLink>
                   );
@@ -418,7 +419,7 @@ function Shell() {
                   }}
                   className="flex min-h-12 w-full items-center justify-center gap-2 border border-signal-rose/40 bg-signal-rose/10 px-4 text-sm font-semibold text-signal-rose transition hover:bg-signal-rose hover:text-white"
                 >
-                  <LogOut size={20} />
+                  <LogOut aria-hidden="true" size={20} />
                   <span className="whitespace-nowrap">{t("nav.signOut")}</span>
                 </button>
               </div>

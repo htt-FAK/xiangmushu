@@ -24,7 +24,7 @@ export function ConfirmModal({
       <div className="w-full max-w-md border border-white/10 bg-night-900 p-5 shadow-panel md:p-6">
         <div className="mb-4 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/10 text-signal-cyan">
-            <Layers3 size={19} />
+            <Layers3 aria-hidden="true" size={19} />
           </div>
           <h3 className="font-display text-xl font-semibold text-white">{title}</h3>
         </div>
@@ -34,7 +34,7 @@ export function ConfirmModal({
             {cancelLabel}
           </Button>
           <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={onConfirm}>
-            <Play size={16} />
+            <Play aria-hidden="true" size={16} />
             {confirmLabel}
           </Button>
         </div>
@@ -64,7 +64,7 @@ export function QuotaSwitchModal({
       <div className="w-full max-w-xl border border-rose-500/30 bg-night-900 p-5 shadow-panel md:p-6">
         <div className="mb-4 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center border border-rose-500/40 bg-rose-500/10 text-rose-200">
-            <Cpu size={19} />
+            <Cpu aria-hidden="true" size={19} />
           </div>
           <h3 className="font-display text-xl font-semibold text-white">{title}</h3>
         </div>
@@ -79,7 +79,7 @@ export function QuotaSwitchModal({
               className="flex items-center justify-between gap-3 border border-white/10 bg-night-950 px-3 py-3 text-left text-slate-300 transition hover:border-white/25 hover:text-white disabled:opacity-60"
             >
               <span className="block min-w-0 break-all text-sm font-semibold">{model}</span>
-              {saving ? <Loader2 className="shrink-0 animate-spin" size={16} /> : <Cpu className="shrink-0" size={16} />}
+              {saving ? <Loader2 aria-hidden="true" className="shrink-0 animate-spin" size={16} /> : <Cpu aria-hidden="true" className="shrink-0" size={16} />}
             </button>
           ))}
         </div>

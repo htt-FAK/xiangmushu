@@ -115,8 +115,8 @@ export function StepIndicator({
     >
       <div className="shrink-0">{icon}</div>
       <span className="text-xs font-medium">{label}</span>
-      {isActive && <Loader2 className="ml-auto animate-spin" size={14} />}
-      {isCompleted && <CheckCircle2 className="ml-auto" size={14} />}
+      {isActive && <Loader2 aria-hidden="true" className="ml-auto animate-spin" size={14} />}
+      {isCompleted && <CheckCircle2 aria-hidden="true" className="ml-auto" size={14} />}
     </div>
   );
 }
@@ -140,9 +140,9 @@ export function NoticeBanner({
     info: "border-signal-cyan/40 bg-signal-cyan/10 text-cyan-100",
   };
   const icons = {
-    warning: <AlertTriangle className="shrink-0" size={20} />,
-    error: <AlertTriangle className="shrink-0" size={20} />,
-    info: <MessageSquareText className="shrink-0" size={20} />,
+    warning: <AlertTriangle aria-hidden="true" className="shrink-0" size={20} />,
+    error: <AlertTriangle aria-hidden="true" className="shrink-0" size={20} />,
+    info: <MessageSquareText aria-hidden="true" className="shrink-0" size={20} />,
   };
 
   return (

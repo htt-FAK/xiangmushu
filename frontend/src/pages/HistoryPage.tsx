@@ -105,7 +105,7 @@ export default function HistoryPage() {
     <div className="space-y-4 md:space-y-5">
       <header className="flex flex-col gap-4 border-b border-white/10 pb-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <p className="mb-1 font-display text-xs font-semibold uppercase tracking-[0.2em] text-signal-cyan">
+          <p className="mb-1 font-display text-xs font-semibold uppercase tracking-[0.2em] text-signal-amber">
             {t("history.eyebrow")}
           </p>
           <h1 className="break-words font-display text-2xl font-semibold text-white md:text-3xl">
@@ -117,18 +117,18 @@ export default function HistoryPage() {
           className={clsx(
             "flex items-center gap-2 border px-3 py-2 text-xs font-semibold",
             availability.available
-              ? "border-signal-cyan/25 bg-signal-cyan/10 text-signal-cyan"
+              ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime"
               : "border-signal-amber/30 bg-signal-amber/10 text-amber-100",
           )}
         >
-          <Archive size={16} />
+          <Archive aria-hidden="true" size={16} />
           {availability.available ? t("history.backendBadge") : t("history.backendOffline")}
         </div>
       </header>
 
       {availability.warning ? (
         <div className="flex items-start gap-3 border border-signal-amber/30 bg-signal-amber/10 px-4 py-3 text-sm text-amber-100">
-          <AlertTriangle className="mt-0.5 shrink-0" size={20} />
+          <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0" size={20} />
           <p className="break-words">{availability.warning}</p>
         </div>
       ) : null}
@@ -140,11 +140,11 @@ export default function HistoryPage() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <Stat label={t("history.totalArticles")} value={summary.count} />
-        <Stat label={t("history.inputTokens")} value={formatTokenCount(summary.inputTokens)} tone="lime" />
+        <Stat label={t("history.totalArticles")} value={summary.count} tone="amber" />
+        <Stat label={t("history.inputTokens")} value={formatTokenCount(summary.inputTokens)} tone="amber" />
         <Stat label={t("history.outputTokens")} value={formatTokenCount(summary.outputTokens)} tone="amber" />
-        <Stat label={t("history.totalTokens")} value={formatTokenCount(summary.totalTokens)} tone="cyan" />
-        <Stat label={t("history.totalCost")} value={formatHistoryCost(summary.costCny)} tone="lime" />
+        <Stat label={t("history.totalTokens")} value={formatTokenCount(summary.totalTokens)} tone="amber" />
+        <Stat label={t("history.totalCost")} value={formatHistoryCost(summary.costCny)} tone="amber" />
       </div>
 
       <div className="grid min-h-0 gap-4 xl:grid-cols-[390px_minmax(0,1fr)]">
@@ -154,12 +154,12 @@ export default function HistoryPage() {
               <p className="font-display text-xl font-semibold text-white">{t("history.records")}</p>
               <p className="mt-1 text-xs text-slate-500">{t("history.recordsHint")}</p>
             </div>
-            <FileText className="text-signal-cyan" size={20} />
+            <FileText aria-hidden="true" className="text-signal-amber" size={20} />
           </div>
 
           <div className="mb-3 grid gap-2">
             <label className="relative block">
-              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={16} />
+              <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={16} />
               <Input
                 className="pl-9"
                 value={query}
@@ -176,7 +176,7 @@ export default function HistoryPage() {
                   className={clsx(
                     "min-h-10 border px-2 text-xs font-semibold transition",
                     status === item
-                      ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
+                      ? "border-signal-amber bg-signal-amber/10 text-signal-amber"
                       : "border-white/10 bg-night-950 text-slate-400 hover:border-white/25 hover:text-white",
                   )}
                 >
@@ -189,7 +189,7 @@ export default function HistoryPage() {
           <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
             {loading ? (
               <div className="flex min-h-28 items-center justify-center text-slate-500">
-                <Loader2 className="mr-2 animate-spin" size={16} />
+                <Loader2 aria-hidden="true" className="mr-2 animate-spin" size={16} />
                 {t("history.loadingRecords")}
               </div>
             ) : !availability.available ? (
@@ -211,7 +211,7 @@ export default function HistoryPage() {
                     className={clsx(
                       "w-full min-w-0 border p-3 text-left transition active:scale-[0.99]",
                       active
-                        ? "border-signal-cyan/60 bg-signal-cyan/10"
+                        ? "border-signal-amber/60 bg-signal-amber/10"
                         : "border-white/10 bg-night-950/65 hover:border-white/25",
                     )}
                   >
@@ -279,7 +279,7 @@ export default function HistoryPage() {
                     disabled={!selected.documentUrl}
                     onClick={() => selected.documentUrl && window.open(selected.documentUrl, "_blank")}
                   >
-                    <Download size={16} />
+                    <Download aria-hidden="true" size={16} />
                     {t("history.downloadDoc")}
                   </Button>
                   <Button
@@ -288,7 +288,7 @@ export default function HistoryPage() {
                     disabled={!selected.reportUrl}
                     onClick={() => selected.reportUrl && window.open(selected.reportUrl, "_blank")}
                   >
-                    <FileText size={16} />
+                    <FileText aria-hidden="true" size={16} />
                     {t("history.downloadReport")}
                   </Button>
                 </div>
@@ -299,7 +299,7 @@ export default function HistoryPage() {
           <div className="grid gap-4 2xl:grid-cols-2">
             <Panel className="min-w-0">
               <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center border border-signal-cyan/30 bg-signal-cyan/10 text-signal-cyan">
+                <div className="flex h-9 w-9 items-center justify-center border border-signal-amber/30 bg-signal-amber/10 text-signal-amber">
                   <BarChart3 size={20} />
                 </div>
                 <div>
@@ -312,7 +312,7 @@ export default function HistoryPage() {
 
             <Panel className="min-w-0">
               <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center border border-signal-lime/30 bg-signal-lime/10 text-signal-lime">
+                <div className="flex h-9 w-9 items-center justify-center border border-signal-amber/30 bg-signal-amber/10 text-signal-amber">
                   <SlidersHorizontal size={20} />
                 </div>
                 <div>

@@ -104,7 +104,7 @@ function BillingSummaryStat({
               <p className="break-words text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500 md:text-xs md:normal-case md:tracking-normal">
                 {item.label}
               </p>
-              <p className="mt-1.5 truncate font-display text-xl font-semibold leading-tight text-signal-amber md:mt-2 md:text-2xl">
+              <p className="mt-1.5 truncate font-display text-xl font-semibold leading-tight text-signal-cyan md:mt-2 md:text-2xl">
                 {item.value}
               </p>
             </div>
@@ -157,7 +157,7 @@ export default function HomePage() {
             className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-signal-cyan bg-signal-cyan px-5 text-sm font-bold text-night-950 shadow-glow transition hover:bg-white sm:min-h-11 sm:w-auto sm:font-semibold"
           >
             {t("home.start")}
-            <ArrowRight size={16} />
+            <ArrowRight aria-hidden="true" size={16} />
           </Link>
         }
       />
@@ -190,7 +190,7 @@ export default function HomePage() {
               <p className="font-semibold text-white">1. {t("home.stepKey")}</p>
               <p className="mt-1">{hasAnyValidatedProvider(apiKeyStatus) ? t("home.stepDone") : t("home.stepPending")}</p>
             </Link>
-            <Link to="/knowledge" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-lime/40">
+            <Link to="/knowledge" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-cyan/40">
               <p className="font-semibold text-white">2. {t("home.stepKnowledge")}</p>
               <p className="mt-1">{hasKnowledgeSources ? t("home.stepDone") : t("home.stepPending")}</p>
             </Link>
@@ -198,7 +198,7 @@ export default function HomePage() {
               <p className="font-semibold text-white">3. {t("home.stepTemplate")}</p>
               <p className="mt-1">{templateItems.length > 0 ? t("home.stepDone") : t("home.stepPending")}</p>
             </Link>
-            <Link to="/generate" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-lime/40">
+            <Link to="/generate" className="border border-white/10 bg-night-950/35 p-4 text-sm text-slate-300 hover:border-signal-cyan/40">
               <p className="font-semibold text-white">4. {t("home.stepGenerate")}</p>
               <p className="mt-1">{readiness.ready ? t("home.readyToGenerate") : t("home.finishSetupFirst")}</p>
             </Link>
@@ -211,7 +211,7 @@ export default function HomePage() {
               <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("home.uploadedTemplates")}</p>
               <p className="mt-0.5 text-xs text-slate-500 md:text-sm">{t("home.templateSource")}</p>
             </div>
-            <FileText className="shrink-0 text-signal-cyan" size={24} />
+            <FileText aria-hidden="true" className="shrink-0 text-signal-cyan" size={24} />
           </div>
           {templateItems.length === 0 ? (
             <EmptyState title={t("home.noTemplates")} body={t("home.noTemplatesBody")} />
@@ -238,7 +238,7 @@ export default function HomePage() {
               <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("home.knowledgeList")}</p>
               <p className="mt-0.5 text-xs text-slate-500 md:text-sm">{t("home.knowledgeBody")}</p>
             </div>
-            <Database className="shrink-0 text-signal-lime" size={24} />
+            <Database aria-hidden="true" className="shrink-0 text-signal-cyan" size={24} />
           </div>
           {kbItems.length === 0 ? (
             <EmptyState title={t("home.noKnowledge")} body={t("home.noKnowledgeBody")} />
@@ -248,7 +248,7 @@ export default function HomePage() {
                 <Link
                   key={kb.slug}
                   to="/knowledge"
-                  className="group border border-white/10 bg-night-850/70 px-3.5 py-3 transition hover:border-signal-lime/40 hover:bg-night-800/70 md:p-4"
+                  className="group border border-white/10 bg-night-850/70 px-3.5 py-3 transition hover:border-signal-cyan/40 hover:bg-night-800/70 md:p-4"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
@@ -258,7 +258,8 @@ export default function HomePage() {
                       <p className="mt-1 truncate text-xs text-slate-500">{kb.slug}</p>
                     </div>
                     <RefreshCcw
-                      className="text-slate-600 transition group-hover:text-signal-lime"
+                      aria-hidden="true"
+                      className="text-slate-600 transition group-hover:text-signal-cyan"
                       size={16}
                     />
                   </div>

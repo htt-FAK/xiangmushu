@@ -328,7 +328,7 @@ export default function GeneratePage() {
             onClick={requestStart}
             disabled={!template || !slug || busy || !readiness.ready}
           >
-            {running ? <Loader2 className="animate-spin" size={20} /> : <Play size={20} />}
+            {running ? <Loader2 aria-hidden="true" className="animate-spin" size={20} /> : <Play aria-hidden="true" size={20} />}
             {running ? t("generate.running") : t("generate.start")}
           </Button>
           <Button
@@ -338,7 +338,7 @@ export default function GeneratePage() {
             disabled={!busy}
             aria-label={t("generate.stop")}
           >
-            <Square size={16} />
+            <Square aria-hidden="true" size={16} />
           </Button>
         </div>
       </header>
@@ -346,7 +346,7 @@ export default function GeneratePage() {
       <NoticeBanner notice={session.notice} retryLabel={t("generate.retry")} onDismiss={session.dismissNotice} />
       {providerWarning ? (
         <div className="mb-4 flex items-start gap-2 border border-signal-amber/40 bg-signal-amber/10 px-4 py-3 text-sm text-amber-100">
-          <AlertTriangle className="mt-0.5 shrink-0 text-signal-amber" size={16} />
+          <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0 text-signal-amber" size={16} />
           <p>{providerWarning}</p>
         </div>
       ) : null}
@@ -354,7 +354,7 @@ export default function GeneratePage() {
       {!readiness.ready && (
         <div className="mb-6 flex flex-col gap-4 border border-signal-amber/40 bg-signal-amber/10 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <ShieldCheck className="shrink-0 text-signal-amber" size={20} />
+            <ShieldCheck aria-hidden="true" className="shrink-0 text-signal-amber" size={20} />
             <p className="min-w-0 break-words text-sm font-semibold text-amber-100">
               {readiness.reason === "missing_key"
                 ? t("generate.missingKeyHint")
@@ -383,12 +383,12 @@ export default function GeneratePage() {
           <details className="group">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border border-white/10 bg-white/[0.045] px-4 py-3 text-sm shadow-panel backdrop-blur">
               <span className="flex min-w-0 items-center gap-2 font-semibold text-white">
-                <Sparkles size={16} className="shrink-0 text-signal-cyan" />
+                <Sparkles aria-hidden="true" size={16} className="shrink-0 text-signal-cyan" />
                 <span className="min-w-0 truncate">
                   {t("generate.setupTitle")} · {selectedKbTitle} · {template || t("generate.noTemplates")} · {qualityModeLabel}
                 </span>
               </span>
-              <ChevronDown size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
+              <ChevronDown aria-hidden="true" size={16} className="shrink-0 text-slate-400 transition group-open:rotate-180" />
             </summary>
             <div className="mt-3">{setupPanelEl}</div>
           </details>
