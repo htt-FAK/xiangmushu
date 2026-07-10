@@ -80,8 +80,16 @@ MAIN_WRITER_FALLBACK_MODEL_1 = os.getenv("MAIN_WRITER_FALLBACK_MODEL_1", "").str
 MAIN_WRITER_FALLBACK_MODEL_2 = os.getenv("MAIN_WRITER_FALLBACK_MODEL_2", "").strip() or "qwen3.7-plus"
 FAST_WRITER_MODEL = os.getenv("FAST_WRITER_MODEL", "").strip() or SMALL_LLM_MODEL
 FAST_WRITER_FALLBACK_MODEL_1 = os.getenv("FAST_WRITER_FALLBACK_MODEL_1", "").strip() or SMALL_LLM_FALLBACK_MODEL
-WEB_SEARCH_MODEL = os.getenv("WEB_SEARCH_MODEL", "").strip() or "qwen3.7-plus"
-WEB_SEARCH_FALLBACK_MODEL_1 = os.getenv("WEB_SEARCH_FALLBACK_MODEL_1", "").strip() or VISION_WEB_FALLBACK_MODEL
+
+# ---------------------------------------------------------------------------
+# Firecrawl (keyless web search — replaces deprecated WEB_SEARCH_MODEL)
+# ---------------------------------------------------------------------------
+_FIRECRAWL_ENABLED_RAW = os.getenv("FIRECRAWL_ENABLED", "1").strip().lower()
+FIRECRAWL_ENABLED = _FIRECRAWL_ENABLED_RAW not in ("0", "false", "no", "off")
+FIRECRAWL_MCP_URL = os.getenv("FIRECRAWL_MCP_URL", "https://mcp.firecrawl.dev/v2/mcp").strip()
+FIRECRAWL_SEARCH_LIMIT = int(os.getenv("FIRECRAWL_SEARCH_LIMIT", "5").strip())
+FIRECRAWL_TIMEOUT = float(os.getenv("FIRECRAWL_TIMEOUT", "30").strip())
+
 VISION_LAYOUT_MODEL = os.getenv("VISION_LAYOUT_MODEL", "").strip() or TEMPLATE_VISION_MODEL
 VISION_LAYOUT_FALLBACK_MODEL_1 = os.getenv("VISION_LAYOUT_FALLBACK_MODEL_1", "").strip() or TEMPLATE_VISION_FALLBACK_MODEL
 TEMPLATE_PLANNER_MODEL = os.getenv("TEMPLATE_PLANNER_MODEL", "").strip() or TEMPLATE_ANALYZE_MODEL
@@ -250,22 +258,6 @@ USER_MODEL_OPTIONS: dict[str, dict] = {
             {"model": "qwen3.6-35b-a3b"},
         ],
     },
-    "web_search": {
-        "label": "联网搜索模型",
-        "description": "只负责搜索和抽取结构化网页证据，不直接写最终正文",
-        "config_keys": ["WEB_SEARCH_MODEL", "VISION_WEB_MODEL"],
-        "tiers": {
-            "高质量": [
-                {"model": "qwen3.7-plus", "recommended": True},
-                {"model": "qwen3.6-plus"},
-            ],
-            "性价比": [
-                {"model": "qwen3.6-flash", "recommended": True},
-                {"model": "qwen3.5-flash"},
-                {"model": "mimo-v2.5"},
-            ],
-        },
-    },
     "vision_layout": {
         "label": "模板视觉模型",
         "description": "负责模板图片、截图和版式理解",
@@ -421,7 +413,6 @@ _DEFAULT_MODEL_OVERRIDES: dict[str, str] = {
     "audit": "qwen3.6-flash",
     "main_writer": MAIN_WRITER_MODEL,
     "fast_writer": FAST_WRITER_MODEL,
-    "web_search": WEB_SEARCH_MODEL,
     "vision_layout": VISION_LAYOUT_MODEL,
     "template_planner": TEMPLATE_PLANNER_MODEL,
     "audit_text": AUDIT_TEXT_MODEL,

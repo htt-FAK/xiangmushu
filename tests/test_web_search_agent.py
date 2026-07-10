@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.fill_task import FillTask
-from core.web_search_agent import SessionWebEvidenceCache, fetch_web_evidence, parse_web_evidence
+from core.web_search_agent import SessionWebEvidenceCache, fetch_web_evidence
 
 
 def _task() -> FillTask:
@@ -15,128 +15,75 @@ def _task() -> FillTask:
     )
 
 
-def test_parse_web_evidence_json_fence():
-    raw = """```json
-{"facts":[{"claim":"政策支持数字经济。","source":"https://example.test","confidence":"high","use_for":["policy"]}],"gaps":["未找到地方细则"]}
-```"""
+def test_firecrawl_happy_path_maps_to_web_facts(monkeypatch):
+    mock_results = [
+        {"title": "数字经济政策概述", "url": "https://example.test/policy", "content": "支持信息"},
+        {"title": "地方细则", "url": "https://example.test/local", "content": ""},
+    ]
 
-    facts, gaps = parse_web_evidence(raw)
+    def fake_search(query: str, *, limit=None, timeout=None):
+        return list(mock_results)
 
-    assert facts[0].claim == "政策支持数字经济。"
-    assert facts[0].source == "https://example.test"
-    assert gaps == ["未找到地方细则"]
+    monkeypatch.setattr("core.web_search_agent.search_web_evidence", fake_search)
 
+    result = fetch_web_evidence(object(), _task())
 
-def test_fetch_web_evidence_uses_web_search_profile(monkeypatch):
-    calls: list[dict] = []
-    resolved_clients: list[object] = []
-
-    class _Message:
-        content = '{"facts":[{"claim":"公开政策支持转型。","source":"s","confidence":"high"}],"gaps":[]}'
-
-    class _Choice:
-        message = _Message()
-
-    class _Response:
-        choices = [_Choice()]
-
-    def fake_chat(*args, **kwargs):
-        calls.append(kwargs)
-        resolved_clients.append(args[0])
-        return _Response()
-
-    monkeypatch.setattr("core.web_search_agent.chat_completions_create", fake_chat)
-    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"web_search": "search-model"})
-    marker_client = object()
-    monkeypatch.setattr("core.web_search_agent.chat_client_for_model", lambda model, user_id, purpose="chat": marker_client)
-
-    result = fetch_web_evidence(object(), _task(), user_id=7)
-
-    assert result.facts[0].claim == "公开政策支持转型。"
-    assert calls[0]["model"] == "search-model"
-    assert calls[0]["extra_body"]["enable_search"] is True
-    assert calls[0]["allow_backup_fallback"] is False
-    assert resolved_clients[0] is marker_client
+    assert len(result.facts) == 2
+    assert result.facts[0].claim == "支持信息"
+    assert result.facts[0].source == "https://example.test/policy"
+    assert result.facts[0].confidence == "unknown"
+    assert result.facts[0].use_for == []
+    assert result.facts[1].claim == "地方细则"
+    assert result.facts[1].source == "https://example.test/local"
 
 
-def test_fetch_web_evidence_uses_mimo_native_web_search_tools(monkeypatch):
-    calls: list[dict] = []
-    resolved_clients: list[object] = []
+def test_firecrawl_error_path_sets_error(monkeypatch):
+    def raise_error(query: str, *, limit=None, timeout=None):
+        raise RuntimeError("firecrawl unreachable")
 
-    class _Message:
-        content = '{"facts":[{"claim":"雷军是小米创始人。","source":"s","confidence":"high"}],"gaps":[]}'
+    monkeypatch.setattr("core.web_search_agent.search_web_evidence", raise_error)
 
-    class _Choice:
-        message = _Message()
+    result = fetch_web_evidence(object(), _task())
 
-    class _Response:
-        choices = [_Choice()]
-
-    def fake_chat(*args, **kwargs):
-        calls.append(kwargs)
-        resolved_clients.append(args[0])
-        return _Response()
-
-    monkeypatch.setattr("core.web_search_agent.chat_completions_create", fake_chat)
-    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"web_search": "mimo-v2.5-pro"})
-    marker_client = object()
-    monkeypatch.setattr("core.web_search_agent.chat_client_for_model", lambda model, user_id, purpose="chat": marker_client)
-
-    result = fetch_web_evidence(object(), _task(), user_id=7)
-
-    assert result.facts[0].claim == "雷军是小米创始人。"
-    assert calls[0]["model"] == "mimo-v2.5-pro"
-    assert calls[0]["tool_choice"] == "auto"
-    assert calls[0]["tools"][0]["type"] == "web_search"
-    assert calls[0]["tools"][0]["max_keyword"] == 3
-    assert calls[0]["tools"][0]["force_search"] is True
-    assert calls[0]["tools"][0]["limit"] == 1
-    assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
-    assert "enable_search" not in calls[0]["extra_body"]
-    assert calls[0]["allow_backup_fallback"] is False
-    assert resolved_clients[0] is marker_client
+    assert result.facts == []
+    assert result.error == "firecrawl unreachable"
 
 
-def test_fetch_web_evidence_returns_usage_and_model(monkeypatch):
-    class _Message:
-        content = '{"facts":[{"claim":"支持信息。","source":"s","confidence":"high"}],"gaps":[]}'
+def test_firecrawl_returns_empty_on_no_results(monkeypatch):
+    def empty_search(query: str, *, limit=None, timeout=None):
+        return []
 
-    class _Choice:
-        message = _Message()
+    monkeypatch.setattr("core.web_search_agent.search_web_evidence", empty_search)
 
-    class _Response:
-        choices = [_Choice()]
-        model = "mimo-v2.5"
-        usage = {"input_tokens": 120, "output_tokens": 30}
+    result = fetch_web_evidence(object(), _task())
 
-    monkeypatch.setattr("core.web_search_agent.chat_completions_create", lambda *args, **kwargs: _Response())
-    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {"web_search": "mimo-v2.5"})
+    assert result.facts == []
+    assert result.error == ""
 
-    result = fetch_web_evidence(object(), _task(), user_id=7)
 
-    assert result.model == "mimo-v2.5"
-    assert result.usage == {"input_tokens": 120, "output_tokens": 30}
-    assert result.cached is False
+def test_firecrawl_model_is_firecrawl_keyless_and_usage_is_none(monkeypatch):
+    mock_results = [{"title": "t", "url": "https://u", "content": "c"}]
+
+    def fake_search(query: str, *, limit=None, timeout=None):
+        return list(mock_results)
+
+    monkeypatch.setattr("core.web_search_agent.search_web_evidence", fake_search)
+
+    result = fetch_web_evidence(object(), _task())
+
+    assert result.model == "firecrawl-keyless"
+    assert result.usage is None
 
 
 def test_session_web_evidence_cache_reuses_result(monkeypatch):
     calls = 0
 
-    class _Message:
-        content = '{"facts":[{"claim":"事实。"}],"gaps":[]}'
-
-    class _Choice:
-        message = _Message()
-
-    class _Response:
-        choices = [_Choice()]
-
-    def fake_chat(*args, **kwargs):
+    def fake_search(query: str, *, limit=None, timeout=None):
         nonlocal calls
         calls += 1
-        return _Response()
+        return [{"title": "t", "url": "https://u", "content": "c"}]
 
-    monkeypatch.setattr("core.web_search_agent.chat_completions_create", fake_chat)
+    monkeypatch.setattr("core.web_search_agent.search_web_evidence", fake_search)
     cache = SessionWebEvidenceCache()
 
     first = fetch_web_evidence(object(), _task(), cache=cache)
@@ -145,4 +92,4 @@ def test_session_web_evidence_cache_reuses_result(monkeypatch):
     assert calls == 1
     assert first.cached is False
     assert second.cached is True
-    assert second.facts[0].claim == "事实。"
+    assert second.facts[0].claim == "c"

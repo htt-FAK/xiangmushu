@@ -79,7 +79,7 @@ def test_generation_bundle_uses_user_search_model_for_web_route(monkeypatch):
     assert bundle.model == "user-gen-model"
     assert bundle.route_meta["model_role"] == "main_writer"
     assert bundle.route_meta["native_web_search"] is False
-    assert bundle.route_meta["web_evidence_summary"] == {"fact_count": 0, "gap_count": 0, "model": "", "role": "web_search", "cached": False, "error": ""}
+    assert bundle.route_meta["web_evidence_summary"] == {"fact_count": 0, "gap_count": 0, "model": "", "role": "", "cached": False, "error": ""}
 
 
 def test_generation_bundle_web_enabled_keeps_main_writer(monkeypatch):

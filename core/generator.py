@@ -62,8 +62,8 @@ SYSTEM_PROMPT = """你是项目申报文档撰写专家。严格规则：
 3. 直接输出正文，不加「以下是…」前缀。
 4. 知识库与网络冲突时，以知识库为准。"""
 
-SYSTEM_PROMPT_WEB_CREATIVE = """你是项目申报文档撰写专家（联网创意模式，本请求已开启内置联网检索）：
-1. 综合【参考资料】与联网检索到的公开信息完成正文，写满约订字数；不要用「资料未载明」「资料未提供」「未提供」等占位句敷衍。
+SYSTEM_PROMPT_WEB_CREATIVE = """你是项目申报文档撰写专家（联网创意模式，联网证据已预注入下方【联网证据】区块）：
+1. 综合【参考资料】与【联网证据】区块中预注入的公开信息完成正文，写满约订字数；不要用「资料未载明」「资料未提供」「未提供」等占位句敷衍。
 2. 禁止 Markdown（#、**、列表符），用普通段落和中文标点。
 3. 直接输出正文，不加「以下是…」前缀。
 4. 知识库与联网结果冲突时以知识库为准；无确切依据时不得编造机构全称、ISIN、费率、合同编号、精确日期等。"""
@@ -75,8 +75,8 @@ SYSTEM_PROMPT_EN = """You are an expert writer for project application documents
 4. If the knowledge base conflicts with web information, rely on the knowledge base.
 5. Write all generated project document content in English."""
 
-SYSTEM_PROMPT_WEB_CREATIVE_EN = """You are an expert writer for project application documents in web-assisted creative mode. Built-in web search is enabled for this request.
-1. Use [Reference Materials] together with public information retrieved through web search to complete the body text and meet the approximate word target. Do not use filler phrases such as "not specified in the materials", "not provided", or similar placeholders.
+SYSTEM_PROMPT_WEB_CREATIVE_EN = """You are an expert writer for project application documents in web-assisted creative mode. Web evidence has been pre-injected into the [联网证据] block below.
+1. Use [Reference Materials] together with the pre-injected web evidence in the [联网证据] block to complete the body text and meet the approximate word target. Do not use filler phrases such as "not specified in the materials", "not provided", or similar placeholders.
 2. Do not use Markdown (#, *, or list markers). Use plain paragraphs and standard English punctuation.
 3. Output the document body directly. Do not add prefixes such as "The following is...".
 4. If the knowledge base conflicts with web results, rely on the knowledge base. Without reliable evidence, do not fabricate organization names, ISINs, fees, contract numbers, exact dates, or similar precise facts.
@@ -149,12 +149,12 @@ def _web_gen_prompt_parts(
         sys_t = SYSTEM_PROMPT_WEB_CREATIVE_EN if lang == "en" else SYSTEM_PROMPT_WEB_CREATIVE
         if has_kb_hit:
             kb = (
-                "\n【已提供知识库检索片段；可同时使用内置联网检索补充。"
+                "\n【已提供知识库检索片段；【联网证据】区块已包含联网检索结果，可一并参考补充。"
                 "二者未覆盖处请用概括性表述写全，勿反复堆砌「资料未载明」。】"
             )
         else:
             kb = (
-                "\n【知识库无命中；请充分使用内置联网检索与合理概括完成正文，"
+                "\n【知识库无命中；请充分参考【联网证据】区块中的联网检索结果并以合理概括完成正文，"
                 "勿用「资料未载明」「未提供」等占篇幅；具体编码、费率、精确日期无据时仍勿编造。】"
             )
         return True, sys_t, kb, PARA_CLOSING_CREATIVE, TABLE_CLOSING_CREATIVE
@@ -193,6 +193,18 @@ class GenerationBundle:
     route_meta: Dict[str, Any]
     ref_texts: str
     evidence_refs: List[str]
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to route_meta for convenience."""
+        try:
+            rm = object.__getattribute__(self, "route_meta")
+        except AttributeError:
+            raise AttributeError(name) from None
+        if name in rm:
+            return rm[name]
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
 
 
 class QuotaExceededError(RuntimeError):
@@ -322,14 +334,6 @@ class ContentGenerator:
         elif tier in ("small_rag", "table_cell_fast"):
             models.extend(
                 [
-                    getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
-                    getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
-                ]
-            )
-        elif tier == "vision_web":
-            models.extend(
-                [
-                    getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
                     getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
                 ]
             )
@@ -689,6 +693,22 @@ class ContentGenerator:
         )
         vision_block = format_template_vision_block(task)
 
+        # Firecrawl web evidence → inject into ref_texts before user-msg formatting
+        if use_plus:
+            try:
+                web_result = fetch_web_evidence(
+                    self._get_client(), task,
+                    user_id=self._user_id, cache=self._web_cache,
+                )
+                if web_result.facts and not web_result.error:
+                    _lines: list[str] = []
+                    for fact in web_result.facts:
+                        _src = f" 来源：{fact.source}" if fact.source else ""
+                        _lines.append(f"- {fact.claim}{_src}")
+                    ref_texts = ref_texts + "\n\n【联网证据】\n" + "\n".join(_lines)
+            except Exception as exc:
+                _LOG.warning("firecrawl_inject_error task_id=%s err=%s", task.task_id, exc)
+
         if task.task_type == "table_cell":
             table_ctx_block = (
                 "\n【本格表格上下文】\n" + (table_context or "").strip() + "\n"
@@ -731,11 +751,10 @@ class ContentGenerator:
 
         extra_body: Dict[str, Any] = {}
         if use_plus:
-            extra_body["enable_search"] = True
-            model = self._model_for_module("search", config.VISION_WEB_MODEL)
-            temperature = config.TEMP_WEB_GEN
-            generation_tier = "vision_web"
-            model_module = "search"
+            model = self._model_for_module("generation", config.LARGE_LLM_MODEL)
+            temperature = config.TEMP_LARGE_LLM
+            generation_tier = "main_writer_web_evidence"
+            model_module = "generation"
         elif use_small_rag:
             model = self._model_for_module("lightweight", config.SMALL_LLM_MODEL)
             temperature = config.TEMP_SMALL_LLM

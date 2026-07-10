@@ -26,10 +26,10 @@ def test_prepare_chat_request_adds_dashscope_enable_thinking_flag():
         _client("https://dashscope.aliyuncs.com/compatible-mode/v1"),
         force_client=True,
         model="qwen3.7-plus",
-        extra_body={"enable_search": True},
+        extra_body={"custom_hint": True},
     )
 
-    assert kwargs["extra_body"]["enable_search"] is True
+    assert kwargs["extra_body"]["custom_hint"] is True
     assert kwargs["extra_body"]["enable_thinking"] is False
 
 

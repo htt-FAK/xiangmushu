@@ -24,13 +24,6 @@ ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
         "default_model": getattr(config, "FAST_WRITER_MODEL", "") or getattr(config, "SMALL_LLM_MODEL", "") or "qwen3.6-flash",
         "provider_code": "dashscope",
     },
-    "web_search": {
-        "label": "Web search",
-        "description": "Search and extract structured web evidence; not final prose.",
-        "default_model": getattr(config, "WEB_SEARCH_MODEL", "") or getattr(config, "VISION_WEB_MODEL", "") or "qwen3.7-plus",
-        "provider_code": "dashscope",
-        "extra_body": {"enable_search": True},
-    },
     "vision_layout": {
         "label": "Template vision",
         "description": "Template image, screenshot, and layout understanding.",
@@ -60,7 +53,6 @@ ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
 UI_ROLE_KEYS: tuple[str, ...] = (
     "main_writer",
     "fast_writer",
-    "web_search",
     "vision_layout",
     "template_planner",
     "audit_text",
@@ -70,7 +62,6 @@ UI_ROLE_KEYS: tuple[str, ...] = (
 ROLE_LEGACY_SEED_MODULES: dict[str, str] = {
     "main_writer": "generation",
     "fast_writer": "lightweight",
-    "web_search": "search",
     "vision_layout": "vision",
     "template_planner": "lightweight",
     "audit_text": "audit",
@@ -98,7 +89,6 @@ SUPPORTED_PROVIDER_CODES: tuple[str, ...] = ("dashscope", "deepseek", "mimo")
 ROLE_PROVIDER_MATRIX: dict[str, tuple[str, ...]] = {
     "main_writer": ("dashscope", "deepseek", "mimo"),
     "fast_writer": ("dashscope", "deepseek", "mimo"),
-    "web_search": ("dashscope", "mimo"),
     "vision_layout": ("dashscope", "mimo"),
     "template_planner": ("dashscope", "deepseek", "mimo"),
     "audit_text": ("dashscope", "deepseek", "mimo"),
@@ -114,7 +104,6 @@ STRICT_PROVIDER_ROLE_MODELS: dict[str, dict[str, tuple[str, ...]]] = {
     "mimo": {
         "main_writer": ("mimo-v2.5-pro", "mimo-v2.5"),
         "fast_writer": ("mimo-v2.5",),
-        "web_search": ("mimo-v2.5-pro", "mimo-v2.5"),
         "vision_layout": ("mimo-v2.5",),
         "template_planner": ("mimo-v2.5-pro", "mimo-v2.5"),
         "audit_text": ("mimo-v2.5-pro", "mimo-v2.5"),
@@ -223,7 +212,6 @@ def role_seed_model_ids(role: str) -> list[str]:
     curated: dict[str, list[str]] = {
         "main_writer": ["qwen3.7-plus", "deepseek-v4-pro", "deepseek-v4-flash", "mimo-v2.5-pro", "mimo-v2.5"],
         "fast_writer": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5"],
-        "web_search": ["qwen3.7-plus", "mimo-v2.5-pro", "mimo-v2.5"],
         "vision_layout": ["qwen3.7-plus", "mimo-v2.5"],
         "template_planner": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro", "mimo-v2.5"],
         "audit_text": ["qwen3.6-flash", "deepseek-v4-flash", "mimo-v2.5-pro", "mimo-v2.5"],
@@ -239,8 +227,6 @@ def _capabilities_for_seed_role(role: str) -> list[str]:
     role_key = str(role or "").strip()
     if role_key == "embedding":
         return ["embedding"]
-    if role_key == "web_search":
-        return ["text", "search", "streaming"]
     if role_key == "vision_layout":
         return ["text", "vision"]
     if role_key in {"main_writer", "fast_writer"}:
@@ -485,10 +471,6 @@ def _catalog_rows_for_user(user_id: int | None) -> list[dict[str, Any]]:
                 filtered.append(item)
             continue
         if provider_code == "mimo":
-            if role == "web_search":
-                if gates["mimo_search"]:
-                    filtered.append(item)
-                continue
             if gates["mimo"]:
                 filtered.append(item)
     return filtered

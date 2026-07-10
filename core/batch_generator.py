@@ -336,12 +336,12 @@ def batch_generate_table_row(
         )
         return None
 
+    # enable_search is legacy (always False after Firecrawl T9); label kept for log continuity
     _LOG.info(
-        "batch_table_row done: model=%s cells=%d sim=%.2f fast=%s web=%s",
+        "batch_table_row done: model=%s cells=%d sim=%.2f fast=%s",
         model,
         len(tasks),
         evidence.best_similarity or 0,
         batch_fast,
-        bool(extra_body.get("enable_search")),
     )
     return result

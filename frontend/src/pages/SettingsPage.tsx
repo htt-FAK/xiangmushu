@@ -7,7 +7,7 @@ import { useI18n } from "../i18n";
 import { flattenModelOptions as flattenOptions, preferredModel } from "../models";
 import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap, ProviderApiKeyStatus } from "../types";
 
-const MODEL_ROLE_ORDER = ["main_writer", "web_search", "fast_writer", "vision_layout", "template_planner", "audit_text"];
+const MODEL_ROLE_ORDER = ["main_writer", "fast_writer", "vision_layout", "template_planner", "audit_text"];
 type ApiKeyStage = "idle" | "validating" | "saving" | "saved" | "failed";
 type ProviderCode = "dashscope" | "deepseek" | "mimo";
 

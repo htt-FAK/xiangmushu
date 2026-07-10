@@ -123,10 +123,9 @@ export default function GeneratePage() {
     return [
       choices.main_writer,
       choices.fast_writer,
-      enableWeb ? choices.web_search : null,
       enableAudit ? choices.audit_text : null,
     ];
-  }, [enableAudit, enableWeb, session.modelChoices]);
+  }, [enableAudit, session.modelChoices]);
 
   const { hasValidatedKey } = useApiKeyStatus(selectedProviderModels);
 
@@ -227,7 +226,7 @@ export default function GeneratePage() {
   };
 
   const providerWarning = useMemo(() => {
-    const keys = ["main_writer", "fast_writer", "web_search", "template_planner", "audit_text"];
+    const keys = ["main_writer", "fast_writer", "template_planner", "audit_text"];
     for (const key of keys) {
       const text = preferenceWarnings[key];
       if (text) return text;

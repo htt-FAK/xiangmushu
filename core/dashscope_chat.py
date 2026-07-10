@@ -1,5 +1,8 @@
 """百炼/DeepSeek compatible-mode：chat 请求统一关闭深度思考。
 
+Native enable_search injection was removed — Firecrawl pre-injects web
+evidence into the prompt; we no longer toggle enable_search on DashScope.
+
 DeepSeek 模型（deepseek-v4-pro）：禁用 thinking（{"thinking": {"type": "disabled"}}）。
 百炼模型（qwen 系列）：enable_thinking=False。
 网关优先时：可恢复类错误自动回落到百炼 compatible-mode（须配置 DASHSCOPE_API_KEY）。"""
@@ -142,14 +145,11 @@ def _is_enable_thinking_rejected(exc: BaseException) -> bool:
     )
 
 
-def _kwargs_for_dashscope_backup(kwargs: dict[str, Any], *, for_enable_search: bool) -> dict[str, Any]:
-    """回落百炼：去掉 enable_thinking；联网档强制 VISION_WEB_MODEL（Qwen + enable_search）。"""
+def _kwargs_for_dashscope_backup(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Fallback to DashScope backup: strip enable_thinking; preserve existing extra_body."""
     bk = dict(kwargs)
     extra = dict(bk.pop("extra_body", None) or {})
     extra.pop("enable_thinking", None)
-    if for_enable_search:
-        extra["enable_search"] = True
-        bk["model"] = config.VISION_WEB_MODEL
     if extra:
         bk["extra_body"] = extra
     else:
@@ -162,9 +162,7 @@ def _is_cross_provider_model(model: str) -> bool:
     return mid.startswith("deepseek") or mid.startswith("mimo-")
 
 
-def _dashscope_fallback_model(model: str, *, for_enable_search: bool) -> str:
-    if for_enable_search:
-        return str(config.VISION_WEB_MODEL or "qwen3.6-flash")
+def _dashscope_fallback_model(model: str) -> str:
     if _is_cross_provider_model(model):
         return str(getattr(config, "MAIN_WRITER_MODEL", "") or "qwen3.7-plus")
     return model
@@ -254,7 +252,7 @@ def chat_completions_create(client: Any, **kwargs: Any):
     allow_backup = allow_backup_fallback and (
         allow_cross_provider_fallback or not _is_cross_provider_model(original_model)
     )
-    fallback_model = _dashscope_fallback_model(original_model, for_enable_search=enable_search)
+    fallback_model = _dashscope_fallback_model(original_model)
 
     try:
         resp = _create_on_client(client, kwargs, extra)
@@ -266,10 +264,7 @@ def chat_completions_create(client: Any, **kwargs: Any):
             _LOG.error("主通道返回错误内容，尝试切换备用通道")
             if allow_backup and backup is not None and backup is not client:
                 try:
-                    backup_kwargs = _kwargs_for_dashscope_backup(
-                        kwargs,
-                        for_enable_search=enable_search,
-                    )
+                    backup_kwargs = _kwargs_for_dashscope_backup(kwargs)
                     backup_kwargs["model"] = fallback_model
                     backup_resp = _create_on_client(
                         backup,
@@ -297,10 +292,7 @@ def chat_completions_create(client: Any, **kwargs: Any):
                 "chat 主通道空回复 (model=%s)，切换百炼 compatible-mode 重试",
                 kwargs.get("model"),
             )
-            backup_kwargs = _kwargs_for_dashscope_backup(
-                kwargs,
-                for_enable_search=enable_search,
-            )
+            backup_kwargs = _kwargs_for_dashscope_backup(kwargs)
             backup_kwargs["model"] = fallback_model
             return _create_on_client(backup, backup_kwargs, extra)
         return resp
@@ -328,7 +320,7 @@ def chat_completions_create(client: Any, **kwargs: Any):
                 e,
                 config.VISION_WEB_MODEL,
             )
-            backup_kwargs = _kwargs_for_dashscope_backup(kwargs, for_enable_search=True)
+            backup_kwargs = _kwargs_for_dashscope_backup(kwargs)
             backup_kwargs["model"] = fallback_model
             return _create_on_client(backup, backup_kwargs, extra)
         if not _is_retryable(e):
@@ -344,6 +336,6 @@ def chat_completions_create(client: Any, **kwargs: Any):
             type(e).__name__,
             e,
         )
-        backup_kwargs = _kwargs_for_dashscope_backup(kwargs, for_enable_search=False)
+        backup_kwargs = _kwargs_for_dashscope_backup(kwargs)
         backup_kwargs["model"] = fallback_model
         return _create_on_client(backup, backup_kwargs, extra)

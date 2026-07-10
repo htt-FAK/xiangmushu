@@ -247,30 +247,13 @@ def test_model_options_map_filters_supplemental_providers_by_user_keys(monkeypat
                 "provider_name": "DeepSeek",
                 "config": {},
             },
-            {
-                "id": 3,
-                "role": "web_search",
-                "model": "mimo-v2.5-pro",
-                "display_name": "MiMo V2.5 Pro",
-                "provider_id": 12,
-                "provider_code": "mimo",
-                "provider_name": "Xiaomi MiMo",
-                "config": {},
-            },
         ],
     )
     monkeypatch.setattr(provider_registry, "load_user_model_choices", lambda user_id: {})
-    monkeypatch.setattr(
-        provider_registry,
-        "_user_provider_gate",
-        lambda user_id: {"dashscope": True, "deepseek": False, "mimo": True, "mimo_search": False},
-    )
 
     options = provider_registry.model_options_map_for_user(7)
 
     assert [item["model"] for item in options["main_writer"]["options"]] == ["qwen3.7-plus"]
-    if "web_search" in options and "options" in options["web_search"]:
-        assert all(item["provider_code"] != "mimo" for item in options["web_search"]["options"])
 
 
 def test_validation_candidate_models_excludes_disabled_legacy_rows(monkeypatch):

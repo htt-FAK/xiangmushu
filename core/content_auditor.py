@@ -109,6 +109,7 @@ class ContentAuditor:
         route_meta: Dict[str, Any],
     ) -> AuditResult:
         meta_brief = {
+            # Legacy: always False after Firecrawl migration (T9). Kept for trace compatibility.
             "native_web_search": route_meta.get("native_web_search"),
             "kb_hits": route_meta.get("kb_hits"),
             "task_type": task.task_type,

@@ -12,7 +12,6 @@ from core.provider_registry import (
 
 MAIN_WRITER = "main_writer"
 FAST_WRITER = "fast_writer"
-WEB_SEARCH = "web_search"
 VISION_LAYOUT = "vision_layout"
 TEMPLATE_PLANNER = "template_planner"
 AUDIT_TEXT = "audit_text"
@@ -22,7 +21,6 @@ EMBEDDING = "embedding"
 LEGACY_MODULE_TO_ROLE: dict[str, str] = {
     "generation": MAIN_WRITER,
     "lightweight": FAST_WRITER,
-    "search": WEB_SEARCH,
     "vision": VISION_LAYOUT,
     "audit": AUDIT_TEXT,
 }
@@ -30,7 +28,6 @@ LEGACY_MODULE_TO_ROLE: dict[str, str] = {
 ROLE_TO_LEGACY_MODULE: dict[str, str] = {
     MAIN_WRITER: "generation",
     FAST_WRITER: "lightweight",
-    WEB_SEARCH: "search",
     VISION_LAYOUT: "vision",
     TEMPLATE_PLANNER: "lightweight",
     AUDIT_TEXT: "audit",
@@ -128,23 +125,6 @@ def model_roles() -> dict[str, ModelRoleProfile]:
             temperature=getattr(config, "TEMP_SMALL_LLM", None),
             legacy_module="lightweight",
             legacy_config_keys=("SMALL_LLM_MODEL", "BATCH_TABLE_FAST_MODEL"),
-        ),
-        WEB_SEARCH: ModelRoleProfile(
-            role=WEB_SEARCH,
-            label="Web search",
-            description="Search and extract structured web evidence; not final prose.",
-            default_model=getattr(config, "WEB_SEARCH_MODEL", "")
-            or getattr(config, "VISION_WEB_MODEL", "")
-            or "qwen3.7-plus",
-            fallback_models=(
-                getattr(config, "WEB_SEARCH_FALLBACK_MODEL_1", ""),
-                getattr(config, "VISION_WEB_FALLBACK_MODEL", ""),
-                getattr(config, "SMALL_LLM_FALLBACK_MODEL", ""),
-            ),
-            temperature=getattr(config, "TEMP_WEB_GEN", None),
-            extra_body={"enable_search": True},
-            legacy_module="search",
-            legacy_config_keys=("VISION_WEB_MODEL",),
         ),
         VISION_LAYOUT: ModelRoleProfile(
             role=VISION_LAYOUT,

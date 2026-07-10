@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.model_router import MAIN_WRITER, WEB_SEARCH, available_models_for_role, resolve_model_profile
+from core.model_router import MAIN_WRITER, resolve_model_profile
 
 
 def test_main_writer_defaults_to_qwen37_plus(monkeypatch):
@@ -49,12 +49,3 @@ def test_fallback_chain_is_deduplicated(monkeypatch):
 
     assert profile.model_chain == ["same-model", "fallback", "qwen3.7-max"]
 
-
-def test_web_search_profile_sets_enable_search(monkeypatch):
-    monkeypatch.setattr("core.model_router._model_choices_for_user", lambda user_id: {})
-
-    profile = resolve_model_profile(WEB_SEARCH, user_id=7)
-
-    assert profile.role == WEB_SEARCH
-    assert profile.extra_body["enable_search"] is True
-    assert "qwen3.7-plus" in available_models_for_role(WEB_SEARCH)

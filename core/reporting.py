@@ -60,6 +60,7 @@ def build_generation_trace(
         kb_hits=int(route_meta.get("kb_hits") or 0),
         weak_kb=bool(route_meta.get("weak_kb")),
         low_similarity=bool(route_meta.get("low_similarity")),
+        # Legacy: always False after Firecrawl migration (T9). Kept for trace compatibility.
         native_web_search=bool(route_meta.get("native_web_search")),
         web_evidence_used=bool(route_meta.get("web_evidence_used")),
         web_evidence_summary=dict(route_meta.get("web_evidence_summary") or {}),
