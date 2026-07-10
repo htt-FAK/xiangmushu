@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchApiKeyStatus } from "./api";
 import { hasValidatedModelProvider } from "./models";
 import type { ApiKeyStatus } from "./types";
@@ -10,8 +10,12 @@ import type { ApiKeyStatus } from "./types";
 export function useApiKeyStatus(selectedModels: Array<string | null | undefined> = []) {
   const [hasValidatedKey, setHasValidatedKey] = useState(false);
   const [status, setStatus] = useState<ApiKeyStatus | null>(null);
+  const lastRefreshRef = useRef(0);
 
   const refresh = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRefreshRef.current < 2000) return;
+    lastRefreshRef.current = now;
     fetchApiKeyStatus()
       .then((nextStatus) => {
         setStatus(nextStatus);

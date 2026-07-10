@@ -18,6 +18,7 @@ MIMO_PLUGIN_URL = "https://platform.xiaomimimo.com/console/plugin?userId=2933868
 # mimo 模型，避免拿 qwen 的模型名去 deepseek/mimo 端点探测而误判。
 PROVIDER_FALLBACK_MODELS: dict[str, list[str]] = {
     "dashscope": [
+        "qwen3.7-plus",
         "qwen-plus",
         "qwen3.6-35b-a3b",
         "qwen-max",

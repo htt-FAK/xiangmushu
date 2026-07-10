@@ -23,10 +23,7 @@ export function PullToRefresh({ children }: { children: React.ReactNode }) {
     if (delta > 0 && window.scrollY <= 0) {
       // Dampen the pull
       setPullDistance(Math.min(delta * 0.5, MAX_PULL));
-      // Prevent default scroll when pulling
-      if (delta > 10) {
-        e.preventDefault();
-      }
+      // passive listener — cannot preventDefault
     }
   }, [pulling, refreshing]);
 
@@ -46,7 +43,7 @@ export function PullToRefresh({ children }: { children: React.ReactNode }) {
     if (window.innerWidth >= 1024) return;
 
     document.addEventListener("touchstart", handleTouchStart, { passive: true });
-    document.addEventListener("touchmove", handleTouchMove, { passive: false });
+    document.addEventListener("touchmove", handleTouchMove, { passive: true });
     document.addEventListener("touchend", handleTouchEnd, { passive: true });
 
     return () => {
@@ -73,7 +70,7 @@ export function PullToRefresh({ children }: { children: React.ReactNode }) {
       )}
       <div
         ref={containerRef}
-        className="transition-transform duration-100"
+        className="transition-transform duration-100 will-change-transform"
         style={{ transform: pullDistance > 0 ? `translateY(${pullDistance}px)` : undefined }}
       >
         {children}

@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Database,
+  Github,
   History,
   FileSearch,
   Home,
@@ -110,6 +111,12 @@ function Shell() {
 
   // Secondary destinations surfaced in the mobile "More" bottom sheet.
   const moreSheetItems = [
+    {
+      href: "https://github.com/Leonxlnx/xiangmushu",
+      icon: Github,
+      labelKey: "nav.github",
+      isExternal: true,
+    },
     { to: "/template", labelKey: "nav.template", icon: FileSearch },
     { to: "/knowledge", labelKey: "nav.knowledge", icon: Database },
     { to: "/settings", labelKey: "nav.settings", icon: Settings },
@@ -126,11 +133,11 @@ function Shell() {
   return (
     <div className="min-h-screen bg-night-950 text-slate-100">
       <OfflineBanner />
-      <div className="fixed inset-0 -z-10 bg-[linear-gradient(115deg,#05060a_0%,#09111d_44%,#111019_100%)]" />
-      <div className="fixed inset-0 -z-10 opacity-45 grid-mask" />
-      <div className="fixed inset-x-0 top-0 -z-10 h-64 bg-[linear-gradient(90deg,rgba(54,242,230,0.16),rgba(255,77,141,0.08),rgba(184,255,94,0.10))]" />
+      <div className="fixed inset-0 -z-10 bg-[linear-gradient(115deg,#05060a_0%,#09111d_44%,#111019_100%)]" style={{ willChange: "transform" }} />
+      <div className="fixed inset-0 -z-10 opacity-45 grid-mask" style={{ willChange: "transform" }} />
+      <div className="fixed inset-x-0 top-0 -z-10 h-64 bg-[linear-gradient(90deg,rgba(54,242,230,0.16),rgba(255,77,141,0.08),rgba(184,255,94,0.10))]" style={{ willChange: "transform" }} />
 
-      <aside className="fixed bottom-0 left-0 top-0 z-20 hidden w-72 border-r border-white/10 bg-night-900/88 px-5 py-6 backdrop-blur-xl lg:block">
+      <aside className="fixed bottom-0 left-0 top-0 z-20 hidden w-72 border-r border-white/10 bg-night-900 px-5 py-6 lg:block">
         <div className="mb-9 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center border border-signal-cyan/50 bg-signal-cyan text-night-950">
             <PanelLeft size={21} />
@@ -143,7 +150,7 @@ function Shell() {
           </div>
         </div>
 
-        <nav className="space-y-2">
+        <div className="space-y-2">
           {nav.map((item) => {
             const Icon = item.icon;
             return (
@@ -181,7 +188,20 @@ function Shell() {
               {t("nav.admin")}
             </NavLink>
           )}
-        </nav>
+          <a
+            href="https://github.com/Leonxlnx/xiangmushu"
+            target="_blank"
+            rel="noreferrer noopener"
+            aria-label="GitHub repository"
+            className={clsx(
+              "flex min-h-12 items-center gap-3 border px-4 text-sm font-semibold transition",
+              "border-white/5 bg-white/[0.025] text-slate-400 hover:border-white/20 hover:text-white hover:text-signal-cyan/80",
+            )}
+          >
+            <Github size={18} />
+            {t("nav.github", "GitHub")}
+          </a>
+        </div>
 
         <div className="absolute bottom-6 left-5 right-5 space-y-3">
           <div className="border border-white/10 bg-night-950/70 p-4">
@@ -200,7 +220,7 @@ function Shell() {
       </aside>
 
       <div className="lg:pl-72">
-        <header className="sticky top-0 z-30 border-b border-white/10 bg-night-950/90 px-4 py-2.5 backdrop-blur-md lg:hidden">
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-night-950 px-4 py-2.5 lg:hidden">
           <div className="flex min-h-10 items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate font-display text-[15px] font-semibold leading-tight text-white">
@@ -279,7 +299,7 @@ function Shell() {
         </main>
         </PullToRefresh>
 
-        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-night-950/92 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-1.5 backdrop-blur-md lg:hidden">
+        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-night-950 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-1.5 lg:hidden">
           <div className="grid grid-cols-4 gap-1">
             {mobileBarItems.map((item) => {
               const Icon = item.icon;
@@ -324,10 +344,10 @@ function Shell() {
             <button
               type="button"
               aria-label={t("generate.close")}
-              className="absolute inset-0 cursor-default bg-night-950/80 backdrop-blur-sm"
+              className="absolute inset-0 cursor-default bg-night-950"
               onClick={() => setMoreOpen(false)}
             />
-            <div className="absolute inset-x-0 bottom-0 border-t border-white/10 bg-night-900/95 pb-[max(env(safe-area-inset-bottom),0.5rem)] shadow-panel backdrop-blur-xl">
+            <div className="absolute inset-x-0 bottom-0 border-t border-white/10 bg-night-900 pb-[max(env(safe-area-inset-bottom),0.5rem)] shadow-panel">
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
                 <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-cyan">
                   {t("nav.more")}
@@ -344,10 +364,29 @@ function Shell() {
               <div className="grid grid-cols-2 gap-2 p-3">
                 {moreSheetItems.map((item) => {
                   const Icon = item.icon;
+                  if (item.isExternal && "href" in item) {
+                    return (
+                      <a
+                        key={item.href}
+                        href={item.href}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        aria-label={t(item.labelKey, "GitHub")}
+                        onClick={() => setMoreOpen(false)}
+                        className={clsx(
+                          "flex min-h-14 flex-col items-center justify-center gap-1.5 border px-3 text-sm font-semibold transition",
+                          "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white hover:text-signal-cyan/80",
+                        )}
+                      >
+                        <Icon size={20} />
+                        <span className="whitespace-nowrap">{t("nav.github", "GitHub")}</span>
+                      </a>
+                    );
+                  }
                   return (
                     <NavLink
-                      key={item.to}
-                      to={item.to}
+                      key={(item as { to: string }).to}
+                      to={(item as { to: string }).to}
                       onClick={() => setMoreOpen(false)}
                       className={({ isActive }) =>
                         clsx(
