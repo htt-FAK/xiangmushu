@@ -133,6 +133,12 @@ function Shell() {
   return (
     <div className="min-h-screen bg-night-950 text-slate-100">
       <OfflineBanner />
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:border focus:border-signal-cyan/50 focus:bg-night-900 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-signal-cyan focus:shadow-glow"
+      >
+        Skip to content
+      </a>
       <div className="fixed inset-0 -z-10 bg-[linear-gradient(115deg,#05060a_0%,#09111d_44%,#111019_100%)]" style={{ willChange: "transform" }} />
       <div className="fixed inset-0 -z-10 opacity-45 grid-mask" style={{ willChange: "transform" }} />
       <div className="fixed inset-x-0 top-0 -z-10 h-64 bg-[linear-gradient(90deg,rgba(54,242,230,0.16),rgba(255,77,141,0.08),rgba(184,255,94,0.10))]" style={{ willChange: "transform" }} />
@@ -277,7 +283,7 @@ function Shell() {
           </div>
         )}
         <PullToRefresh>
-        <main className="mx-auto w-full max-w-7xl px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] pt-5 overscroll-y-contain md:px-8 md:pb-10 md:pt-10">
+        <main id="main-content" className="mx-auto w-full max-w-7xl px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] pt-5 overscroll-y-contain md:px-8 md:pb-10 md:pt-10">
           <Suspense
             fallback={
               <div className="py-12 text-sm font-semibold tracking-widest text-slate-400 uppercase">

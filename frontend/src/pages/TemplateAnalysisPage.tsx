@@ -92,14 +92,15 @@ function ModelSelect({
 }
 
 function BillingStrip({ records }: { records: BillingRecord[] }) {
+  const { t } = useI18n();
   const input = records.reduce((sum, item) => sum + (item.input_tokens || 0), 0);
   const output = records.reduce((sum, item) => sum + (item.output_tokens || 0), 0);
   const cost = records.reduce((sum, item) => sum + (item.cost_cny || 0), 0);
   return (
     <div className="grid grid-cols-3 gap-3">
-      <Stat label="输入 Tokens" value={input} tone="cyan" />
-      <Stat label="输出 Tokens" value={output} tone="lime" />
-      <Stat label="费用 (元)" value={cost.toFixed(6)} tone="amber" />
+      <Stat label={t("template.statInputTokens")} value={input} tone="cyan" />
+      <Stat label={t("template.statOutputTokens")} value={output} tone="lime" />
+      <Stat label={t("template.statCostCny")} value={cost.toFixed(6)} tone="amber" />
     </div>
   );
 }
@@ -208,11 +209,11 @@ export default function TemplateAnalysisPage() {
       setTemplates(next);
       setSelectedTemplate((current) => current || next[0]?.name || "");
     } catch (err) {
-      setError(normalizeErrorMessage(err, "加载模板列表失败。"));
+      setError(normalizeErrorMessage(err, t("template.loadListError")));
     } finally {
       setListLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refreshTemplates();
@@ -229,8 +230,8 @@ export default function TemplateAnalysisPage() {
         setVisionModel((current) => pickModel(nextVisionModels, current));
         setPlannerModel((current) => pickModel(nextPlannerModels, current));
       })
-      .catch((err: unknown) => setError(normalizeErrorMessage(err, "加载模型选项配置失败。")));
-  }, [refreshTemplates]);
+      .catch((err: unknown) => setError(normalizeErrorMessage(err, t("template.loadModelsError"))));
+  }, [refreshTemplates, t]);
 
   useEffect(() => {
     const active = workflowState.templateAnalysis.session;
@@ -252,7 +253,7 @@ export default function TemplateAnalysisPage() {
         if (result.session_id && result.session?.status === "running") {
           ensureTemplateStream(result.session_id, result.session.last_seq);
         }
-        throw new Error(result.message || "分析模板的请求未被系统接纳。");
+        throw new Error(result.message || t("template.rejectedError"));
       }
       setFile(null);
       setTemplatePendingFile("");
@@ -287,7 +288,7 @@ export default function TemplateAnalysisPage() {
         setTemplateAnalysisSession(null);
       }
     } catch (err) {
-      setError(normalizeErrorMessage(err, "删除模板失败。"));
+      setError(normalizeErrorMessage(err, t("template.deleteError")));
     } finally {
       setDeleting("");
     }

@@ -320,7 +320,7 @@ export default function GeneratePage() {
           <h1 className="mt-1 break-words font-display text-2xl font-semibold leading-tight text-white md:text-3xl">
             {t("generate.title")}
           </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{t("generate.description")}</p>
+          <p className="mt-2 max-w-[65ch] text-sm leading-6 text-slate-400">{t("generate.description")}</p>
         </div>
         <div className="grid grid-cols-[1fr_auto] gap-2 xl:w-[360px]">
           <Button

@@ -160,7 +160,7 @@ export default function KnowledgeBasePage() {
                   onChange={(event) => setLabel(event.target.value)}
                 />
               </Field>
-              <Field label="标识符 (Slug)">
+              <Field label={t("knowledge.slugLabel")}>
                 <Input
                   value={slug}
                   placeholder="project_kb"
@@ -251,7 +251,7 @@ export default function KnowledgeBasePage() {
                   <div key={result.file} className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
                     <span className="min-w-0 break-all text-slate-300">{result.file}</span>
                     <span className={result.ok ? "text-signal-lime" : "break-words text-signal-rose"}>
-                      {result.ok ? `${result.chunks ?? 0} 个切片` : result.error}
+                      {result.ok ? t("knowledge.chunks", result.chunks ?? 0) : result.error}
                     </span>
                   </div>
                 ))}

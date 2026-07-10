@@ -99,7 +99,7 @@ export default function HistoryPage() {
 
   const selected = articles.find((item) => item.id === selectedId) ?? articles[0];
   const hasFilters = Boolean(query.trim()) || status !== "all";
-  const emptyMessage = hasFilters ? "没有符合当前筛选条件的历史记录。" : t("history.empty");
+  const emptyMessage = hasFilters ? t("history.filterEmpty") : t("history.empty");
 
   return (
     <div className="space-y-4 md:space-y-5">
@@ -111,7 +111,7 @@ export default function HistoryPage() {
           <h1 className="break-words font-display text-2xl font-semibold text-white md:text-3xl">
             {t("history.title")}
           </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">{t("history.description")}</p>
+          <p className="mt-2 max-w-[65ch] text-sm leading-6 text-slate-400">{t("history.description")}</p>
         </div>
         <div
           className={clsx(
@@ -122,7 +122,7 @@ export default function HistoryPage() {
           )}
         >
           <Archive size={16} />
-          {availability.available ? t("history.backendBadge") : "后端服务未连接"}
+          {availability.available ? t("history.backendBadge") : t("history.backendOffline")}
         </div>
       </header>
 
@@ -190,11 +190,11 @@ export default function HistoryPage() {
             {loading ? (
               <div className="flex min-h-28 items-center justify-center text-slate-500">
                 <Loader2 className="mr-2 animate-spin" size={16} />
-                正在加载历史记录...
+                {t("history.loadingRecords")}
               </div>
             ) : !availability.available ? (
               <div className="border border-dashed border-signal-amber/30 bg-night-950 p-5 text-sm text-slate-300">
-                当前无法获取历史记录。
+                {t("history.recordsUnavailable")}
               </div>
             ) : articles.length === 0 ? (
               <div className="border border-dashed border-white/15 bg-night-950 p-5 text-sm text-slate-500">
@@ -226,7 +226,7 @@ export default function HistoryPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                       <span>{formatDate(article.createdAt)}</span>
-                      <span>{formatTokenCount(articleTotalTokens(article))} 字符 (Tokens)</span>
+                      <span>{formatTokenCount(articleTotalTokens(article))} {t("history.charTokenUnit")}</span>
                       <span>{formatHistoryCost(article.costCny)}</span>
                     </div>
                   </button>
@@ -250,10 +250,10 @@ export default function HistoryPage() {
                 ) : (
                   <p className="mt-1 text-sm text-slate-500">
                     {loading
-                      ? "正在加载历史数据..."
+                      ? t("history.loadingDetail")
                       : availability.available
                         ? emptyMessage
-                        : "暂无可选的历史记录。"}
+                        : t("history.noSelectable")}
                   </p>
                 )}
               </div>

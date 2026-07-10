@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { useFocusTrap } from "../hooks";
 import { clsx } from "../utils";
 
 export function PageHeader({
@@ -22,7 +23,7 @@ export function PageHeader({
         <h1 className="break-words font-display text-2xl font-semibold leading-tight text-white md:text-5xl">
           {title}
         </h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 md:mt-4 md:leading-7">{description}</p>
+        <p className="mt-3 max-w-[65ch] text-sm leading-6 text-slate-300 md:mt-4 md:leading-7">{description}</p>
       </div>
       {action && <div className="w-full lg:w-auto">{action}</div>}
     </header>
@@ -37,7 +38,7 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section className={clsx("border border-white/10 bg-white/[0.045] p-4 shadow-panel backdrop-blur md:p-5", className)}>
+    <section className={clsx("border border-white/10 bg-white/[0.045] p-4 shadow-panel md:p-5", className)}>
       {children}
     </section>
   );
@@ -64,7 +65,7 @@ export function Stat({
   return (
     <div className={clsx("min-w-0 border border-white/10 bg-night-850/80 p-3.5 md:p-4", className)}>
       <p className="break-words text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500 md:text-xs md:normal-case md:tracking-normal">{label}</p>
-      <p className={clsx("mt-1.5 truncate font-display text-xl font-semibold leading-tight md:mt-2 md:text-2xl", toneClass)} title={String(value)}>{value}</p>
+      <p className={clsx("mt-1.5 truncate font-display tabular-nums text-xl font-semibold leading-tight md:mt-2 md:text-2xl", toneClass)} title={String(value)}>{value}</p>
     </div>
   );
 }
@@ -88,7 +89,7 @@ export function Button({
   return (
     <button
       className={clsx(
-        "inline-flex min-h-11 items-center justify-center gap-2 border px-4 text-sm font-semibold transition active:scale-[0.97] active:brightness-90 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-45",
+        "inline-flex min-h-11 items-center justify-center gap-2 border px-4 text-sm font-semibold transition active:scale-[0.97] active:brightness-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-cyan/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-45",
         variantClass,
         className,
       )}
@@ -101,7 +102,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   return (
     <input
       className={clsx(
-        "min-h-12 w-full scroll-mb-32 border border-white/10 bg-night-950 px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:scroll-mt-4 md:min-h-11",
+        "min-h-12 w-full scroll-mb-32 border border-white/10 bg-night-950 px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:ring-2 focus:ring-signal-cyan/30 focus:scroll-mt-4 md:min-h-11",
         className,
       )}
       {...props}
@@ -139,7 +140,7 @@ export function ErrorBanner({ message }: { message: string }) {
   if (!message) return null;
   return (
     <div className="mb-5 border border-signal-rose/40 bg-signal-rose/10 px-4 py-3 text-sm text-rose-100">
-      {message}
+      <p className="max-w-[65ch]">{message}</p>
     </div>
   );
 }
@@ -159,8 +160,9 @@ export function DetailOverlay({
   children: ReactNode;
   widthClass?: string;
 }) {
+  const trapRef = useFocusTrap<HTMLDivElement>(true, onClose);
   return (
-    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-night-950/95 backdrop-blur">
+    <div ref={trapRef} className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-night-950/95">
       <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 md:px-6">
         <div className="flex min-w-0 items-start gap-3">
           {icon ? (

@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useI18n } from "../i18n";
 import { clsx } from "../utils";
 
 type ToastTone = "success" | "error" | "info";
@@ -39,6 +40,7 @@ function ToastIcon({ tone }: { tone: ToastTone }) {
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const [items, setItems] = useState<ToastItem[]>([]);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -93,7 +95,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               type="button"
               className="shrink-0 opacity-70 transition hover:opacity-100"
               onClick={() => dismiss(item.id)}
-              aria-label="关闭"
+              aria-label={t("app.close")}
             >
               <X size={16} />
             </button>

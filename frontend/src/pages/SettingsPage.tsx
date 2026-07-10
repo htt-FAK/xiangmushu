@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deleteApiKey, fetchApiKeyStatus, fetchModelOptions, fetchUserPreferences, saveApiKey, testApiKey, updateUserPreferences, validateApiKey } from "../api";
 import { useAuth, type Language } from "../auth";
 import { Button, ErrorBanner, Input, PageHeader, Panel } from "../components/ui";
+import { useFocusTrap } from "../hooks";
 import { useI18n } from "../i18n";
 import { flattenModelOptions as flattenOptions, preferredModel } from "../models";
 import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap, ProviderApiKeyStatus } from "../types";
@@ -13,35 +14,35 @@ type ProviderCode = "dashscope" | "deepseek" | "mimo";
 
 const PROVIDERS: Array<{
   code: ProviderCode;
-  title: string;
-  body: string;
+  titleKey: string;
+  bodyKey: string;
   link: string;
-  linkLabel: string;
-  badge: string;
+  linkLabelKey: string;
+  badgeKey: string;
 }> = [
   {
     code: "dashscope",
-    title: "DashScope / 阿里云百炼",
-    body: "站点基础能力提供方。知识库 embedding、默认文本、默认联网和默认视觉链路都依赖 DashScope。",
+    titleKey: "settings.providerDashscopeTitle",
+    bodyKey: "settings.providerDashscopeBody",
     link: "https://bailian.console.aliyun.com/#/key",
-    linkLabel: "获取 DashScope Key",
-    badge: "基础必需",
+    linkLabelKey: "settings.providerDashscopeLink",
+    badgeKey: "settings.providerDashscopeBadge",
   },
   {
     code: "deepseek",
-    title: "DeepSeek",
-    body: "文本补充 provider。可用于主写作、快速写作、模板规划和文本审核，不参与联网搜索、视觉和 embedding。",
+    titleKey: "settings.providerDeepseekTitle",
+    bodyKey: "settings.providerDeepseekBody",
     link: "https://platform.deepseek.com/api_keys",
-    linkLabel: "获取 DeepSeek Key",
-    badge: "文本补充",
+    linkLabelKey: "settings.providerDeepseekLink",
+    badgeKey: "settings.providerDeepseekBadge",
   },
   {
     code: "mimo",
-    title: "Xiaomi MiMo",
-    body: "文本、联网搜索和视觉补充 provider。按量付费，联网搜索需单独开通插件服务。",
+    titleKey: "settings.providerMimoTitle",
+    bodyKey: "settings.providerMimoBody",
     link: "https://platform.xiaomimimo.com/console/api-keys",
-    linkLabel: "获取 MiMo Key",
-    badge: "文本 / 搜索 / 视觉",
+    linkLabelKey: "settings.providerMimoLink",
+    badgeKey: "settings.providerMimoBadge",
   },
 ];
 
@@ -58,6 +59,7 @@ function ModelSelector({
   onSelect: (moduleKey: string, model: string) => void;
   saving: boolean;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -126,7 +128,7 @@ function ModelSelector({
               </span>
               <span className="ml-2 flex shrink-0 items-center gap-2">
                 {option.recommended ? (
-                  <span className="rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">推荐</span>
+                  <span className="rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">{t("settings.modelRecommended")}</span>
                 ) : null}
                 {selected === option.model ? <Check size={14} className="text-signal-lime" /> : null}
               </span>
@@ -138,11 +140,15 @@ function ModelSelector({
   );
 }
 
-function providerStatusText(status: ProviderApiKeyStatus | undefined, loading: boolean) {
-  if (loading) return "加载中...";
-  if (!status?.has_key) return "未保存";
-  if (status.validated) return "已验证";
-  return "已保存，待验证";
+function providerStatusText(
+  status: ProviderApiKeyStatus | undefined,
+  loading: boolean,
+  t: (key: string, ...args: Array<string | number>) => string,
+) {
+  if (loading) return t("settings.loading");
+  if (!status?.has_key) return t("settings.providerStatusNotSaved");
+  if (status.validated) return t("settings.providerStatusValidated");
+  return t("settings.providerStatusSaved");
 }
 
 export default function SettingsPage() {
@@ -169,6 +175,7 @@ export default function SettingsPage() {
 
   const providerStatuses = status?.providers ?? {};
   const canConfirm = apiKey.trim().length > 0;
+  const dialogTrapRef = useFocusTrap<HTMLDivElement>(dialogOpen, () => setDialogOpen(false));
 
   const refreshModelSettings = useCallback(async () => {
     setModelLoading(true);
@@ -304,7 +311,7 @@ export default function SettingsPage() {
       const next = await testApiKey(providerCode);
       setStatus(next);
       await refreshModelSettings();
-      const message = next.validation?.ok ? "测试通过，可正常调用当前已选模型。" : (next.validation?.message ?? "测试失败");
+      const message = next.validation?.ok ? t("settings.providerTestPass") : (next.validation?.message ?? t("settings.providerTestFail"));
       setProviderTestMessages((prev) => ({ ...prev, [providerCode]: message }));
       if (!next.validation?.ok) {
         setError(message);
@@ -420,10 +427,10 @@ export default function SettingsPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="mb-2 inline-flex items-center border border-white/10 bg-night-950 px-2 py-1 text-[11px] text-slate-400">
-                      {provider.badge}
+                      {t(provider.badgeKey)}
                     </div>
-                    <h2 className="break-words font-display text-xl font-semibold text-white">{provider.title}</h2>
-                    <p className="mt-1 text-sm text-slate-400">{providerStatusText(item, loading)}</p>
+                    <h2 className="break-words font-display text-xl font-semibold text-white">{t(provider.titleKey)}</h2>
+                    <p className="mt-1 text-sm text-slate-400">{providerStatusText(item, loading, t)}</p>
                   </div>
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/12 text-signal-cyan">
                     <KeyRound size={20} />
@@ -437,13 +444,13 @@ export default function SettingsPage() {
                   </div>
                 ) : null}
 
-                <p className="text-sm leading-6 text-slate-300">{provider.body}</p>
+                <p className="text-sm leading-6 text-slate-300">{t(provider.bodyKey)}</p>
                 {provider.code === "mimo" ? (
                   <div className="space-y-2 text-xs leading-5 text-slate-400">
                     <p>Base URL: `https://api.xiaomimimo.com/v1`</p>
-                    <p>按量付费，联网服务单独计费，不包含在 token 价格内。</p>
+                    <p>{t("settings.mimoBillingNote")}</p>
                     <a className="text-signal-cyan underline" href="https://platform.xiaomimimo.com/console/plugin?userId=2933868983" target="_blank" rel="noreferrer">
-                      开通 MiMo 联网搜索插件
+                      {t("settings.mimoPluginLink")}
                     </a>
                   </div>
                 ) : null}
@@ -462,7 +469,7 @@ export default function SettingsPage() {
                       disabled={saving || testingProvider === provider.code}
                     >
                       {testingProvider === provider.code ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
-                      {testingProvider === provider.code ? "测试中" : "一键测试"}
+                      {testingProvider === provider.code ? t("settings.providerTesting") : t("settings.providerRunTest")}
                     </Button>
                   ) : null}
                   <Button className="min-h-12 w-full" variant="danger" onClick={() => void removeKey(provider.code)} disabled={!item?.has_key || saving}>
@@ -475,7 +482,7 @@ export default function SettingsPage() {
                     target="_blank"
                     rel="noreferrer"
                   >
-                    {provider.linkLabel}
+                    {t(provider.linkLabelKey)}
                   </a>
                 </div>
                 {providerTestMessages[provider.code] ? (
@@ -488,11 +495,11 @@ export default function SettingsPage() {
       </div>
 
       {dialogOpen ? (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-night-950/92 px-4 py-6 backdrop-blur">
+        <div ref={dialogTrapRef} className="fixed inset-0 z-50 overflow-y-auto bg-night-950/92 px-4 py-6 backdrop-blur">
           <div className="mx-auto w-full max-w-3xl border border-white/10 bg-night-900 p-4 shadow-panel md:p-5">
             <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-3 md:pb-4">
               <h2 className="break-words font-display text-xl font-semibold text-white md:text-3xl">
-                保存 {PROVIDERS.find((item) => item.code === activeProvider)?.title} API Key
+                {t("settings.saveProviderKey", t(PROVIDERS.find((item) => item.code === activeProvider)?.titleKey ?? ""))}
               </h2>
               <button
                 type="button"
@@ -505,10 +512,10 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-4 space-y-3 text-sm leading-6 text-slate-200">
-              <p>当前 provider：{PROVIDERS.find((item) => item.code === activeProvider)?.title}</p>
-              {activeProvider === "dashscope" ? <p>DashScope 仍是全站基础能力，未保存或未验证时首页、生成页、模板分析页都会保持 missing_key。</p> : null}
-              {activeProvider === "deepseek" ? <p>DeepSeek 仅用于文本角色，不参与联网搜索、视觉和 embedding。</p> : null}
-              {activeProvider === "mimo" ? <p>MiMo 采用按量付费模式，联网搜索需先在插件页开通，否则保存时会返回明确错误。</p> : null}
+              <p>{t("settings.currentProvider", t(PROVIDERS.find((item) => item.code === activeProvider)?.titleKey ?? ""))}</p>
+              {activeProvider === "dashscope" ? <p>{t("settings.dashscopeHint")}</p> : null}
+              {activeProvider === "deepseek" ? <p>{t("settings.deepseekHint")}</p> : null}
+              {activeProvider === "mimo" ? <p>{t("settings.mimoHint")}</p> : null}
             </div>
 
             <div className="mt-6 grid gap-4">
@@ -517,7 +524,7 @@ export default function SettingsPage() {
                 <Input
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
-                  placeholder={activeProvider === "mimo" ? "请输入 Xiaomi MiMo API Key" : activeProvider === "deepseek" ? "请输入 DeepSeek API Key" : "请输入 DashScope API Key"}
+                  placeholder={activeProvider === "mimo" ? t("settings.mimoKeyPlaceholder") : activeProvider === "deepseek" ? t("settings.deepseekKeyPlaceholder") : t("settings.dashscopeKeyPlaceholder")}
                   type="password"
                   autoComplete="off"
                   disabled={saving || apiKeyStage === "saved"}
@@ -526,23 +533,23 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-4 border border-white/10 bg-night-950/65 p-3 text-sm">
-              {apiKeyStage === "idle" ? <p className="text-slate-400">确认后会先验证当前 provider 的 API Key，再执行保存。</p> : null}
+              {apiKeyStage === "idle" ? <p className="text-slate-400">{t("settings.confirmKeyHint")}</p> : null}
               {apiKeyStage === "validating" ? (
                 <p className="inline-flex items-center gap-2 text-signal-cyan">
                   <Loader2 className="animate-spin" size={16} />
-                  正在验证 API Key...
+                  {t("settings.validatingKey")}
                 </p>
               ) : null}
               {apiKeyStage === "saving" ? (
                 <p className="inline-flex items-center gap-2 text-signal-cyan">
                   <Loader2 className="animate-spin" size={16} />
-                  验证通过，正在保存...
+                  {t("settings.savingKey")}
                 </p>
               ) : null}
               {apiKeyStage === "saved" ? (
                 <p className="inline-flex items-center gap-2 text-signal-lime">
                   <Check size={16} />
-                  API Key 已保存。
+                  {t("settings.keySavedDone")}
                 </p>
               ) : null}
               {apiKeyStage === "failed" && validation ? <p className="text-signal-amber">{validation.message}</p> : null}
@@ -558,7 +565,7 @@ export default function SettingsPage() {
                       }`}
                     >
                       <span className="font-mono">{probe.model}</span>
-                      <span className="break-words sm:text-right">{probe.ok ? "可用" : probe.message}</span>
+                      <span className="break-words sm:text-right">{probe.ok ? t("settings.probeAvailable") : probe.message}</span>
                     </div>
                   ))}
                 </div>
@@ -567,11 +574,11 @@ export default function SettingsPage() {
 
             <div className="mt-6 grid gap-3 sm:flex sm:flex-wrap sm:justify-end">
               <Button className="min-h-12 w-full sm:w-auto" variant="ghost" onClick={() => setDialogOpen(false)} disabled={saving}>
-                {apiKeyStage === "saved" ? "完成" : t("settings.cancel")}
+                {apiKeyStage === "saved" ? t("settings.done") : t("settings.cancel")}
               </Button>
               <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={confirmSave} disabled={!canConfirm || saving || apiKeyStage === "saved"}>
                 {saving ? <Loader2 className="animate-spin" size={16} /> : <KeyRound size={16} />}
-                {apiKeyStage === "validating" ? "测试中" : apiKeyStage === "saving" ? "保存中" : apiKeyStage === "saved" ? "已保存" : t("settings.confirm")}
+                {apiKeyStage === "validating" ? t("settings.providerTesting") : apiKeyStage === "saving" ? t("settings.saving") : apiKeyStage === "saved" ? t("settings.saved") : t("settings.confirm")}
               </Button>
             </div>
           </div>

@@ -108,7 +108,7 @@ export default function LoginPage() {
       } else if (accountState === "existing_unverified") {
         go("verifyAccount");
       } else if (accountState === "restricted") {
-        setError("该账号当前无法继续登录，请联系管理员");
+        setError(t("login.restricted"));
       } else {
         go("signup");
       }

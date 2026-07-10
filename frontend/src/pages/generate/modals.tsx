@@ -1,5 +1,6 @@
 import { Cpu, Layers3, Loader2, Play } from "lucide-react";
 import { Button } from "../../components/ui";
+import { useFocusTrap } from "../../hooks";
 import type { QuotaAlertData } from "./useGenerationSession";
 
 export function ConfirmModal({
@@ -17,8 +18,9 @@ export function ConfirmModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const trapRef = useFocusTrap<HTMLDivElement>(true, onCancel);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
+    <div ref={trapRef} className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
       <div className="w-full max-w-md border border-white/10 bg-night-900 p-5 shadow-panel md:p-6">
         <div className="mb-4 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/10 text-signal-cyan">
@@ -56,8 +58,9 @@ export function QuotaSwitchModal({
   onSwitch: (model: string) => void;
   onCancel: () => void;
 }) {
+  const trapRef = useFocusTrap<HTMLDivElement>(true, onCancel);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
+    <div ref={trapRef} className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-night-950/90 px-4 py-6 backdrop-blur">
       <div className="w-full max-w-xl border border-rose-500/30 bg-night-900 p-5 shadow-panel md:p-6">
         <div className="mb-4 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center border border-rose-500/40 bg-rose-500/10 text-rose-200">
