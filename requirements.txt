@@ -20,3 +20,5 @@ cos-python-sdk-v5>=1.9.37
 # 国内：USE_CN_MIRROR=1 ./scripts/install-libreoffice-template-vision.sh  （可选 CN_MIRROR_VENDOR=tuna）
 # 模板结构分析：config.TEMPLATE_ANALYZE_MODEL（默认 deepseek-v4-pro，纯文本 JSON）
 dashscope>=1.20.0
+# systemd 启动依赖：pysqlite3 替代 Python 内置 sqlite3（3.27+ 才支持 WAL 等特性）
+pysqlite3-binary>=0.5.2
