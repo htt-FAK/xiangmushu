@@ -1,0 +1,24 @@
+## Task 8 — Remove dead `for_enable_search` branches from core/dashscope_chat.py
+
+### Grep check for "for_enable_search" (expected: 0 matches)
+
+```
+PS D:\Users\taotao.huang\Desktop\test1\xiangmushu> Select-String -Pattern "for_enable_search" -Path core\dashscope_chat.py | Measure-Object
+
+Count    : 0
+```
+
+### Import + function existence check (expected: OK)
+
+```
+PS D:\Users\taotao.huang\Desktop\test1\xiangmushu> python -c "import sys; sys.path.insert(0,'.'); import core.dashscope_chat as d; print('IMPORT OK', hasattr(d, 'chat_completions_create'))"
+IMPORT OK True
+```
+
+### git diff --stat
+
+```
+PS D:\Users\taotao.huang\Desktop\test1\xiangmushu> git diff --stat core/dashscope_chat.py
+ core/dashscope_chat.py | 26 ++++++++++----------------
+ 1 file changed, 10 insertions(+), 16 deletions(-)
+```

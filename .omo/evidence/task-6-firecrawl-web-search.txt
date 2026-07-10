@@ -1,0 +1,34 @@
+T6 Evidence: Orchestrator direct-implementation (subagent bg_2cfad7ae self-destructed config.py once — deleted 132 lines via bad find_dict_end — then git-restored. Orchestrator cancelled and completed via surgical Edit tool per "直接接管吧" user authorization.)
+
+CHANGED_FILES:
+  - config.py: 3 edits
+    1. Deleted lines 83-84 (WEB_SEARCH_MODEL, WEB_SEARCH_FALLBACK_MODEL_1)
+    2. Inserted Firecrawl block replacing them: FIRECRAWL_ENABLED, FIRECRAWL_MCP_URL, FIRECRAWL_SEARCH_LIMIT, FIRECRAWL_TIMEOUT
+    3. Deleted the entire "web_search" entry at lines 253-268 in USER_MODEL_OPTIONS dict
+    4. Removed "web_search": WEB_SEARCH_MODEL from _DEFAULT_MODEL_OVERRIDES (line 416)
+  - .env.example: subagent's earlier successful edit retained (8 lines added: commented Firecrawl block after Model Routing section)
+
+VERIFICATION COMMAND OUTPUT (plan-specified):
+
+$ python -c "import sys; sys.path.insert(0,'.'); import config; assert not hasattr(config,'WEB_SEARCH_MODEL'); assert not hasattr(config,'WEB_SEARCH_FALLBACK_MODEL_1'); assert 'web_search' not in config.USER_MODEL_OPTIONS; assert config.FIRECRAWL_ENABLED is True; assert config.FIRECRAWL_MCP_URL == 'https://mcp.firecrawl.dev/v2/mcp'; assert config.FIRECRAWL_SEARCH_LIMIT == 5; assert config.FIRECRAWL_TIMEOUT == 30.0; assert hasattr(config,'VISION_WEB_MODEL'); assert hasattr(config,'WEB_SEARCH_WRITING_MODE'); assert hasattr(config,'RETRIEVAL_WEB_SIMILARITY_THRESHOLD'); print('T6 OK')"
+>>> T6 OK
+
+$ Select-String -Pattern "WEB_SEARCH_MODEL|WEB_SEARCH_FALLBACK" -Path config.py,.env.example
+config.py:85:# Firecrawl (keyless web search — replaces deprecated WEB_SEARCH_MODEL)   # comment only (intentional)
+.env.example:49:# Replaces the deprecated WEB_SEARCH_MODEL. Connects to a free hosted MCP endpoint  # comment only (intentional)
+— No code references remain.
+
+$ Select-String -Pattern "VISION_WEB_MODEL" -Path config.py
+config.py:53: _vw = os.getenv("VISION_WEB_MODEL"...
+config.py:56: VISION_WEB_MODEL = _vw or "qwen3.6-flash"
+config.py:316: "config_keys": ["VISION_WEB_MODEL", ... ]
+— 3 references preserved (vision_layout role still uses it, as required).
+
+$ git diff --stat .env.example
+ .env.example | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+ADVERSARIAL CLASSES:
+- stale state: verified. Fresh Python process imported config, saw all 4 FIRECRAWL_* defaults and absence of WEB_SEARCH_MODEL.
+- dirty worktree: verified. `config.py` had no user edits outside our scope; `.env.example` had only subagent's own successful Firecrawl block addition.
+- misleading success output: verified. Explicit asserts (not "no error") pinned every requirement.

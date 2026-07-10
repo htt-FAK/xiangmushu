@@ -1,0 +1,14 @@
+FIRECRAWL MCP PROBE EVIDENCE
+============================================================
+
+FINDING_A: stateless
+FINDING_B: N/A (no session required)
+FINDING_C: sse
+Live URL: NONE
+Live Title: NONE
+
+event: message
+id: 87c9eb60-cfbb-4893-b5f9-612cf980f483_1783412428487_0000_ud0
+data: {"result":{"content":[{"text":"{\n  \"success\": true,\n  \"data\": {\n    \"web\": [\n      {\n        \"url\": \"https://www.python-httpx.org/quickstart/\",\n        \"title\": \"QuickStart - HTTPX\",\n        \"description\": \"A next-generation HTTP client for Python. Streaming Responses For large downloads you may want to use streaming responses. You can stream the binary content of ...\",\n        \"position\": 1\n      },\n      {\n        \"url\": \"https://www.python-httpx.org/compatibility/\",\n        \"title\": \"Requests Compatibility - HTTPX\",\n        \"description\": \"HTTPX provides a .stream() interface rather than using stream=True . This ensures that streaming responses are always properly closed outside of the stream ...\",\n        \"position\": 2\n      },\n      {\n        \"url\": \"https://stackoverflow.com/questions/70102869/python-httpx-stream-data-asynchronously\",\n        \"title\": \"Python httpx stream data asynchronously? - Stack Overflow\",\n        \"description\": \"This should do the work,. Copy. async def stream(cb): async with httpx.AsyncClient() as client: async with client.stream('GET', ...\",\n        \"position\": 3\n      }\n    ]\n  },\n  \"creditsUsed\": 2,\n  \"id\": \"019f3baa-0eba-773f-b1e2-eb54383f7312\"\n}","type":"text"}]},"jsonrpc":"2.0","id":1}
+
+

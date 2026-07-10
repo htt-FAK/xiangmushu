@@ -1,0 +1,119 @@
+F4 Scope Fidelity Audit — firecrawl-web-search
+================================================
+Date: 2026-07-10
+VERDICT: PASS
+
+========================================================================
+1. CHANGED-FILE INVENTORY (real content changes only)
+========================================================================
+
+Production files (all in-scope per plan):
+  1.  .env.example               — T6: added Firecrawl env block (4 vars), no API key
+  2.  config.py                  — T6: removed WEB_SEARCH_MODEL + WEB_SEARCH_FALLBACK_MODEL_1,
+                                   removed USER_MODEL_OPTIONS["web_search"], removed _DEFAULT_MODEL_OVERRIDES["web_search"];
+                                   added FIRECRAWL_ENABLED/FIRECRAWL_MCP_URL/FIRECRAWL_SEARCH_LIMIT/FIRECRAWL_TIMEOUT
+  3.  core/batch_generator.py    — T9: label update (enable_search always False)
+  4.  core/content_auditor.py    — T9: one-line comment noting native_web_search → Firecrawl
+  5.  core/dashscope_chat.py     — T8: removed dead for_enable_search branches + parameter
+  6.  core/generator.py          — T4+T9: inject Firecrawl context into use_plus branch; removed dead vision_web tier
+  7.  core/model_router.py       — T5: removed WEB_SEARCH role, LEGACY_MODULE_TO_ROLE["search"], ROLE_TO_LEGACY_MODULE, ModelRoleProfile
+  8.  core/provider_registry.py  — T5: removed web_search from ROLE_DEFAULTS, UI_ROLE_KEYS, ROLE_LEGACY_SEED_MODULES, ROLE_PROVIDER_MATRIX, STRICT_PROVIDER_ROLE_MODELS, curated list, _capabilities_for_seed_role
+  9.  core/reporting.py          — T9: one-line comment noting native_web_search → Firecrawl
+ 10.  core/web_search.py         — DELETED (T9: legacy Tavily-based module fully superseded)
+ 11.  core/web_search_agent.py   — T3: rewrote fetch_web_evidence to call Firecrawl; deleted parse_web_evidence, WEB_SEARCH_SYSTEM, _MIMO_WEB_SEARCH_TOOLS, unused imports
+ 12.  frontend/src/i18n.ts       — T7: removed web_search description keys
+ 13.  frontend/src/pages/GeneratePage.tsx — T7: removed web_search from keys array + choices ternary
+ 14.  frontend/src/pages/SettingsPage.tsx — T7: removed web_search from MODEL_ROLE_ORDER
+
+Test files (all in-scope, T10):
+ 15.  tests/test_dashscope_chat.py                        — removed enable_search assertion
+ 16.  tests/test_generation_preferences_and_provider_errors.py — updated return assertions
+ 17.  tests/test_model_router.py                          — removed web_search profile test
+ 18.  tests/test_provider_registry.py                     — removed web_search from expected role filter
+ 19.  tests/test_web_search_agent.py                      — rewritten for Firecrawl-based fetch_web_evidence
+
+New in-scope files (untracked):
+ 20.  core/firecrawl_search.py          — T2: sync keyless MCP streamable-HTTP client
+ 21.  tests/test_firecrawl_search.py    — T10: unit tests (mocked httpx, no network)
+ 22.  scripts/probe_firecrawl_mcp.py    — T1: one-shot probe script (not imported by production)
+
+Helper/utility scripts (not production, out of scope):
+ 23.  _fix_cfg.py              — operator helper script
+ 24.  _fix_config_script.py    — operator helper script
+
+Build artifact (not production):
+ 25.  frontend/build_output.txt
+
+Workspace metadata:
+ 26.  .omo/                    — work plan + evidence + continuations
+
+
+========================================================================
+2. SCOPE FIDELITY CHECKS
+========================================================================
+
+CHECK 1: Only expected production files changed (vs plan scope)
+  STATUS: PASS
+  Detail: All 14 production files changed map directly to T2-T9 in the plan.
+          No files outside the plan's "Must have" list were modified.
+
+CHECK 2: No dependency manifests changed
+  STATUS: PASS
+  Detail: requirements.txt, package.json, frontend/package.json, pyproject.toml,
+          Cargo.toml — all return ZERO diff lines. httpx pin and openai pin untouched.
+
+CHECK 3: No migration files changed
+  STATUS: PASS
+  Detail: migrations/mysql/001_initial_schema.sql,
+          migrations/mysql/002_template_analysis_sessions.sql,
+          migrations/mysql/003_add_mimo_provider.sql — all present, NO diff.
+          No new migration file created. native_web_search field preserved per plan.
+
+CHECK 4: No leaderboard harness / smoke_test_models production behavior changes
+  STATUS: PASS
+  Detail: core/leaderboard/harness.py, core/leaderboard/models_registry.py,
+          core/leaderboard/runner.py, smoke_test_models.py all show ` M` in
+          `git status --porcelain` BUT `git diff` on each returns ZERO content
+          lines. These are CRLF-only working-tree artifacts (Windows autocrlf).
+          No production behavior in any of these files was touched.
+          MiMo mimo_search capability probe (api_key_validation.py:153) untouched.
+
+CHECK 5: Frontend toggle label/semantics unchanged (联网补充 still present)
+  STATUS: PASS
+  Detail: frontend/src/i18n.ts line 178: "generate.enableWeb": "联网补充" — PRESENT.
+          frontend/src/i18n.ts line 232: "generate.smartDefaultsWeb": " + 联网补充" — PRESENT.
+          frontend/src/i18n.ts line 257: "generate.engineHint": "控制联网补充..." — PRESENT.
+          frontend/src/pages/generate/SetupPanel.tsx line 60: toggle label uses
+          t("generate.enableWeb") which resolves to "联网补充" — UNCHANGED.
+          enableWeb toggle semantics (boolean, on/off web evidence) — UNCHANGED.
+
+CHECK 6: Orchestrator direct intervention (T6) stayed in scope
+  STATUS: PASS
+  Detail: T6 touched exactly config.py + .env.example, as planned.
+    config.py changes:
+      - Removed WEB_SEARCH_MODEL (line 83), WEB_SEARCH_FALLBACK_MODEL_1 (line 84)
+      - Added 4 FIRECRAWL_* env-backed config fields
+      - Removed "web_search" entry from USER_MODEL_OPTIONS (lines 253-268)
+      - Removed "web_search" entry from _DEFAULT_MODEL_OVERRIDES (line 421)
+    .env.example changes:
+      - Added Firecrawl commented block (4 env vars, no API key).
+    No other files modified by T6. VISION_WEB_MODEL preserved.
+    No FIRECRAWL_API_KEY introduced (keyless constraint upheld).
+
+
+========================================================================
+3. SUMMARY
+========================================================================
+
+Total real content changes: 19 modified files + 1 deleted + 3 new files = 23 files
+Out-of-scope changes: 0
+Forbidden area violations: 0
+  - Dependency manifests: 0 changes
+  - Migration files: 0 changes
+  - Leaderboard harness: 0 content changes
+  - smoke_test_models: 0 content changes
+  - mimo_search probe: untouched
+  - Toggle semantics/label: preserved
+  - T6 scope: config.py + .env.example only (exact match)
+
+VERDICT: PASS

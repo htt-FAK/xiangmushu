@@ -1,0 +1,54 @@
+Task 5: Remove web_search role end-to-end from model_router.py and provider_registry.py
+Date: 2026-07-07
+
+== BASELINE (before edit) ==
+BEFORE: ['main_writer', 'fast_writer', 'web_search', 'vision_layout', 'template_planner', 'audit_text', 'embedding']
+
+== AFTER (post edit) ==
+AFTER: ['main_writer', 'fast_writer', 'vision_layout', 'template_planner', 'audit_text', 'embedding']
+
+== GIT DIFF --STAT ==
+ core/model_router.py      | 20 --------------------
+ core/provider_registry.py | 18 ------------------
+ 2 files changed, 38 deletions(-)
+
+== GIT DIFF (full) ==
+diff --git a/core/model_router.py b/core/model_router.py
+--- a/core/model_router.py
++++ b/core/model_router.py
+Removed:
+  - Line 15: WEB_SEARCH = "web_search" constant
+  - Line 25: "search": WEB_SEARCH in LEGACY_MODULE_TO_ROLE
+  - Line 33: WEB_SEARCH: "search" in ROLE_TO_LEGACY_MODULE
+  - Lines 132-148: WEB_SEARCH: ModelRoleProfile(...) entire block
+
+diff --git a/core/provider_registry.py b/core/provider_registry.py
+--- a/core/provider_registry.py
++++ b/core/provider_registry.py
+Removed:
+  - Lines 27-33: "web_search" entry in ROLE_DEFAULTS
+  - Line 63: "web_search" in UI_ROLE_KEYS
+  - Line 73: "web_search": "search" in ROLE_LEGACY_SEED_MODULES
+  - Line 101: "web_search" in ROLE_PROVIDER_MATRIX
+  - Line 117: "web_search" in STRICT_PROVIDER_ROLE_MODELS["mimo"]
+  - Line 226: "web_search" in curated model list (role_seed_model_ids)
+  - Line 242: role_key == "web_search" branch in _capabilities_for_seed_role
+  - Lines 488-491: dead role == "web_search" branch in _catalog_rows_for_user (mimo provider block)
+
+== GREP VERIFICATION ==
+grep "web_search" core/model_router.py => No matches found (0 hits)
+grep "web_search" core/provider_registry.py => No matches found (0 hits)
+
+== SURVIVING CALLSITES ==
+grep "resolve_model_profile.*web_search|resolve_model_profile.*search" *.py => No matches found (0 hits)
+
+== PYTHON VERIFICATION ==
+$ python -c "import sys; sys.path.insert(0,'...'); from core.model_router import resolve_model_profile, model_roles, available_models_for_role; p=resolve_model_profile('web_search'); assert p.model=='' and p.source=='unknown'; assert 'web_search' not in model_roles(); assert available_models_for_role('web_search')==[]; print('T5 OK')"
+Output: T5 OK
+
+== NOTES ==
+- mimo_search gate infrastructure preserved: gates["mimo_search"] still set in _user_provider_gate(),
+  just the dead role=="web_search" branch in _catalog_rows_for_user was removed since web_search
+  is no longer in ROLE_PROVIDER_MATRIX (so no mimo catalog rows with role web_search can reach that code).
+- VISION_WEB_MODEL references untouched (used by vision role).
+- No files other than core/model_router.py and core/provider_registry.py were modified.

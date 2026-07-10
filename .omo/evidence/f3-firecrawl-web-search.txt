@@ -1,0 +1,125 @@
+F3 VERIFICATION EVIDENCE — Firecrawl Web Search Migration
+Date: 2026-07-10
+======================================================================
+
+SURFACE 1: File System
+----------------------------------------------------------------------
+Command: Test-Path core\web_search.py
+Result:  False (file deleted ✓)
+
+Command: Test-Path core\firecrawl_search.py
+Result:  True (file exists ✓)
+
+VERDICT: PASS
+
+======================================================================
+
+SURFACE 2: Backend Test Suite (Firecrawl-related)
+----------------------------------------------------------------------
+Command: python -m pytest tests/test_firecrawl_search.py tests/test_web_search_agent.py tests/test_generation_preferences_and_provider_errors.py tests/test_strict_model_selection.py -v
+
+Result: 24 passed in 5.27s
+
+Test breakdown:
+  tests/test_firecrawl_search.py (7 tests)
+    ✓ test_sse_happy_path_extracts_web_items
+    ✓ test_jsonrpc_error_envelope_returns_empty
+    ✓ test_disabled_returns_empty
+    ✓ test_request_exception_returns_empty
+    ✓ test_no_authorization_header
+    ✓ test_sse_error_in_data_line_returns_empty
+    ✓ test_http_non_200_returns_empty
+
+  tests/test_web_search_agent.py (5 tests)
+    ✓ test_firecrawl_happy_path_maps_to_web_facts
+    ✓ test_firecrawl_error_path_sets_error
+    ✓ test_firecrawl_returns_empty_on_no_results
+    ✓ test_firecrawl_model_is_firecrawl_keyless_and_usage_is_none
+    ✓ test_session_web_evidence_cache_reuses_result
+
+  tests/test_generation_preferences_and_provider_errors.py (10 tests)
+    ✓ test_generation_bundle_uses_user_generation_model
+    ✓ test_generation_bundle_defaults_to_qwen37_main_writer
+    ✓ test_generation_bundle_uses_user_search_model_for_web_route
+    ✓ test_generation_bundle_web_enabled_keeps_main_writer
+    ✓ test_generation_bundle_collects_web_usage_only_when_not_cached
+    ✓ test_generation_bundle_uses_user_lightweight_model_for_strong_rag
+    ✓ test_provider_error_classifies_402_as_quota
+    ✓ test_provider_error_classifies_429_quota_message_as_quota
+    ✓ test_generate_from_bundle_raises_quota_error_without_fallback
+    ✓ test_generate_from_bundle_does_not_fallback_on_non_quota_error
+
+  tests/test_strict_model_selection.py (2 tests)
+    ✓ test_content_generator_strict_model_selection_disables_fallback_chain
+    ✓ test_content_auditor_strict_model_selection_only_calls_selected_model
+
+VERDICT: PASS (24 passed, 0 failed, 0 errors)
+
+======================================================================
+
+SURFACE 3: Frontend Build
+----------------------------------------------------------------------
+Command: npm run build (in frontend/)
+Result: ✓ 1615 modules transformed
+        ✓ built in 9.62s
+        Exit code: 0
+
+Build artifacts:
+  dist/index.html              0.52 kB
+  dist/assets/index-CWR_6Ju2.css   42.91 kB
+  dist/assets/index-BBxzueQZ.js   285.75 kB
+  (+ 13 more chunked assets)
+
+VERDICT: PASS (exit 0, no errors)
+
+======================================================================
+
+SURFACE 4: Runtime (Backend Startup + API)
+----------------------------------------------------------------------
+
+Step 1: Start backend (PID: 35492)
+  Command: Start-Process python server.py (port 8502)
+  Result:  Server started successfully
+
+Step 2: Health check
+  Command: GET http://localhost:8502/api/health
+  Response: { "ok": true, "service": "xiangmushu", "status": "healthy" }
+  Result:  Backend imports and serves ✓
+
+Step 3: Model-options endpoint (unauthenticated — proves route registration)
+  Command: GET http://localhost:8502/api/user/model-options
+  Response: HTTP 401 (Unauthorized)
+  Result:  Route registered, import chain intact ✓
+
+Step 4: Verify web_search key absent from model-options
+  Command: python -c "from core.provider_registry import model_options_map_for_user, _legacy_model_options; ..."
+  
+  Result (current registry):
+    model_options_map_for_user(None) keys:
+      ['main_writer', 'fast_writer', 'vision_layout', 'template_planner', 'audit_text', 'embedding']
+    web_search in keys: False ✓
+
+  Result (legacy fallback):
+    _legacy_model_options() keys:
+      ['generation', 'main_writer', 'fast_writer', 'vision_layout', 'template_planner',
+       'audit_text', 'lightweight', 'vision', 'search', 'audit']
+    web_search in legacy: False ✓
+
+Step 5: Cleanup
+  Backend PID 35492 killed
+  Result: Process terminated ✓
+
+VERDICT: PASS (backend starts, serves, import chain intact, web_search key absent)
+
+======================================================================
+
+OVERALL VERDICT: PASS
+
+All 4 surfaces verified:
+  ✓ File system: web_search.py deleted, firecrawl_search.py exists
+  ✓ Backend tests: 24 passed (0 failures)
+  ✓ Frontend build: exit 0, 1615 modules, no errors
+  ✓ Runtime: backend starts, serves health, model-options route registered,
+             web_search key not present in model options output
+
+======================================================================

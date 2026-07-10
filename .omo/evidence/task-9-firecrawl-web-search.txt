@@ -1,0 +1,32 @@
+﻿T9 — Clean up dead tier residue and legacy Tavily file
+Timestamp: 2026-07-07T18:19:50Z
+
+== GREP CHECK: "vision_web" in core/
+Result: 0 matches (verified via Select-String)
+
+== PYTHON CHECK: native_web_search field kept ==
+Output: native_web_search field kept
+
+== FILE EXISTENCE: web_search.py ==
+Legacy core/web_search.py: DELETED
+
+== CHANGED FILES (diff --stat) ==
+ config.py                           |  29 +++-----
+ core/batch_generator.py             |   4 +-
+ core/content_auditor.py             |   1 +
+ core/generator.py                   |  57 ++++++++++-----
+ core/model_router.py                |  20 ------
+ core/provider_registry.py           |  18 -----
+ core/reporting.py                   |   1 +
+ core/web_search.py                  |  47 -------------
+ core/web_search_agent.py            | 134 +++++++++---------------------------
+
+== SUMMARY OF CHANGES ==
+1. Deleted core/web_search.py (47 lines, legacy Tavily path)
+2. Removed dead `elif tier == "vision_web":` branch from generator.py _candidate_models()
+3. Removed VISION_WEB_FALLBACK_MODEL fallback reference from small_rag/table_cell_fast tier routes in generator.py
+4. Added legacy comments to reporting.py/native_web_search and content_auditor.py/meta_brief
+5. Fixed batch_generator.py log label - removed `web=%s` parameter that implied active enable_search; added inline comment noting legacy status
+6. Kept native_web_search field in document_models.py (intentional - trace compatibility)
+
+VERIFICATION: PASS (0 vision_web matches, native_web_search confirmed present, web_search.py deleted)

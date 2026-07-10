@@ -1,0 +1,58 @@
+T10 — Rewrite and add backend tests to match the Firecrawl migration
+Timestamp: 2026-07-10
+
+== PYTEST COMMAND ==
+$ pytest -q tests\test_firecrawl_search.py tests\test_web_search_agent.py tests\test_model_router.py tests\test_provider_registry.py tests\test_dashscope_chat.py tests\test_strict_model_selection.py tests\test_generation_preferences_and_provider_errors.py
+
+== PYTEST OUTPUT ==
+........................................                                 [100%]
+40 passed in 9.97s
+
+== GIT DIFF --STAT (7 test files) ==
+ tests/test_firecrawl_search.py (NEW, 90 lines)
+ tests/test_dashscope_chat.py                          |  4 +-
+ tests/test_generation_preferences_and_provider_errors  |  2 +-
+ tests/test_model_router.py                            | 11 +-
+ tests/test_provider_registry.py                       | 17 ---
+ tests/test_web_search_agent.py                        | 139 +++++++--------
+ 6 files changed, 47 insertions(+), 126 deletions(-)
+
+== SUMMARY OF CHANGES ==
+1. NEW tests/test_firecrawl_search.py (90 lines, 7 tests):
+   - test_sse_happy_path_extracts_web_items: SSE stream with nested result.content[0].text
+     escaped JSON → list of dicts with title/url/content
+   - test_jsonrpc_error_envelope_returns_empty: JSON-RPC error envelope → []
+   - test_disabled_returns_empty: FIRECRAWL_ENABLED=False → []
+   - test_request_exception_returns_empty: httpx exception → []
+   - test_no_authorization_header: verifies no Authorization header sent (keyless)
+   - test_sse_error_in_data_line_returns_empty: SSE data line with error → []
+   - test_http_non_200_returns_empty: HTTP 500 → []
+
+2. REWRITE tests/test_web_search_agent.py (5 tests, all LLM-specific removed):
+   - REMOVED: test_parse_web_evidence_json_fence (parse_web_evidence gone)
+   - REMOVED: test_fetch_web_evidence_uses_web_search_profile (LLM)
+   - REMOVED: test_fetch_web_evidence_uses_mimo_native_web_search_tools (LLM)
+   - REMOVED: test_fetch_web_evidence_returns_usage_and_model (LLM)
+   - ADDED: test_firecrawl_happy_path_maps_to_web_facts
+   - ADDED: test_firecrawl_error_path_sets_error
+   - ADDED: test_firecrawl_returns_empty_on_no_results
+   - ADDED: test_firecrawl_model_is_firecrawl_keyless_and_usage_is_none
+   - KEPT: test_session_web_evidence_cache_reuses_result (updated for Firecrawl)
+
+3. UPDATE tests/test_generation_preferences_and_provider_errors.py:
+   - web_evidence_summary assertion: "role": "" (not "web_search")
+
+4. UPDATE tests/test_model_router.py:
+   - Removed WEB_SEARCH import and test_web_search_profile_sets_enable_search
+
+5. UPDATE tests/test_provider_registry.py:
+   - Removed web_search role mock data and conditional assertion from
+     test_model_options_map_filters_supplemental_providers_by_user_keys
+
+6. UPDATE tests/test_dashscope_chat.py:
+   - Removed enable_search from extra_body input and assertion in dashscope test
+
+7. UPDATE tests/test_strict_model_selection.py:
+   - No changes needed: native_web_search already False (correct for new contract)
+
+VERIFICATION: PASS (40 passed)

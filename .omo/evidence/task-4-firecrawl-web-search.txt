@@ -1,0 +1,108 @@
+Task 4: Firecrawl Web Search Integration in prepare_bundle_from_evidence
+=========================================================================
+
+CHANGES SUMMARY
+---------------
+core/generator.py | 49 insertions(+), 11 deletions(-)
+
+Edits applied:
+1. GenerationBundle: added __getattr__ to delegate attribute access to route_meta
+   (enables bundle.model_module / bundle.generation_tier in tests/consumers)
+
+2. SYSTEM_PROMPT_WEB_CREATIVE (line ~65):
+   OLD: "联网创意模式，本请求已开启内置联网检索"
+   NEW: "联网创意模式，联网证据已预注入下方【联网证据】区块"
+
+3. SYSTEM_PROMPT_WEB_CREATIVE_EN (line ~78):
+   OLD: "Built-in web search is enabled for this request."
+   NEW: "Web evidence has been pre-injected into the [联网证据] block below."
+
+4. Creative kb_note with KB hit (_web_gen_prompt_parts, line ~152):
+   OLD: "可同时使用内置联网检索补充"
+   NEW: "【联网证据】区块已包含联网检索结果，可一并参考补充"
+
+5. Creative kb_note without KB hit (_web_gen_prompt_parts, line ~157):
+   OLD: "请充分使用内置联网检索与合理概括完成正文"
+   NEW: "请充分参考【联网证据】区块中的联网检索结果并以合理概括完成正文"
+
+6. Firecrawl injection block (after vision_block, before user_msg formatting):
+   - Calls fetch_web_evidence(self._get_client(), task, user_id=self._user_id, cache=self._web_cache)
+   - Formats facts as "- {claim} 来源：{source}" (matching evidence_pack.py:50-55)
+   - Appends "\n\n【联网证据】\n..." to ref_texts
+   - Wrapped in try/except: logs warning on error, continues generation
+
+7. use_plus branch rewrite (model selection):
+   REMOVED: extra_body["enable_search"], VISION_WEB_MODEL, generation_tier="vision_web", model_module="search"
+   ADDED:   generation tier, module = "generation" (same as else branch)
+
+
+====================================================================
+VERIFICATION
+====================================================================
+
+1. BASELINE GREP (before edit):
+   core\generator.py:65:  SYSTEM_PROMPT_WEB_CREATIVE ... 内置联网检索
+   core\generator.py:78:  SYSTEM_PROMPT_WEB_CREATIVE_EN ... Built-in web search
+   core\generator.py:152: ... 内置联网检索 ...
+   core\generator.py:157: ... 内置联网检索 ...
+   core\generator.py:734: extra_body["enable_search"] = True
+   core\generator.py:735: model = self._model_for_module("search", config.VISION_WEB_MODEL)
+   core\generator.py:737: generation_tier = "vision_web"
+   core\generator.py:738: model_module = "search"
+
+2. STATIC GREP (after edit) - old patterns in prepare_bundle_from_evidence:
+   $ Select-String -Pattern "enable_search|generation_tier = `"vision_web`"|model_module = `"search`"" core\generator.py
+
+   Matches found (ALL outside prepare_bundle_from_evidence):
+   - Line 591: extra_body.pop("enable_search", None)  [in prepare_messages_from_evidence — NOT TOUCHED per spec]
+   - Line 790: extra_body.pop("enable_search", None)  [in _fast_table_cell_route branch — harmless no-op since use_plus=False there]
+   - Line 814: "native_web_search": bool(extra_body.get("enable_search"))  [always False since we never set it]
+
+   "generation_tier = 'vision_web'" and "model_module = 'search'" — GONE from prepare_bundle_from_evidence. ✓
+
+3. PROMPT WORDING SANITY:
+   $ Select-String -Pattern "内置联网检索|Built-in web search" core\generator.py
+   Result: 0 matches. ✓
+
+4. HAPPY PATH TEST (weak_kb + mocked fetch_web_evidence):
+   $ python _test_t4_happy.py
+   Output: T4 HAPPY OK
+   Assertions passed:
+   - '【联网证据】' in user message content ✓
+   - 'https://example.test' in user message content ✓
+   - bundle.model_module == 'generation' ✓
+   - bundle.generation_tier == 'main_writer_web_evidence' ✓
+   - bundle.route_meta['native_web_search'] is False ✓
+
+5. ERROR PATH TEST (firecrawl returns error, empty facts):
+   $ python _test_t4_error.py
+   Output: T4 ERROR OK
+   Assertions passed:
+   - '【联网证据】' NOT in user message content ✓
+   - bundle.generation_tier == 'main_writer_web_evidence' ✓
+   - bundle.route_meta['native_web_search'] is False ✓
+
+6. GIT DIFF STAT:
+   core/generator.py | 49 ++++++++++++++++++++++++++++++++++++++-----------
+   1 file changed, 38 insertions(+), 11 deletions(-)
+
+
+KEY DESIGN DECISIONS
+--------------------
+- fetch_web_evidence (from web_search_agent.py) is called — NOT search_web_evidence directly.
+  This preserves cache reuse via self._web_cache and centralizes the Firecrawl contract.
+
+- Firecrawl injection happens BEFORE user_msg formatting (after vision_block computation,
+  before USER_PROMPT_PARA/USER_PROMPT_TABLE.format()), so the augmented ref_texts flows
+  into {retrieved_texts} correctly for both paragraph and table_cell tasks.
+
+- The use_plus branch now uses the SAME generation model as the default (else) branch,
+  just with tier="main_writer_web_evidence" for observability. No model switching, no
+  extra_body enable_search.
+
+- Error resilience: if fetch_web_evidence raises or returns error/empty facts, generation
+  proceeds without the 【联网证据】 block — no exception propagates.
+
+- table_cell handling is untouched: _fast_table_cell_route and table_cell_mm logic unchanged.
+  The extra_body.pop("enable_search", None) in fast_mode branch is a harmless no-op
+  (use_plus=False always in fast_mode, so enable_search was never set).

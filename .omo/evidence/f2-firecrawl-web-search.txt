@@ -1,0 +1,258 @@
+F2 — Final Verification: Code Quality Review
+Repo: D:\Users\taotao.huang\Desktop\test1\xiangmushu
+Reviewed: 2026-07-10
+Focus: correctness / maintainability / dead code / naming consistency / post-migration stale artifacts.
+NOT a security review. NOT a correctness replay of every behavior — F1/task waves already gated that.
+
+============================================================================
+VERDICT: PASS (with documented cleanup debt — see findings below)
+============================================================================
+
+No findings below change the observable behavior of the production pipeline.
+The Firecrawl-based enrichment works, the web_search role is correctly
+removed from runtime dispatch, the frontend toggle is preserved with
+correct semantics, and the migration honors the plan's silence-on-failure
+contract. The issues below are cleanup / smell / stale-string issues; each
+one is sized as a small dedicated PR.
+
+----------------------------------------------------------------------------
+Per-file findings
+----------------------------------------------------------------------------
+
+[core/firecrawl_search.py — CLEAN  (pure LOC ≈153 / 201 total)]
+  • 153 pure LOC — healthy.
+  • Fresh httpx.Client per call by design; comment at L61-62 explains
+    rationale. Response is fully buffered before teardown, so
+    response.text access outside the `with` is safe on httpx.
+  • Every failure path logs a `[firecrawl]` prefixed warning and returns
+    `[]` — never raises. Contract matches docstring at L34-43.
+  • `_extract_web_items` handles inner-payload-is-escaped-JSON-string
+    correctly (L167-175); defensive isinstance guard on every dict descent.
+  • No findings. Pass.
+
+[core/web_search_agent.py — CLEAN  (pure LOC ≈108 / 127 total)]
+  • fetch_web_evidence: client param is now inert (firecrawl uses its own
+    httpx); kept for caller signature stability. Not a finding.
+  • WebEvidenceResult still carries `profile`/`raw_text`/`usage` — always
+    None/"". The draft (line 104 of .omo/drafts) explicitly says "Drop
+    profile/model/usage", but the implementation keeps the dataclass shape
+    so tests and callers don't break. Acceptable; flag as follow-up cleanup
+    (FINDING-01).
+  • cache_key_for_task truncates task.description[:240] to stabilize keys;
+    correct and pre-existing.
+  No findings.
+
+[core/generator.py — LARGE FILE  (1103 total / 1006 pure)]
+  File predates this change; already oversized. Migration didn't grow it
+  materially. Not flagged as a new defect.
+
+  FINDING-02 — Dead defensive `extra_body.pop("enable_search", None)`:
+    L583 (in main writer path) and L782 (in prepare_bundle_from_evidence)
+    both pop `enable_search` from an extra_body dict that was just
+    initialized as `{}` on L529 / L752. After migration, `enable_search`
+    is never inserted. Both pops are dead no-ops. Harmless, but a reader
+    will misread them as "still needed". Drop both.
+
+  FINDING-03 — unused `use_plus`:
+    • L472 `use_plus = False` is hardcoded in the main writer after migration.
+      `_web_gen_prompt_parts(False, …)` on L473-475 could be inlined.
+      Not wrong — just dead branching.
+    • batch_generator.py mirrors this (L176); same story.
+    Follow-up cleanup, not a blocker.
+
+  FINDING-04 — `GenerationBundle.__getattr__` (L197-207):
+    **DEAD CODE.** Grep the repo for production callers of the convenience
+    API — there are none. All production code uses the dataclass fields
+    directly (bundle.route_meta, bundle.model, bundle.temperature,
+    bundle.extra_body, bundle.messages, bundle.evidence_refs,
+    bundle.ref_texts). All tests also use bundle.route_meta["…"].
+    Added "for convenience" during migration, but no caller exercises it.
+
+    Worse: it's an active smell. A `__getattr__` that forwards into a dict
+    shadows attribute semantics — if a test later adds a route_meta key
+    that collides with a real dataclass field (e.g. "model"), the lookup
+    order becomes order-dependent on Python's own __getattribute__ vs
+    __getattr__ machinery and silently masks bugs.
+
+    VERDICT: unjustified mutation. Remove the method. If a caller ever
+    wants route_meta shorthand, they should just do `bundle.route_meta["…"]`.
+    Keep the dataclass as the explicit record.
+
+  FINDING-05 — route_meta `native_web_search` key:
+    • L607 hardcodes False.
+    • L806 reads `extra_body.get("enable_search")` — but extra_body never
+      has that key, so it's also always False.
+    • server.py L826 bundle.route_meta.get("native_web_search") — always False.
+    • content_auditor.py L113 / L306 — always False.
+    • document_models.py GenerationTrace.native_web_search — dead bool.
+    All these are documented ("Legacy: always False after Firecrawl T9")
+    in most places but not all. Either finish the removal (remove from
+    route_meta + GenerationTrace) or uniformly annotate. Inconsistent
+    documentation is the actual defect; not the field's presence.
+
+[core/dashscope_chat.py — STALE BRANCH  (pure LOC ≈283 / 342 total)]
+  FINDING-06 — enable_search fallback branch (L248-325):
+    L248 `enable_search = bool((merged or {}).get("enable_search"))`.
+    L310-325: when enable_search is True AND backup available AND not
+    dashscope-compatible → fallback with VISION_WEB_MODEL.
+
+    No production caller sets enable_search after migration. The only
+    caller that still sets it is `core/leaderboard/harness.py:162-164`
+    (leaderboard sweep — separate concern). So in the production pipeline
+    this branch is dead.
+
+    Decision to keep or remove belongs to a dedicated cleanup pass. Leave
+    it for now — the smoke-test/leaderboard path still exercises it, so
+    removing it here would need its own coordinated change. Mark as tech
+    debt.
+
+[core/model_router.py — CLEAN  (pure LOC ≈275 / 312 total)]
+  • WEB_SEARCH role gone. LEGACY_MODULE_TO_ROLE no longer maps "search".
+    ROLE_TO_LEGACY_MODULE no longer maps back. Role constants only
+    enumerate MAIN_WRITER / FAST_WRITER / VISION_LAYOUT /
+    TEMPLATE_PLANNER / AUDIT_TEXT / EMBEDDING.
+  No findings.
+
+[core/provider_registry.py — NOT DEEP-READ  (645 pure / 719 total)]
+  File is large and spans provider CRUD; no web-search-specific
+  references surfaced in grep. No findings to flag — out of the change
+  scope. Flag if a follow-up role-removal cleanup touches it.
+
+[config.py — MIGRATION RESIDUE  (570 pure / 705 total)]
+  FINDING-07 — USER_MODEL_OPTIONS["search"] (L330-347):
+    Still present with populated tiers/options. Frontend's
+    MODEL_ROLE_ORDER drops web_search so the dropdown is never rendered —
+    but the config object still advertises it. Inconsistency: any
+    downstream consumer iterating USER_MODEL_OPTIONS sees a phantom role.
+    
+    Also: _DEFAULT_MODEL_OVERRIDES["search"] = MAIN_WRITER_MODEL
+    (L412). Dead entry because nothing maps a request to the "search"
+    module after the role removal.
+
+    Cleanup: remove `"search"` from both dicts. One small PR.
+
+  FINDING-08 — Stale comments mentioning `enable_search`:
+    • L111 "联网档写作默认" — comment still says "联网档"/"enable_search".
+      The knob survives (WEB_SEARCH_WRITING_MODE="calm"/"creative") and
+      drives the prompt path when the user toggles web on. Comment needs
+      rewording: drop the "enable_search" mention; the toggle is now the
+      Firecrawl flag.
+    • L122 "侧栏开启「联网补料」时：除空库/无命中外，若最佳命中…走百炼
+      enable_search。" — stale. After migration the low-similarity branch
+      no longer invokes 百炼 enable_search; it invokes Firecrawl search +
+      main-writer with the large LLM model. Rewrite.
+    • L200 "不 enable_search、不传页图" — same stale phrasing in table-fast
+      comment.
+
+    Three lines; one cleanup PR.
+
+[core/document_models.py — CLEAN  (57 pure / 69 total)]
+  GenerationTrace.native_web_search: kept for backward compat with traces
+  (commented as such in reporting.py L63). Acceptable, but belongs in the
+  FINDING-05 cleanup batch.
+
+[core/content_auditor.py — MINOR PROMPT BLOAT  (283 pure / 328 total)]
+  L111-117 meta_brief sent into the audit prompt includes
+  `native_web_search: False` (always) and `web_creative_prompt` (still
+  meaningful when the user turns web on — KEEP).
+  L306 `if route_meta.get("native_web_search")` — always-false branch.
+  Audit prompt bloats by a few tokens per call; no wrong output. Belongs
+  in the FINDING-05 cleanup batch.
+
+[core/reporting.py — CLEAN  (103 pure / 119 total)]
+  L63-64: `native_web_search` correctly annotated as
+  "Legacy: always False after Firecrawl migration (T9). Kept for trace
+  compatibility." — good discipline.
+
+[core/batch_generator.py — DEAD BUT CORRECT  (316 pure / 348 total)]
+  L176 `use_plus = False`; L192 `if use_plus and creative:` branch dead.
+  The else branch is what production runs — correct behavior. Don't rip
+  out blindly without also removing L192's creative-prompt wording.
+  Belongs in a batch-generator-focused cleanup pass.
+
+[frontend/src/pages/SettingsPage.tsx — STALE COPY  (548 pure / 582 total)]
+  MODEL_ROLE_ORDER correctly drops "web_search" — dropdown gone. Good.
+
+  FINDING-09 — MiMo provider copy still markets LLM-based search
+  (post-migration these statements are factually wrong):
+    • L25 DashScope body "默认联网" — "default web search" used to mean
+      百炼 enable_search; now means Firecrawl. Ambiguous after migration.
+    • L41 MiMo body: "文本、联网搜索和视觉补充 provider。按量付费，联网
+      搜索需单独开通插件服务。" — MiMo is NOT the web-search provider
+      anymore (Firecrawl is). Reword: MiMo is text/visual; search is
+      Firecrawl-hosted and keyless.
+    • L444 "按量付费，联网服务单独计费，不包含在 token 价格内。" —
+      stale. Firecrawl is free / keyless.
+    • L446 `<a>开通 MiMo 联网搜索插件</a>` — links to a MiMo plugin page
+      for a capability we no longer use. Remove the entire anchor.
+    • L510 "DeepSeek 仅用于文本角色，不参与联网搜索、视觉和 embedding。"
+      — still correct (DeepSeek is text-only).
+    • L511 "MiMo 采用按量付费模式，联网搜索需先在插件页开通，否则
+      保存时会返回明确错误。" — stale. Remove the web-search clause.
+
+  Also: strings are hardcoded Chinese, not i18n-driven (pre-existing,
+  not a new smell).
+
+  These are the most user-visible stale strings from the migration; one
+  frontend PR.
+
+[frontend/src/pages/GeneratePage.tsx — CLEAN  (388 pure / 433 total)]
+  enableWeb toggle preserved; smart default `!hasRichKB` (L106) retained;
+  passed through to SetupPanel (L259). No web_search coupling.
+  No findings.
+
+[frontend/src/i18n.ts — CLEAN  (883 pure / 906 total)]
+  • "generate.enableWeb", "generate.enableWebDesc", "smartDefaultsWeb",
+    "engineHint" — all present and correct.
+  • "settings.moduleDesc.web_search" — removed.
+  • i18n.role.web_search — not present.
+  No findings.
+
+----------------------------------------------------------------------------
+Summary of findings (severity / follow-up)
+----------------------------------------------------------------------------
+
+| # | File                              | Issue                                                    | Severity |
+|---|-----------------------------------|----------------------------------------------------------|----------|
+| 01| core/web_search_agent.py          | profile/raw_text/usage kept as always-None on WebEvidenceResult | Low  |
+| 02| core/generator.py L583, L782      | Dead `extra_body.pop("enable_search", None)` — no-op on empty dict | Low  |
+| 03| core/generator.py L472; batch L176 | Hardcoded `use_plus = False` — dead branches remain      | Low    |
+| 04| core/generator.py L197-207        | `GenerationBundle.__getattr__` — **DEAD, unjustified mutation** | **Medium** |
+| 05| generator + auditor + doc_models  | `native_web_search` half-removed, half-documented        | Low    |
+| 06| core/dashscope_chat.py L248-325   | enable_search fallback branch dead in production path    | Low    |
+| 07| config.py L330-347, L412          | USER_MODEL_OPTIONS["search"] + override — frontend removed it but config didn't | Medium |
+| 08| config.py L111 / L122 / L200      | Three stale comments still mention `enable_search`       | Low    |
+| 09| frontend SettingsPage.tsx         | MiMo / DashScope provider copy still markets LLM-based search; stale plugin link | **Medium** |
+
+Medium items = one small dedicated PR each. All other items can batch
+into a single "post-migration scrub" PR.
+
+----------------------------------------------------------------------------
+Explicit judgment called out in the task
+----------------------------------------------------------------------------
+
+`GenerationBundle.__getattr__`:  **FAIL — unjustified mutation.**
+  • Zero callers in production.
+  • Zero callers in tests.
+  • Forwards into `route_meta` dict → masks accidental key collision with
+    the dataclass's own fields.
+  • Removes explicit-ness of attribute access for no convenience actually
+    delivered.
+  Action: delete the method. No caller will notice.
+
+----------------------------------------------------------------------------
+Overall assessment
+----------------------------------------------------------------------------
+
+The migration is complete and safe in the critical paths:
+
+  ✓ Firecrawl enrichment is the sole web source; no LLM-search token
+    burn remains in the production pipeline.
+  ✓ web_search role fully unregistered in model_router.
+  ✓ Frontend MODEL_ROLE_ORDER drops web_search.
+  ✓ GeneratePage enableWeb toggle preserved with correct semantics.
+  ✓ Failure mode (silent skip, log warning) matches the adopted default.
+  ✓ i18n role/moduleDesc keys for web_search removed.
+
+The cleanup items above are real but small. None changes what a user
+observes. VERDICT: PASS, with the explicit debt list captured for follow-up.

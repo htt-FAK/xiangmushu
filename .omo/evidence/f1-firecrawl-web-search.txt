@@ -1,0 +1,299 @@
+F1 — Plan Compliance Audit
+==========================
+Plan: .omo/plans/firecrawl-web-search.md
+Date: 2026-07-10
+Auditor: F1 (grep-based + file inspection)
+
+═══════════════════════════════════════════════════════════════════════
+SECTION A: MUST-HAVE IMPLEMENTATION CHECKS
+═══════════════════════════════════════════════════════════════════════
+
+───────────────────────────────────────────────────────────────────────
+A1. core/firecrawl_search.py exists, sync, keyless
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+- File EXISTS at D:\Users\taotao.huang\Desktop\test1\xiangmushu\core\firecrawl_search.py
+- Sync (no `async def`): grep for `async def` → 0 matches ✓
+- No Authorization header: grep for `Authorization` → 0 matches ✓
+- Uses httpx: line 13 `import httpx` ✓
+- Signature: line 28 `def search_web_evidence(query, *, limit, timeout) -> list[dict[str, Any]]` ✓
+- Kill-switch: line 45 `if not config.FIRECRAWL_ENABLED: return []` ✓
+- Config reads: lines 87-91 in config.py (FIRECRAWL_ENABLED, MCP_URL, SEARCH_LIMIT, TIMEOUT) ✓
+
+───────────────────────────────────────────────────────────────────────
+A2. core/web_search_agent.py uses Firecrawl, no LLM markers
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+- Calls Firecrawl: line 10 `from core.firecrawl_search import search_web_evidence` ✓
+                 line 92 `results = search_web_evidence(` ✓
+- model field: lines 114, 121 `model="firecrawl-keyless"` ✓
+- NO residual LLM references:
+    grep "chat_completions_create" → 0 matches ✓
+    grep "enable_search" → 0 matches ✓
+    grep "_MIMO_WEB_SEARCH" → 0 matches ✓
+    grep "WEB_SEARCH_SYSTEM" → 0 matches ✓
+- NO WEB_SEARCH role constant imported ✓
+
+───────────────────────────────────────────────────────────────────────
+A3. core/generator.py use_plus branch (prepare_bundle_from_evidence)
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+Use_plus branch spans lines 667-710 in the method.
+
+- NO enable_search INJECTION in use_plus branch:
+    Lines 667-710: 0 matches for `enable_search` ✓
+    Line 667: `use_plus = enable_web and (weak_kb or low_similarity)` ✓
+    Line 699: `web_result = fetch_web_evidence(...)` — calls Firecrawl path ✓
+
+- 【联网证据】 block injected:
+    Line 708: `ref_texts = ref_texts + "\n\n【联网证据】\n" + "\n".join(_lines)` ✓
+    Format matches evidence_pack.py:50-56: `f"- {fact.claim} 来源：{fact.source}"` ✓
+
+- NO VISION_WEB_MODEL reference in use_plus branch ✓
+- NO `search` model_module in use_plus branch ✓
+
+NOTE: 3 residual `enable_search` references exist in generator.py OUTSIDE
+the use_plus branch — all are harmless defensive code:
+    Line 583: `extra_body.pop("enable_search", None)` — defensive cleanup in
+              prepare_messages_from_evidence fast-table-cell route
+    Line 782: `extra_body.pop("enable_search", None)` — defensive cleanup in
+              prepare_bundle_from_evidence fast-table-cell route
+    Line 806: `bool(extra_body.get("enable_search"))` — always False read for
+              route_meta (as documented in plan: "always False after the change")
+  These are NOT enable_search cost paths — they PREVENT/RUN to confirm enable_search
+  is absent. They never inject or trigger LLM search.
+
+───────────────────────────────────────────────────────────────────────
+A4. web_search role removed from model_router / provider_registry /
+    config / .env.example / SettingsPage / GeneratePage / i18n
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+model_router.py:
+  grep "web_search" → 0 matches ✓
+  grep "WEB_SEARCH" → 0 matches ✓
+  mimo_search capability gate: N/A (not in model_router)
+
+provider_registry.py:
+  grep "web_search" → 0 matches ✓
+  grep "WEB_SEARCH" → 0 matches ✓
+  mimo_search capability gate preserved:
+    line 440: `gates = {"dashscope": True, "deepseek": False, "mimo": False, "mimo_search": False}` ✓
+    line 451: `gates["mimo_search"] = bool(gates["mimo"] and mimo_validation.get("search_enabled"))` ✓
+
+config.py:
+  grep "WEB_SEARCH_MODEL" → 1 match: line 85 — COMMENT only
+    `# Firecrawl (keyless web search — replaces deprecated WEB_SEARCH_MODEL)` ✓
+    (Plan allows comments: "comments allowed but code refs gone")
+  grep "WEB_SEARCH_FALLBACK" → 0 matches ✓
+  VISION_WEB_MODEL still exists: lines 53, 56 ✓
+  Firecrawl config added:
+    line 87: `_FIRECRAWL_ENABLED_RAW = os.getenv("FIRECRAWL_ENABLED", "1").strip().lower()` ✓
+    line 88: `FIRECRAWL_ENABLED = _FIRECRAWL_ENABLED_RAW not in ("0", "false", "no", "off")` ✓
+    line 89: `FIRECRAWL_MCP_URL = os.getenv("FIRECRAWL_MCP_URL", "https://mcp.firecrawl.dev/v2/mcp").strip()` ✓
+    line 90: `FIRECRAWL_SEARCH_LIMIT = int(os.getenv("FIRECRAWL_SEARCH_LIMIT", "5").strip())` ✓
+    line 91: `FIRECRAWL_TIMEOUT = float(os.getenv("FIRECRAWL_TIMEOUT", "30").strip())` ✓
+
+.env.example:
+  grep "WEB_SEARCH_MODEL" → 0 matches ✓
+  VISION_WEB_MODEL at line 35: `VISION_WEB_MODEL=qwen3.7-plus` ✓
+  Firecrawl block:
+    line 49: `# Replaces the deprecated WEB_SEARCH_MODEL. Connects to a free hosted MCP endpoint` ✓
+    line 51: `FIRECRAWL_ENABLED=1` ✓
+    line 52: `FIRECRAWL_MCP_URL=https://mcp.firecrawl.dev/v2/mcp` ✓
+    line 53: `FIRECRAWL_SEARCH_LIMIT=5` ✓
+    line 54: `FIRECRAWL_TIMEOUT=30` ✓
+
+SettingsPage.tsx:
+  grep "web_search" → 0 matches ✓
+
+GeneratePage.tsx:
+  grep "web_search" → 0 matches ✓
+  grep "choices.web_search" → 0 matches ✓
+  enableWeb state variable preserved (line 48) ✓
+
+i18n.ts:
+  grep "web_search" → 0 matches ✓
+
+───────────────────────────────────────────────────────────────────────
+A5. Tests added/updated per T10
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+All 7 required test files exist:
+  ✓ tests/test_firecrawl_search.py       (NEW)
+  ✓ tests/test_web_search_agent.py       (REWRITE)
+  ✓ tests/test_generation_preferences_and_provider_errors.py (UPDATE)
+  ✓ tests/test_model_router.py           (UPDATE)
+  ✓ tests/test_provider_registry.py      (UPDATE)
+  ✓ tests/test_dashscope_chat.py         (UPDATE)
+  ✓ tests/test_strict_model_selection.py (UPDATE)
+
+═══════════════════════════════════════════════════════════════════════
+SECTION B: MUST-NOT-HAVE RESPECTED
+═══════════════════════════════════════════════════════════════════════
+
+───────────────────────────────────────────────────────────────────────
+B1. No new dependency manifests changed
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+requirements.txt: No new dependencies added. Full content shows:
+  - streamlit, python-docx, chromadb, overrides, openai==1.25.0, httpx>=0.27.0,<0.28,
+    python-dotenv, pyyaml, pypdf, python-pptx, pymupdf, markitdown, fastapi, uvicorn,
+    python-multipart, PyMySQL, cos-python-sdk-v5, dashscope
+  - NO firecrawl, NO mcp, NO new libraries ✓
+
+───────────────────────────────────────────────────────────────────────
+B2. No FIRECRAWL_API_KEY introduced
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+grep "FIRECRAWL_API_KEY|firecrawl_api_key|firecrawl.*key" across
+*.py, *.ts, *.tsx, *.env*, *.txt, *.json, *.toml → 0 matches ✓
+
+───────────────────────────────────────────────────────────────────────
+B3. VISION_WEB_MODEL still exists
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+config.py line 53: `_vw = os.getenv("VISION_WEB_MODEL", "").strip()` ✓
+config.py line 56: `VISION_WEB_MODEL = _vw or "qwen3.6-flash"` ✓
+.env.example line 35: `VISION_WEB_MODEL=qwen3.7-plus` ✓
+
+───────────────────────────────────────────────────────────────────────
+B4. native_web_search field still exists in document_models.py
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+core/document_models.py line 35: `native_web_search: bool = False` ✓
+
+───────────────────────────────────────────────────────────────────────
+B5. No DB migration added
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+migrations/mysql/ contains exactly:
+  001_initial_schema.sql
+  002_template_analysis_sessions.sql
+  003_add_mimo_provider.sql
+Recent SQL migration commits: 3531a50 (mimo), ca8a122 (template analysis) — pre-firecrawl ✓
+No new migration file for web_search/firecrawl ✓
+
+───────────────────────────────────────────────────────────────────────
+B6. enableWeb toggle label still 联网补充
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+i18n.ts line 178: `"generate.enableWeb": "联网补充"` ✓
+GeneratePage.tsx: enableWeb state preserved at line 48 ✓
+
+───────────────────────────────────────────────────────────────────────
+B7. harness.py not modified by firecrawl work
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+git log -- core/leaderboard/harness.py shows last commits:
+  180dc81 feat: add strict model selection and session termination
+  7caebc8 AI：统一模型路由并切换新版前端
+Neither commit message references firecrawl ✓
+
+───────────────────────────────────────────────────────────────────────
+B8. smoke_test_models.py not modified by firecrawl work
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+git log -- smoke_test_models.py shows last commits:
+  180dc81 feat: add strict model selection and session termination
+  7caebc8 AI：统一模型路由
+Neither commit message references firecrawl ✓
+
+═══════════════════════════════════════════════════════════════════════
+SECTION C: GREP-BASED EVIDENCE
+═══════════════════════════════════════════════════════════════════════
+
+───────────────────────────────────────────────────────────────────────
+C1. enable_search absent from production web_search_agent path
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+grep "enable_search" core/web_search_agent.py → 0 matches ✓
+
+core/generator.py:
+  use_plus branch (lines 667-710): 0 matches ✓
+  3 residual references OUTSIDE use_plus branch (defensive cleanup, not injection):
+    - line 583: `extra_body.pop("enable_search", None)` — REMOVE key, prevents leak
+    - line 782: `extra_body.pop("enable_search", None)` — REMOVE key, prevents leak
+    - line 806: `bool(extra_body.get("enable_search"))` — ALWAYS False read for route_meta
+  Per plan T4 acceptance: these defensive pops are the documented pattern for
+  "route_meta always False after the change" (line 806) and table_cell_fast
+  route cleanup (lines 583, 782). They are NOT LLM-search cost paths.
+
+───────────────────────────────────────────────────────────────────────
+C2. WEB_SEARCH_MODEL absent from code/config
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS (comment-only exception noted in A4)
+
+grep "WEB_SEARCH_MODEL" across *.py → 1 match, line 85 config.py — COMMENT only ✓
+grep "WEB_SEARCH_MODEL" across *.env*, *.txt → 0 matches ✓
+
+───────────────────────────────────────────────────────────────────────
+C3. for_enable_search absent
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+grep "for_enable_search" across all *.py → 0 matches ✓
+
+───────────────────────────────────────────────────────────────────────
+C4. web_search role absent from model_router / provider_registry /
+    frontend settings / generate / i18n
+───────────────────────────────────────────────────────────────────────
+VERDICT: PASS
+
+grep "web_search" core/model_router.py → 0 matches ✓
+grep "web_search" core/provider_registry.py → 0 matches ✓
+grep "web_search" frontend/src/pages/SettingsPage.tsx → 0 matches ✓
+grep "web_search" frontend/src/pages/GeneratePage.tsx → 0 matches ✓
+grep "web_search" frontend/src/i18n.ts → 0 matches ✓
+
+Only mimo_search capability gate remains (provider_registry.py lines 440, 451) —
+this is documented as expected (out-of-scope MiMo key-validation) ✓
+
+═══════════════════════════════════════════════════════════════════════
+SECTION D: ADDITIONAL OBSERVATIONS
+═══════════════════════════════════════════════════════════════════════
+
+D1. Legacy core/web_search.py deleted: VERIFIED ✓ (test ! -f equivalent)
+
+D2. Firecrawl client uses project-pinned httpx (>=0.27, <0.28):
+    requirements.txt pins `httpx>=0.27.0,<0.28` ✓
+    firecrawl_search.py imports httpx via standard project dependency ✓
+
+D3. Recent git log shows NO firecrawl-related commits in the checked files:
+    harness.py, smoke_test_models.py — last touched by 180dc81 (strict model
+    selection) ✓
+
+D4. Firecrawl error handling: returns [] on any failure, never raises ✓
+    (line 45-46 kill-switch, broad exception handling documented in docstring)
+
+═══════════════════════════════════════════════════════════════════════
+FINAL VERDICT
+═══════════════════════════════════════════════════════════════════════
+
+VERDICT: PASS
+
+All 5 Must-have checks: PASS (A1-A5)
+All 8 Must-NOT-have checks: PASS (B1-B8)
+All 4 Grep evidence checks: PASS (C1-C4)
+
+NOTES:
+- 3 residual `enable_search` references in core/generator.py are DEFENSIVE
+  CLEANUP code (`.pop()` and always-False `.get()`), NOT injection paths.
+  Documented in the plan as acceptable pattern. They prevent stale
+  enable_search keys from leaking through and always evaluate to False.
+  The use_plus branch (where the plan requires 0 matches) has 0 matches.
+- 1 comment-only `WEB_SEARCH_MODEL` reference in config.py line 85 is
+  a deprecation note — permitted per success criteria.

@@ -1,0 +1,111 @@
+================================================================================
+TASK 3 — Firecrawl Web Search Evidence Artifact
+================================================================================
+
+=== BASELINE (before edit) ===
+
+$ python -c "import sys; sys.path.insert(0,'.'); from core.web_search_agent import fetch_web_evidence, SessionWebEvidenceCache; print('BASELINE OK:', callable(fetch_web_evidence), SessionWebEvidenceCache.__name__)"
+
+Output:
+  ImportError: cannot import name 'WEB_SEARCH' from 'core.model_router'
+  (Pre-existing breakage from prior task removing WEB_SEARCH constant — confirms
+  LLM deps were already partially torn down, making this rewrite urgent.)
+
+$ Select-String -Pattern "chat_completions_create|WEB_SEARCH_SYSTEM|_MIMO_WEB_SEARCH|resolve_model_profile|provider_code_for_model" -Path core\web_search_agent.py
+
+Output (10 matches in original):
+  core\web_search_agent.py:8:from core.dashscope_chat import chat_completions_create
+  core\web_search_agent.py:11:from core.model_router import WEB_SEARCH, ModelCallProfile, resolve_model_profile
+  core\web_search_agent.py:13:from core.provider_registry import provider_code_for_model
+  core\web_search_agent.py:18:_MIMO_WEB_SEARCH_TOOLS = [
+  core\web_search_agent.py:28:WEB_SEARCH_SYSTEM = """You are a web evidence extraction agent...
+  core\web_search_agent.py:139:    profile = resolve_model_profile(
+  core\web_search_agent.py:165:            {"role": "system", "content": WEB_SEARCH_SYSTEM},
+  core\web_search_agent.py:172:    if provider_code_for_model(profile.model) == "mimo":
+  core\web_search_agent.py:174:        request_kwargs["tools"] = list(_MIMO_WEB_SEARCH_TOOLS)
+  core\web_search_agent.py:180:        response = chat_completions_create(resolved_client, **request_kwargs)
+
+================================================================================
+=== VERIFICATION (after edit) ===
+================================================================================
+
+--- T3 HAPPY PATH ---
+$ python -c "...w.search_web_evidence = lambda query, **kwargs: [{'title':'QuickStart - HTTPX','url':'https://www.python-httpx.org/quickstart/','content':'Streaming responses in HTTPX.'}]..."
+
+Output:
+  T3 HAPPY OK
+
+Assertions passed:
+  - result.model == 'firecrawl-keyless'
+  - result.usage is None
+  - result.error == ''
+  - result.facts[0].source == 'https://www.python-httpx.org/quickstart/'
+
+--- T3 ERROR PATH ---
+$ python _t3_err_test.py  (w.search_web_evidence replaced with function raising RuntimeError)
+
+Output:
+  web_evidence_error task_id=t-web err=forced-firecrawl-fail
+  T3 ERROR OK
+
+Assertions passed:
+  - result.facts == []
+  - 'forced-firecrawl-fail' in result.error
+
+--- T3 CACHE PATH ---
+$ python -c "...calls={'n':0}; def fake(*args,**kwargs): calls['n']+=1; return [{'title':'A','url':'u','content':'c'}]..."
+
+Output:
+  T3 CACHE OK
+
+Assertions passed:
+  - calls['n'] == 1  (search_web_evidence called once, not twice)
+  - first.cached is False
+  - second.cached is True
+
+================================================================================
+=== LLM MARKER GREP (expect 0 matches) ===
+================================================================================
+
+$ Select-String -Pattern "chat_completions_create|WEB_SEARCH_SYSTEM|_MIMO_WEB_SEARCH|resolve_model_profile|provider_code_for_model|tool_choice|enable_search" -Path core\web_search_agent.py
+
+Output: (no output — 0 matches)
+
+================================================================================
+=== GIT DIFF STAT ===
+================================================================================
+
+$ git diff --stat core/web_search_agent.py
+
+ core/web_search_agent.py | 134 +++++++++++------------------------------------
+ 1 file changed, 31 insertions(+), 103 deletions(-)
+
+================================================================================
+=== SUMMARY ===
+================================================================================
+
+Deleted from core/web_search_agent.py:
+  - _MIMO_WEB_SEARCH_TOOLS constant
+  - WEB_SEARCH_SYSTEM prompt string
+  - parse_web_evidence() function
+  - Imports: chat_completions_create, resolve_model_profile, WEB_SEARCH,
+    ModelCallProfile, chat_client_for_model, provider_code_for_model
+  - Entire LLM call path (chat completion, MIMO tool dispatch, provider routing)
+
+Added to core/web_search_agent.py:
+  - import config
+  - from core.firecrawl_search import search_web_evidence
+  - fetch_web_evidence body: query build → Firecrawl call → WebFact mapping →
+    error fallback → cache set
+
+Preserved unchanged:
+  - WebEvidenceResult dataclass shape (profile field widened to Any)
+  - SessionWebEvidenceCache class
+  - cache_key_for_task() function
+  - fetch_web_evidence() signature (client, task, *, user_id, cache)
+
+Return contract:
+  - model="firecrawl-keyless"
+  - usage=None
+  - profile=None
+  - On Firecrawl exception: facts=[], error=str(exc), model="firecrawl-keyless"
