@@ -135,14 +135,14 @@ export function RunOverview({
         )}
 
         <SectionTitle
-          icon={<Gauge size={18} />}
+          icon={<Gauge size={20} />}
           title={t("generate.runOverview")}
           hint={compact ? undefined : t("generate.runOverviewHint")}
           action={
             <span
               className={clsx(
                 "shrink-0 border px-2.5 py-1 text-xs font-semibold",
-                busy ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime" : "border-white/10 bg-white/[0.035] text-slate-500",
+                busy ? "border-signal-lime/40 bg-signal-lime/10 text-signal-lime" : "border-white/10 bg-white/[0.025] text-slate-500",
               )}
             >
               {running ? t("generate.running") : regeneratingIndex !== null ? t("generate.regenerating") : t("generate.idle")}
@@ -177,7 +177,7 @@ export function RunOverview({
         </div>
 
         {runBilling && !compact ? (
-          <p className="mt-3 break-words border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-5 text-slate-400">
+          <p className="mt-3 break-words border border-white/10 bg-night-950 px-3 py-2 text-xs leading-5 text-slate-400">
             {t("generate.tokenSummaryLine")
               .replace("{0}", String(runBilling.input_tokens ?? 0))
               .replace("{1}", String(runBilling.output_tokens ?? 0))}
@@ -214,10 +214,10 @@ export function RunOverview({
               {(downloadPath || reportPath) && (
                 <div className="flex flex-wrap gap-3">
                   {downloadPath && (
-                    <DownloadButton path={downloadPath} label={t("generate.downloadDoc")} variant="primary" size={17} onError={onDownloadError} />
+                    <DownloadButton path={downloadPath} label={t("generate.downloadDoc")} variant="primary" size={16} onError={onDownloadError} />
                   )}
                   {reportPath && (
-                    <DownloadButton path={reportPath} label={t("generate.downloadReport")} variant="ghost" size={17} onError={onDownloadError} />
+                    <DownloadButton path={reportPath} label={t("generate.downloadReport")} variant="ghost" size={16} onError={onDownloadError} />
                   )}
                 </div>
               )}
@@ -251,15 +251,15 @@ export function RunOverview({
           </details>
         ) : (
         <Panel className="min-w-0">
-          <SectionTitle icon={<FileCheck2 size={18} />} title={t("generate.acceptance")} hint={t("generate.acceptanceHint")} />
+          <SectionTitle icon={<FileCheck2 size={20} />} title={t("generate.acceptance")} hint={t("generate.acceptanceHint")} />
 
           {(downloadPath || reportPath) && (
             <div className="mb-5 flex flex-wrap gap-3">
               {downloadPath && (
-                <DownloadButton path={downloadPath} label={t("generate.downloadDoc")} variant="primary" size={17} onError={onDownloadError} />
+                <DownloadButton path={downloadPath} label={t("generate.downloadDoc")} variant="primary" size={16} onError={onDownloadError} />
               )}
               {reportPath && (
-                <DownloadButton path={reportPath} label={t("generate.downloadReport")} variant="ghost" size={17} onError={onDownloadError} />
+                <DownloadButton path={reportPath} label={t("generate.downloadReport")} variant="ghost" size={16} onError={onDownloadError} />
               )}
             </div>
           )}
@@ -306,11 +306,11 @@ export function RunOverview({
             </summary>
             <div className="space-y-3 border-t border-white/10 p-4">
               <div className="grid gap-3 grid-cols-3">
-                <div className="border border-white/10 bg-night-950/70 p-3">
+                <div className="border border-white/10 bg-night-950 p-3">
                   <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.visualTarget")}</p>
                   <p className="mt-2 font-display text-xl font-semibold text-signal-cyan">{visualTarget}</p>
                 </div>
-                <div className="border border-white/10 bg-night-950/70 p-3">
+                <div className="border border-white/10 bg-night-950 p-3">
                   <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.auditIssues")}</p>
                   <p
                     className={clsx(
@@ -321,7 +321,7 @@ export function RunOverview({
                     {outputs.reduce((sum, block) => sum + (block.auditIssues?.length ?? 0), 0) + checkHighlights.length}
                   </p>
                 </div>
-                <div className="border border-white/10 bg-night-950/70 p-3">
+                <div className="border border-white/10 bg-night-950 p-3">
                   <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.qualityMode")}</p>
                   <p className="mt-2 font-display text-sm font-semibold text-signal-lime">
                     {qualityMode === "quality" ? t("generate.modeQuality") : qualityMode === "speed" ? t("generate.modeSpeed") : t("generate.modeBalanced")}
@@ -341,13 +341,13 @@ export function RunOverview({
           </details>
         ) : (
         <Panel className="min-w-0">
-          <SectionTitle icon={<Search size={18} />} title={t("generate.auditPanelTitle")} hint={t("generate.auditPanelHint")} />
+          <SectionTitle icon={<Search size={20} />} title={t("generate.auditPanelTitle")} hint={t("generate.auditPanelHint")} />
           <div className="grid gap-3 md:grid-cols-3">
-            <div className="border border-white/10 bg-night-950/70 p-3">
+            <div className="border border-white/10 bg-night-950 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.visualTarget")}</p>
               <p className="mt-2 font-display text-2xl font-semibold text-signal-cyan">{visualTarget}</p>
             </div>
-            <div className="border border-white/10 bg-night-950/70 p-3">
+            <div className="border border-white/10 bg-night-950 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.auditIssues")}</p>
               <p
                 className={clsx(
@@ -358,7 +358,7 @@ export function RunOverview({
                 {outputs.reduce((sum, block) => sum + (block.auditIssues?.length ?? 0), 0) + checkHighlights.length}
               </p>
             </div>
-            <div className="border border-white/10 bg-night-950/70 p-3">
+            <div className="border border-white/10 bg-night-950 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{t("generate.qualityMode")}</p>
               <p className="mt-2 font-display text-lg font-semibold text-signal-lime">
                 {qualityMode === "quality" ? t("generate.modeQuality") : qualityMode === "speed" ? t("generate.modeSpeed") : t("generate.modeBalanced")}

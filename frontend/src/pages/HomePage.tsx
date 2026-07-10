@@ -157,7 +157,7 @@ export default function HomePage() {
             className="inline-flex min-h-12 w-full items-center justify-center gap-2 border border-signal-cyan bg-signal-cyan px-5 text-sm font-bold text-night-950 shadow-glow transition hover:bg-white sm:min-h-11 sm:w-auto sm:font-semibold"
           >
             {t("home.start")}
-            <ArrowRight size={17} />
+            <ArrowRight size={16} />
           </Link>
         }
       />
@@ -211,7 +211,7 @@ export default function HomePage() {
               <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("home.uploadedTemplates")}</p>
               <p className="mt-0.5 text-xs text-slate-500 md:text-sm">{t("home.templateSource")}</p>
             </div>
-            <FileText className="shrink-0 text-signal-cyan" size={22} />
+            <FileText className="shrink-0 text-signal-cyan" size={24} />
           </div>
           {templateItems.length === 0 ? (
             <EmptyState title={t("home.noTemplates")} body={t("home.noTemplatesBody")} />
@@ -238,7 +238,7 @@ export default function HomePage() {
               <p className="break-words font-display text-xl font-semibold text-white md:text-2xl">{t("home.knowledgeList")}</p>
               <p className="mt-0.5 text-xs text-slate-500 md:text-sm">{t("home.knowledgeBody")}</p>
             </div>
-            <Database className="shrink-0 text-signal-lime" size={22} />
+            <Database className="shrink-0 text-signal-lime" size={24} />
           </div>
           {kbItems.length === 0 ? (
             <EmptyState title={t("home.noKnowledge")} body={t("home.noKnowledgeBody")} />
@@ -259,7 +259,7 @@ export default function HomePage() {
                     </div>
                     <RefreshCcw
                       className="text-slate-600 transition group-hover:text-signal-lime"
-                      size={17}
+                      size={16}
                     />
                   </div>
                 </Link>

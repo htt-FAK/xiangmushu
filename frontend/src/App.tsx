@@ -140,7 +140,7 @@ function Shell() {
       <aside className="fixed bottom-0 left-0 top-0 z-20 hidden w-72 border-r border-white/10 bg-night-900 px-5 py-6 lg:block">
         <div className="mb-9 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center border border-signal-cyan/50 bg-signal-cyan text-night-950">
-            <PanelLeft size={21} />
+            <PanelLeft size={20} />
           </div>
           <div>
             <p className="font-display text-lg font-semibold leading-tight text-white">
@@ -167,7 +167,7 @@ function Shell() {
                   )
                 }
               >
-                <Icon size={18} />
+                <Icon size={20} />
                 {t(item.labelKey)}
               </NavLink>
             );
@@ -184,7 +184,7 @@ function Shell() {
                 )
               }
             >
-              <BarChart3 size={18} />
+              <BarChart3 size={20} />
               {t("nav.admin")}
             </NavLink>
           )}
@@ -198,13 +198,13 @@ function Shell() {
               "border-white/5 bg-white/[0.025] text-slate-400 hover:border-white/20 hover:text-white hover:text-signal-cyan/80",
             )}
           >
-            <Github size={18} />
+            <Github size={20} />
             {t("nav.github", "GitHub")}
           </a>
         </div>
 
         <div className="absolute bottom-6 left-5 right-5 space-y-3">
-          <div className="border border-white/10 bg-night-950/70 p-4">
+          <div className="border border-white/10 bg-night-950 p-4">
             <p className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-signal-lime">
               {t("app.account")}
             </p>
@@ -213,7 +213,7 @@ function Shell() {
             </p>
           </div>
           <Button className="w-full" variant="ghost" onClick={handleLogout}>
-            <LogOut size={17} />
+            <LogOut size={16} />
             {t("nav.signOut")}
           </Button>
         </div>
@@ -229,7 +229,7 @@ function Shell() {
               <p className="truncate text-[11px] leading-4 text-slate-500">{t("app.subtitle")}</p>
             </div>
             <button
-              className="flex h-10 w-10 shrink-0 items-center justify-center border border-white/10 bg-white/[0.035] text-slate-400 transition hover:border-white/25 hover:text-white active:border-signal-cyan/40 active:text-signal-cyan"
+              className="flex h-10 w-10 shrink-0 items-center justify-center border border-white/10 bg-white/[0.025] text-slate-400 transition hover:border-white/25 hover:text-white active:border-signal-cyan/40 active:text-signal-cyan"
               onClick={handleLogout}
               title={t("nav.signOut")}
               type="button"
@@ -313,11 +313,11 @@ function Shell() {
                       "relative flex min-h-14 flex-col items-center justify-center gap-0.5 border px-2 text-[12px] font-semibold leading-tight transition active:scale-[0.98]",
                       isActive
                         ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan shadow-glow before:absolute before:left-1/2 before:top-0 before:h-0.5 before:w-7 before:-translate-x-1/2 before:bg-signal-cyan before:shadow-[0_0_18px_rgba(54,242,230,0.75)]"
-                        : "border-transparent text-slate-500 hover:bg-white/[0.035] hover:text-slate-300 active:text-signal-cyan/80",
+                        : "border-transparent text-slate-500 hover:bg-white/[0.025] hover:text-slate-300 active:text-signal-cyan/80",
                     )
                   }
                 >
-                  <Icon size={17} strokeWidth={2.2} />
+                  <Icon size={16} strokeWidth={2.2} />
                   <span className="max-w-full whitespace-nowrap">{t(item.labelKey)}</span>
                 </NavLink>
               );
@@ -330,10 +330,10 @@ function Shell() {
                 "relative flex min-h-14 flex-col items-center justify-center gap-0.5 border px-2 text-[12px] font-semibold leading-tight transition active:scale-[0.98]",
                 moreOpen
                   ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan shadow-glow before:absolute before:left-1/2 before:top-0 before:h-0.5 before:w-7 before:-translate-x-1/2 before:bg-signal-cyan before:shadow-[0_0_18px_rgba(54,242,230,0.75)]"
-                  : "border-transparent text-slate-500 hover:bg-white/[0.035] hover:text-slate-300 active:text-signal-cyan/80",
+                  : "border-transparent text-slate-500 hover:bg-white/[0.025] hover:text-slate-300 active:text-signal-cyan/80",
               )}
             >
-              <Menu size={17} strokeWidth={2.2} />
+              <Menu size={16} strokeWidth={2.2} />
               <span className="max-w-full whitespace-nowrap">{t("nav.more")}</span>
             </button>
           </div>
@@ -358,7 +358,7 @@ function Shell() {
                   aria-label={t("generate.close")}
                   className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
                 >
-                  <X size={18} />
+                  <X size={20} />
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-2 p-3">
@@ -375,7 +375,7 @@ function Shell() {
                         onClick={() => setMoreOpen(false)}
                         className={clsx(
                           "flex min-h-14 flex-col items-center justify-center gap-1.5 border px-3 text-sm font-semibold transition",
-                          "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white hover:text-signal-cyan/80",
+                          "border-white/10 bg-white/[0.025] text-slate-300 hover:border-white/25 hover:text-white hover:text-signal-cyan/80",
                         )}
                       >
                         <Icon size={20} />
@@ -393,7 +393,7 @@ function Shell() {
                           "flex min-h-14 flex-col items-center justify-center gap-1.5 border px-3 text-sm font-semibold transition",
                           isActive
                             ? "border-signal-cyan/45 bg-signal-cyan/10 text-signal-cyan"
-                            : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:text-white",
+                            : "border-white/10 bg-white/[0.025] text-slate-300 hover:border-white/25 hover:text-white",
                         )
                       }
                     >
@@ -412,7 +412,7 @@ function Shell() {
                   }}
                   className="flex min-h-12 w-full items-center justify-center gap-2 border border-signal-rose/40 bg-signal-rose/10 px-4 text-sm font-semibold text-signal-rose transition hover:bg-signal-rose hover:text-white"
                 >
-                  <LogOut size={18} />
+                  <LogOut size={20} />
                   <span className="whitespace-nowrap">{t("nav.signOut")}</span>
                 </button>
               </div>

@@ -34,7 +34,7 @@ function OutputBlocks({
       {outputs.map((block, index) => (
         <Suspense
           key={`${block.chapter}-${index}`}
-          fallback={<div className="min-h-24 border border-white/10 bg-night-950/70 p-4 text-sm text-slate-500">Loading...</div>}
+          fallback={<div className="min-h-24 border border-white/10 bg-night-950 p-4 text-sm text-slate-500">Loading...</div>}
         >
           <LazyOutputBlock
             block={block}
@@ -58,7 +58,7 @@ function OutputBlocks({
                   disabled={busy}
                   onClick={() => onRegenerate(index)}
                 >
-                  {regeneratingIndex === index ? <Loader2 className="animate-spin" size={15} /> : <RotateCcw size={15} />}
+                  {regeneratingIndex === index ? <Loader2 className="animate-spin" size={16} /> : <RotateCcw size={16} />}
                   {regeneratingIndex === index ? t("generate.regenerating") : t("generate.regenerateChapter")}
                 </Button>
               ) : undefined
@@ -101,7 +101,7 @@ export function OutputList({
   return (
     <>
       <Panel className="min-w-0">
-        <SectionTitle icon={<BookOpen size={18} />} title={t("generate.outputTitle")} hint={t("generate.outputHint")} />
+        <SectionTitle icon={<BookOpen size={20} />} title={t("generate.outputTitle")} hint={t("generate.outputHint")} />
         {outputs.length === 0 ? (
           <EmptyState title={t("generate.waitingOutput")} body={t("generate.waitingOutputBody")} />
         ) : (
@@ -114,10 +114,10 @@ export function OutputList({
               </span>
               <Button
                 variant="ghost"
-                className="min-h-10 gap-2 border border-white/10 bg-white/[0.035] px-4 text-xs font-semibold text-slate-300 hover:border-white/25 hover:text-white"
+                className="min-h-10 gap-2 border border-white/10 bg-white/[0.025] px-4 text-xs font-semibold text-slate-300 hover:border-white/25 hover:text-white"
                 onClick={onOpenTrace}
               >
-                <MessageSquareText size={15} />
+                <MessageSquareText size={16} />
                 {running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
               </Button>
             </div>
@@ -132,7 +132,7 @@ export function OutputList({
         <DetailOverlay
           title={t("generate.traceTitle")}
           subtitle={running ? t("generate.viewLiveProgress") : t("generate.viewFullTrace")}
-          icon={<MessageSquareText size={18} />}
+          icon={<MessageSquareText size={20} />}
           onClose={onCloseTrace}
         >
           <OutputBlocks {...blocksProps} actionsEnabled={true} />

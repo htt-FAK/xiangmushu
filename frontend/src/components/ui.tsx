@@ -101,7 +101,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   return (
     <input
       className={clsx(
-        "min-h-12 w-full scroll-mb-32 border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:scroll-mt-4 md:min-h-11",
+        "min-h-12 w-full scroll-mb-32 border border-white/10 bg-night-950 px-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:scroll-mt-4 md:min-h-11",
         className,
       )}
       {...props}
@@ -179,7 +179,7 @@ export function DetailOverlay({
           className="flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 text-slate-400 transition hover:border-white/25 hover:text-white"
           aria-label="Close"
         >
-          <X size={18} />
+          <X size={20} />
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">

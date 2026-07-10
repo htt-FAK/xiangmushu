@@ -33,9 +33,9 @@ const toneStyles: Record<ToastTone, string> = {
 };
 
 function ToastIcon({ tone }: { tone: ToastTone }) {
-  if (tone === "success") return <CheckCircle2 className="shrink-0" size={18} />;
-  if (tone === "error") return <XCircle className="shrink-0" size={18} />;
-  return <Info className="shrink-0" size={18} />;
+  if (tone === "success") return <CheckCircle2 className="shrink-0" size={20} />;
+  if (tone === "error") return <XCircle className="shrink-0" size={20} />;
+  return <Info className="shrink-0" size={20} />;
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {

@@ -49,7 +49,7 @@ export function TextArea({
   return (
     <textarea
       className={clsx(
-        "w-full resize-y scroll-mb-32 border border-white/10 bg-night-950/70 px-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:scroll-mt-4 disabled:opacity-40 disabled:pointer-events-none",
+        "w-full resize-y scroll-mb-32 border border-white/10 bg-night-950 px-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-600 focus:border-signal-cyan/70 focus:scroll-mt-4 disabled:opacity-40 disabled:pointer-events-none",
         compact ? "min-h-28 py-2.5" : "min-h-32 py-3",
       )}
       value={value}
@@ -104,7 +104,7 @@ export function StepIndicator({
   return (
     <div
       className={clsx(
-        "flex items-center gap-2 rounded-lg border px-3 py-2 transition-all",
+        "flex items-center gap-2  border px-3 py-2 transition-all",
         isActive
           ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
           : isCompleted

@@ -50,7 +50,7 @@ export function OutputBlock({
   return (
     <article
       className={clsx(
-        "min-w-0 border bg-night-950/70 p-3.5 shadow-[0_14px_48px_rgba(0,0,0,0.22)] transition-all duration-300 md:p-4",
+        "min-w-0 border bg-night-950 p-3.5 shadow-[0_14px_48px_rgba(0,0,0,0.22)] transition-all duration-300 md:p-4",
         busy
           ? "border-signal-cyan/50 shadow-[0_0_0_1px_rgba(54,242,230,0.12),0_18px_52px_rgba(54,242,230,0.10)]"
           : "border-white/10",

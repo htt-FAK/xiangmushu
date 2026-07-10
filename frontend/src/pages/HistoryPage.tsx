@@ -121,14 +121,14 @@ export default function HistoryPage() {
               : "border-signal-amber/30 bg-signal-amber/10 text-amber-100",
           )}
         >
-          <Archive size={15} />
+          <Archive size={16} />
           {availability.available ? t("history.backendBadge") : "后端服务未连接"}
         </div>
       </header>
 
       {availability.warning ? (
         <div className="flex items-start gap-3 border border-signal-amber/30 bg-signal-amber/10 px-4 py-3 text-sm text-amber-100">
-          <AlertTriangle className="mt-0.5 shrink-0" size={18} />
+          <AlertTriangle className="mt-0.5 shrink-0" size={20} />
           <p className="break-words">{availability.warning}</p>
         </div>
       ) : null}
@@ -154,7 +154,7 @@ export default function HistoryPage() {
               <p className="font-display text-xl font-semibold text-white">{t("history.records")}</p>
               <p className="mt-1 text-xs text-slate-500">{t("history.recordsHint")}</p>
             </div>
-            <FileText className="text-signal-cyan" size={21} />
+            <FileText className="text-signal-cyan" size={20} />
           </div>
 
           <div className="mb-3 grid gap-2">
@@ -177,7 +177,7 @@ export default function HistoryPage() {
                     "min-h-10 border px-2 text-xs font-semibold transition",
                     status === item
                       ? "border-signal-cyan bg-signal-cyan/10 text-signal-cyan"
-                      : "border-white/10 bg-night-950/70 text-slate-400 hover:border-white/25 hover:text-white",
+                      : "border-white/10 bg-night-950 text-slate-400 hover:border-white/25 hover:text-white",
                   )}
                 >
                   {t(`history.status.${item}`)}
@@ -193,11 +193,11 @@ export default function HistoryPage() {
                 正在加载历史记录...
               </div>
             ) : !availability.available ? (
-              <div className="border border-dashed border-signal-amber/30 bg-night-950/60 p-5 text-sm text-slate-300">
+              <div className="border border-dashed border-signal-amber/30 bg-night-950 p-5 text-sm text-slate-300">
                 当前无法获取历史记录。
               </div>
             ) : articles.length === 0 ? (
-              <div className="border border-dashed border-white/15 bg-night-950/60 p-5 text-sm text-slate-500">
+              <div className="border border-dashed border-white/15 bg-night-950 p-5 text-sm text-slate-500">
                 {emptyMessage}
               </div>
             ) : (
@@ -279,7 +279,7 @@ export default function HistoryPage() {
                     disabled={!selected.documentUrl}
                     onClick={() => selected.documentUrl && window.open(selected.documentUrl, "_blank")}
                   >
-                    <Download size={17} />
+                    <Download size={16} />
                     {t("history.downloadDoc")}
                   </Button>
                   <Button
@@ -288,7 +288,7 @@ export default function HistoryPage() {
                     disabled={!selected.reportUrl}
                     onClick={() => selected.reportUrl && window.open(selected.reportUrl, "_blank")}
                   >
-                    <FileText size={17} />
+                    <FileText size={16} />
                     {t("history.downloadReport")}
                   </Button>
                 </div>
@@ -300,7 +300,7 @@ export default function HistoryPage() {
             <Panel className="min-w-0">
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-9 w-9 items-center justify-center border border-signal-cyan/30 bg-signal-cyan/10 text-signal-cyan">
-                  <BarChart3 size={18} />
+                  <BarChart3 size={20} />
                 </div>
                 <div>
                   <p className="font-display text-lg font-semibold text-white">{t("history.aggregateUsage")}</p>
@@ -313,7 +313,7 @@ export default function HistoryPage() {
             <Panel className="min-w-0">
               <div className="mb-4 flex items-center gap-3">
                 <div className="flex h-9 w-9 items-center justify-center border border-signal-lime/30 bg-signal-lime/10 text-signal-lime">
-                  <SlidersHorizontal size={18} />
+                  <SlidersHorizontal size={20} />
                 </div>
                 <div>
                   <p className="font-display text-lg font-semibold text-white">{t("history.articleUsage")}</p>

@@ -18,7 +18,7 @@ export default function NotFoundPage() {
         </p>
         <div className="mt-8 flex justify-center">
           <Button type="button" onClick={() => navigate("/")}>
-            <Home size={17} />
+            <Home size={16} />
             {t("notFound.backHome")}
           </Button>
         </div>

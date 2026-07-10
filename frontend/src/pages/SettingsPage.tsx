@@ -362,7 +362,7 @@ export default function SettingsPage() {
                   className={`min-h-20 border p-3.5 text-left transition md:min-h-24 md:p-4 ${
                     active
                       ? "border-signal-lime/70 bg-signal-lime/12 text-white shadow-[0_0_0_1px_rgba(184,255,94,0.12),0_18px_48px_rgba(184,255,94,0.08)]"
-                      : "border-white/10 bg-white/[0.035] text-slate-300 hover:border-white/25 hover:text-white"
+                      : "border-white/10 bg-white/[0.025] text-slate-300 hover:border-white/25 hover:text-white"
                   }`}
                 >
                   <span className="flex items-center justify-between gap-3">
@@ -394,7 +394,7 @@ export default function SettingsPage() {
             {[1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="flex items-center justify-between">
                 <div className="h-4 w-20 animate-pulse rounded bg-white/10" />
-                <div className="h-9 w-[200px] animate-pulse rounded border border-white/10 bg-white/[0.03]" />
+                <div className="h-9 w-[200px] animate-pulse rounded border border-white/10 bg-white/[0.025]" />
               </div>
             ))}
           </div>
@@ -419,19 +419,19 @@ export default function SettingsPage() {
               <div className="flex flex-col gap-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="mb-2 inline-flex items-center border border-white/10 bg-night-950/70 px-2 py-1 text-[11px] text-slate-400">
+                    <div className="mb-2 inline-flex items-center border border-white/10 bg-night-950 px-2 py-1 text-[11px] text-slate-400">
                       {provider.badge}
                     </div>
                     <h2 className="break-words font-display text-xl font-semibold text-white">{provider.title}</h2>
                     <p className="mt-1 text-sm text-slate-400">{providerStatusText(item, loading)}</p>
                   </div>
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-signal-cyan/40 bg-signal-cyan/12 text-signal-cyan">
-                    <KeyRound size={18} />
+                    <KeyRound size={20} />
                   </div>
                 </div>
 
                 {item?.has_key && item.key_preview ? (
-                  <div className="inline-flex items-center gap-2 border border-white/10 bg-night-950/70 px-3 py-2 font-mono text-sm tracking-wide text-signal-cyan">
+                  <div className="inline-flex items-center gap-2 border border-white/10 bg-night-950 px-3 py-2 font-mono text-sm tracking-wide text-signal-cyan">
                     <KeyRound size={14} />
                     <span>{item.key_preview}</span>
                   </div>
@@ -451,7 +451,7 @@ export default function SettingsPage() {
 
                 <div className="grid gap-2.5">
                   <Button className="min-h-12 w-full" onClick={() => openDialog(provider.code)} disabled={saving}>
-                    <KeyRound size={17} />
+                    <KeyRound size={16} />
                     {item?.has_key ? t("settings.replaceKey") : t("settings.addKey")}
                   </Button>
                   {item?.has_key ? (
@@ -461,12 +461,12 @@ export default function SettingsPage() {
                       onClick={() => void runProviderTest(provider.code)}
                       disabled={saving || testingProvider === provider.code}
                     >
-                      {testingProvider === provider.code ? <Loader2 className="animate-spin" size={17} /> : <Check size={17} />}
+                      {testingProvider === provider.code ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
                       {testingProvider === provider.code ? "测试中" : "一键测试"}
                     </Button>
                   ) : null}
                   <Button className="min-h-12 w-full" variant="danger" onClick={() => void removeKey(provider.code)} disabled={!item?.has_key || saving}>
-                    {saving ? <Loader2 className="animate-spin" size={17} /> : <Trash2 size={17} />}
+                    {saving ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
                     {t("settings.deleteKey")}
                   </Button>
                   <a
@@ -500,7 +500,7 @@ export default function SettingsPage() {
                 className="flex h-10 w-10 items-center justify-center border border-white/10 text-slate-400 hover:border-white/30 hover:text-white"
                 aria-label={t("settings.cancel")}
               >
-                <X size={18} />
+                <X size={20} />
               </button>
             </div>
 
@@ -570,7 +570,7 @@ export default function SettingsPage() {
                 {apiKeyStage === "saved" ? "完成" : t("settings.cancel")}
               </Button>
               <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={confirmSave} disabled={!canConfirm || saving || apiKeyStage === "saved"}>
-                {saving ? <Loader2 className="animate-spin" size={17} /> : <KeyRound size={17} />}
+                {saving ? <Loader2 className="animate-spin" size={16} /> : <KeyRound size={16} />}
                 {apiKeyStage === "validating" ? "测试中" : apiKeyStage === "saving" ? "保存中" : apiKeyStage === "saved" ? "已保存" : t("settings.confirm")}
               </Button>
             </div>

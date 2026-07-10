@@ -32,7 +32,7 @@ export function ConfirmModal({
             {cancelLabel}
           </Button>
           <Button className="min-h-12 w-full font-bold sm:w-auto" onClick={onConfirm}>
-            <Play size={17} />
+            <Play size={16} />
             {confirmLabel}
           </Button>
         </div>
@@ -73,7 +73,7 @@ export function QuotaSwitchModal({
               type="button"
               onClick={() => onSwitch(model)}
               disabled={saving}
-              className="flex items-center justify-between gap-3 border border-white/10 bg-night-950/70 px-3 py-3 text-left text-slate-300 transition hover:border-white/25 hover:text-white disabled:opacity-60"
+              className="flex items-center justify-between gap-3 border border-white/10 bg-night-950 px-3 py-3 text-left text-slate-300 transition hover:border-white/25 hover:text-white disabled:opacity-60"
             >
               <span className="block min-w-0 break-all text-sm font-semibold">{model}</span>
               {saving ? <Loader2 className="shrink-0 animate-spin" size={16} /> : <Cpu className="shrink-0" size={16} />}

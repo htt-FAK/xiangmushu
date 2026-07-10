@@ -76,7 +76,7 @@ function ModelSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="min-h-12 w-full border border-white/10 bg-night-950/70 px-3 text-sm text-white outline-none focus:border-signal-cyan/70"
+        className="min-h-12 w-full border border-white/10 bg-night-950 px-3 text-sm text-white outline-none focus:border-signal-cyan/70"
       >
         {options.map((item) => (
           <option key={item.model} value={item.model}>
@@ -128,7 +128,7 @@ function TaskCard({
           </p>
           <p className="mt-2 text-sm leading-6 text-slate-400">{taskBody(task, fallbackPromptLabel)}</p>
           {!compact && task.location_hint ? (
-            <pre className="mt-3 max-h-32 overflow-auto border border-white/10 bg-night-950/70 px-3 py-2 text-xs text-slate-500">
+            <pre className="mt-3 max-h-32 overflow-auto border border-white/10 bg-night-950 px-3 py-2 text-xs text-slate-500">
               {JSON.stringify(task.location_hint, null, 2)}
             </pre>
           ) : null}
@@ -323,15 +323,15 @@ export default function TemplateAnalysisPage() {
                 <p className="font-display text-2xl font-semibold text-white">{t("template.upload")}</p>
                 <p className="text-sm text-slate-500">{t("template.uploadHint")}</p>
               </div>
-              <UploadCloud className="text-signal-cyan" size={25} />
+              <UploadCloud className="text-signal-cyan" size={24} />
             </div>
 
             {pendingFileName && !file && !sessionRunning ? (
               <p className="mt-3 text-sm text-signal-amber">{t("template.pendingFileHint", pendingFileName)}</p>
             ) : null}
 
-            <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center border border-dashed border-white/18 bg-night-950/60 px-5 py-8 text-center transition hover:border-signal-cyan/60">
-              <FileUp className="mb-4 text-signal-cyan" size={34} />
+            <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center border border-dashed border-white/18 bg-night-950 px-5 py-8 text-center transition hover:border-signal-cyan/60">
+              <FileUp className="mb-4 text-signal-cyan" size={32} />
               <span className="break-all font-display text-xl font-semibold text-white">
                 {file ? file.name : t("template.chooseFile")}
               </span>
@@ -371,7 +371,7 @@ export default function TemplateAnalysisPage() {
                 onClick={onAnalyzeUpload}
                 disabled={!file || !visionModel || !plannerModel || loading || hasApiKey === false}
               >
-                {loading ? <Loader2 className="animate-spin" size={17} /> : <ListChecks size={17} />}
+                {loading ? <Loader2 className="animate-spin" size={16} /> : <ListChecks size={16} />}
                 {loading ? t("template.analyzing") : t("template.analyze")}
               </Button>
             </div>
@@ -383,7 +383,7 @@ export default function TemplateAnalysisPage() {
                 <p className="font-display text-xl font-semibold text-white">{t("template.savedTemplates")}</p>
                 <p className="text-sm text-slate-500">{t("template.savedTemplatesHint")}</p>
               </div>
-              <FileText className="text-signal-lime" size={22} />
+              <FileText className="text-signal-lime" size={24} />
             </div>
 
             {listLoading ? (
@@ -400,7 +400,7 @@ export default function TemplateAnalysisPage() {
                     <div
                       key={template.name}
                       className={`grid gap-3 border p-3 md:grid-cols-[1fr_auto] md:items-center ${
-                        active ? "border-signal-cyan/50 bg-signal-cyan/10" : "border-white/10 bg-night-950/45"
+                        active ? "border-signal-cyan/50 bg-signal-cyan/10" : "border-white/10 bg-night-950"
                       }`}
                     >
                       <button
@@ -476,7 +476,7 @@ export default function TemplateAnalysisPage() {
                   </p>
                 </div>
                 <Button variant="ghost" className="min-h-10 gap-2 px-4 text-xs" onClick={() => setDetailOpen(true)}>
-                  <MessageSquareText size={15} />
+                  <MessageSquareText size={16} />
                   {t("template.viewDetails")}
                 </Button>
               </div>
@@ -484,7 +484,7 @@ export default function TemplateAnalysisPage() {
               {billingRecords.length > 0 ? <BillingStrip records={billingRecords} /> : null}
 
               {session.vision_status ? (
-                <div className="border border-white/10 bg-night-950/70 px-3 py-2 text-xs leading-6 text-slate-400">
+                <div className="border border-white/10 bg-night-950 px-3 py-2 text-xs leading-6 text-slate-400">
                   {session.vision_status}
                 </div>
               ) : null}
@@ -496,13 +496,13 @@ export default function TemplateAnalysisPage() {
                     {t("template.recentTrace")}
                   </div>
                   {previewLogs.length === 0 ? (
-                    <div className="border border-dashed border-white/15 bg-night-950/60 px-4 py-5 text-sm text-slate-500">
+                    <div className="border border-dashed border-white/15 bg-night-950 px-4 py-5 text-sm text-slate-500">
                       {t("template.waitingLogs")}
                     </div>
                   ) : (
                     <div className="max-h-[280px] space-y-2 overflow-y-auto pr-1">
                       {previewLogs.map((log, index) => (
-                        <div key={`${log.created_at}-${index}`} className="border border-white/10 bg-night-950/70 px-3 py-3">
+                        <div key={`${log.created_at}-${index}`} className="border border-white/10 bg-night-950 px-3 py-3">
                           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-cyan">{log.phase}</p>
                           <p className="mt-2 text-sm text-slate-300">{log.message}</p>
                         </div>
@@ -523,7 +523,7 @@ export default function TemplateAnalysisPage() {
                     {t("template.taskOverview")}
                   </div>
                   {previewTasks.length === 0 ? (
-                    <div className="border border-dashed border-white/15 bg-night-950/60 px-4 py-5 text-sm text-slate-500">
+                    <div className="border border-dashed border-white/15 bg-night-950 px-4 py-5 text-sm text-slate-500">
                       {t("template.waitingTasks")}
                     </div>
                   ) : (
@@ -552,7 +552,7 @@ export default function TemplateAnalysisPage() {
         <DetailOverlay
           title={session.template || t("template.results")}
           subtitle={session.statusMessage || session.currentPhase || ""}
-          icon={<MessageSquareText size={18} />}
+          icon={<MessageSquareText size={20} />}
           onClose={() => setDetailOpen(false)}
         >
           <div className="grid gap-3 md:grid-cols-4">
@@ -566,7 +566,7 @@ export default function TemplateAnalysisPage() {
 
           <Panel className="min-w-0">
             <div className="mb-3 flex items-center gap-2">
-              <MessageSquareText size={17} className="text-signal-cyan" />
+              <MessageSquareText size={16} className="text-signal-cyan" />
               <p className="font-display text-xl font-semibold text-white">{t("template.fullTrace")}</p>
             </div>
             {logs.length === 0 ? (
@@ -574,7 +574,7 @@ export default function TemplateAnalysisPage() {
             ) : (
               <div className="space-y-3">
                 {logs.map((log, index) => (
-                  <div key={`${log.created_at}-${index}`} className="border border-white/10 bg-night-950/70 px-4 py-3">
+                  <div key={`${log.created_at}-${index}`} className="border border-white/10 bg-night-950 px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-cyan">{log.phase}</span>
                       <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString()}</span>
@@ -588,7 +588,7 @@ export default function TemplateAnalysisPage() {
 
           <Panel className="min-w-0">
             <div className="mb-3 flex items-center gap-2">
-              <ListChecks size={17} className="text-signal-lime" />
+              <ListChecks size={16} className="text-signal-lime" />
               <p className="font-display text-xl font-semibold text-white">{t("template.allFillTasks")}</p>
             </div>
             {tasks.length === 0 ? (

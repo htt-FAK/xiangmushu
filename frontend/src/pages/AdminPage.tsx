@@ -134,7 +134,7 @@ function MetricBlock({
           </p>
         </div>
         <div className={`border ${classes.border} ${classes.bg} p-2 ${classes.text}`}>
-          <Icon size={18} strokeWidth={1.7} />
+          <Icon size={20} strokeWidth={1.7} />
         </div>
       </div>
       {subValue && (
@@ -148,7 +148,7 @@ function MetricBlock({
 
 function EmptyTerminalState({ label }: { label: string }) {
   return (
-    <div className="flex min-h-36 items-center justify-center border border-dashed border-white/15 bg-night-950/60">
+    <div className="flex min-h-36 items-center justify-center border border-dashed border-white/15 bg-night-950">
       <p className="font-display text-sm font-semibold uppercase tracking-[0.26em] text-slate-500">{label}</p>
     </div>
   );
@@ -160,7 +160,7 @@ function SectionTitle({ icon: Icon, title, tone = "cyan" }: { icon: LucideIcon; 
   return (
     <div className="mb-4 flex items-center justify-between gap-4 border-b border-white/10 pb-3">
       <h2 className="flex items-center gap-2 font-display text-base font-semibold uppercase tracking-[0.18em] text-white">
-        <Icon size={17} className={classes.text} strokeWidth={1.8} />
+        <Icon size={16} className={classes.text} strokeWidth={1.8} />
         {title}
       </h2>
       <span className={`h-1.5 w-1.5 ${classes.bar}`} />
@@ -360,17 +360,17 @@ export default function AdminPage() {
             )}
           </Panel>
 
-          <div className="grid gap-3 border border-white/10 bg-night-950/70 p-4 text-xs text-slate-500 md:grid-cols-3">
+          <div className="grid gap-3 border border-white/10 bg-night-950 p-4 text-xs text-slate-500 md:grid-cols-3">
             <div className="flex items-center gap-2 font-mono tabular-nums">
-              <Gauge size={15} className="text-signal-cyan" />
+              <Gauge size={16} className="text-signal-cyan" />
               {t("admin.colGenerations")} {formatInteger(stats.total_generations)}
             </div>
             <div className="flex items-center gap-2 font-mono tabular-nums">
-              <Activity size={15} className="text-signal-lime" />
+              <Activity size={16} className="text-signal-lime" />
               {t("admin.colInputTokens")} {formatTokens(stats.total_input_tokens)}
             </div>
             <div className="flex items-center gap-2 font-mono tabular-nums">
-              <Activity size={15} className="text-amber-400" />
+              <Activity size={16} className="text-amber-400" />
               {t("admin.colOutputTokens")} {formatTokens(stats.total_output_tokens)}
             </div>
           </div>

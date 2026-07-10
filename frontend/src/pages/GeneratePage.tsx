@@ -328,7 +328,7 @@ export default function GeneratePage() {
             onClick={requestStart}
             disabled={!template || !slug || busy || !readiness.ready}
           >
-            {running ? <Loader2 className="animate-spin" size={18} /> : <Play size={18} />}
+            {running ? <Loader2 className="animate-spin" size={20} /> : <Play size={20} />}
             {running ? t("generate.running") : t("generate.start")}
           </Button>
           <Button
@@ -338,7 +338,7 @@ export default function GeneratePage() {
             disabled={!busy}
             aria-label={t("generate.stop")}
           >
-            <Square size={17} />
+            <Square size={16} />
           </Button>
         </div>
       </header>
