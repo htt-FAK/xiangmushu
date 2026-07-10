@@ -51,3 +51,4 @@ __dream_query.py
 
 # Local historical/personal data
 data/historical/
+.env
