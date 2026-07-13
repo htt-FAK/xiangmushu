@@ -17,6 +17,9 @@
 | [Ace第二阶段验收用例.md](./Ace第二阶段验收用例.md) | 第二阶段增强功能（审核、视觉、批量表格等）的验收用例 | QA + 工程师 |
 | [screenshots/](./screenshots/) | UI 截图素材目录 | 所有人 |
 
+| [DEPLOY_AFTER_DESIGN_ROLLOUT.md](./DEPLOY_AFTER_DESIGN_ROLLOUT.md) | ⚠️ **前端部署指南**。宝塔 nginx 根目录是 `/www/wwwroot/xiangmushu/`（非 git repo 的 dist/），需要额外复制步骤 | 运维 + 工程师 |
+| [/scripts/deploy.sh](../scripts/deploy.sh) | 一键部署脚本（git pull + 构建 + 复制到 /www/wwwroot/xiangmushu/ + 验证 + nginx reload） | 运维 |
+
 ---
 
 ## 推荐阅读顺序
