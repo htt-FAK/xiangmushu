@@ -1937,6 +1937,101 @@ def _offline_quality_report_and_verifier() -> bool:
     return True
 
 
+def _offline_custom_audit_fallback() -> bool:
+    """Verify: custom audit model saved but fails at runtime → fallback to default + fallback_events recorded.
+
+    Exercises the Phase 6 / Phase 7 integration path without hitting any
+    external LLM endpoint:
+
+      - A fake validated UserCustomAuditModel record is provided via
+        patched get_by_user_id.
+      - The custom OpenAI client (identified by an ``object()`` sentinel)
+        raises in chat_completions_create → simulates runtime failure.
+      - The default model chain returns a valid ``{"verdict":"pass",...}``
+        JSON response via a second sentinel client.
+      - We assert that:
+          * ar.fallback_events is non-empty and records the custom model id,
+          * the verdict in the final AuditResult comes from the default chain,
+          * no uncaught exception leaks out of the auditor.
+    """
+    print("=== custom_audit: runtime-failure → default-chain fallback (offline) ===")
+    from unittest.mock import patch, MagicMock
+    from core.content_auditor import ContentAuditor
+    from core.custom_audit import UserCustomAuditModel
+
+    fake_record = UserCustomAuditModel(
+        id=1, user_id=42, name="Fake SenseNova",
+        base_url="https://example.invalid/v1", model_id="fake-model-v1",
+        encrypted_api_key="fernet:stub", api_key_hint="sk-1...test",
+        status="validated",
+        validated_at="2026-01-01T00:00:00",
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+    )
+
+    CUSTOM_CLIENT = object()   # sentinel identity for the custom-model path
+    DEFAULT_CLIENT = object()  # sentinel identity for the default-chain path
+
+    def _fake_chat_completions(client, *, model, messages, temperature, stream):
+        if client is CUSTOM_CLIENT:
+            raise RuntimeError("simulated custom-model runtime failure")
+        # Default chain: return a well-formed audit JSON payload.
+        msg = MagicMock()
+        msg.content = '{"verdict":"pass","issues":[],"revised_content":"","one_line_summary":"ok"}'
+        choice = MagicMock()
+        choice.message = msg
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = None
+        resp.model = "default-fallback-model"
+        return resp
+
+    task = FillTask(
+        task_id="t-smoke-custom", target_chapter="第一章",
+        task_type="paragraph", description="风险描述测试段落（触发 need_model_audit）",
+        location_hint={}, word_limit=100,
+    )
+
+    try:
+        with patch("openai.OpenAI", return_value=CUSTOM_CLIENT), \
+             patch("core.custom_audit.decrypt_api_key", return_value="fake-secret"), \
+             patch("core.custom_audit.get_by_user_id", return_value=fake_record), \
+             patch("config.openai_client_for_chat", return_value=object()), \
+             patch("core.content_auditor.chat_client_for_model", return_value=DEFAULT_CLIENT), \
+             patch("core.content_auditor.chat_completions_create", side_effect=_fake_chat_completions):
+            auditor = ContentAuditor(user_id=42)
+            ar = auditor.audit(
+                task,
+                draft_text="这是模型草稿。",
+                retrieved_texts="参考资料：冒烟测试。",
+                table_context=None,
+                route_meta={"model": "demo", "generation_tier": "large", "kb_hits": 1},
+            )
+    except Exception as e:
+        print(f"  [FAIL] 异常泄漏到外部: {e!r}")
+        return False
+
+    if not getattr(ar, "fallback_events", None):
+        print("  [FAIL] fallback_events 为空（预期：记录了自定义模型运行时失败）")
+        return False
+
+    fb = ar.fallback_events[0]
+    if fb.get("custom_model_id") != "fake-model-v1":
+        print(f"  [FAIL] custom_model_id 期望 'fake-model-v1'，实际 {fb.get('custom_model_id')!r}")
+        return False
+    if fb.get("error_kind") not in ("network", "bad_response"):
+        print(f"  [FAIL] error_kind 预期 network/bad_response，实际 {fb.get('error_kind')!r}")
+        return False
+    if ar.verdict != "pass":
+        print(f"  [FAIL] verdict 期望 'pass'（来自 default-chain），实际 {ar.verdict!r}")
+        return False
+    if (auditor.last_model or "") != "default-fallback-model":
+        print(f"  [WARN] auditor.last_model 预期 'default-fallback-model'，"
+              f"实际 {auditor.last_model!r}（取决于 model_chain 解析路径；非致命）")
+    print("  [OK]")
+    return True
+
+
 def _run_all_offline() -> bool:
     steps = [
         ("路由", _routing_tests),
@@ -1955,6 +2050,7 @@ def _run_all_offline() -> bool:
         ("document_blocks_chunk_metadata", _offline_document_blocks_and_chunk_metadata),
         ("multiformat_parsed_blocks", _offline_multiformat_parsed_blocks),
         ("quality_report_verifier", _offline_quality_report_and_verifier),
+        ("custom_audit_fallback", _offline_custom_audit_fallback),
     ]
     ok_all = True
     for name, fn in steps:

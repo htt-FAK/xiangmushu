@@ -23,6 +23,11 @@ class AuditResult:
     revised_content: str = ""
     one_line_summary: str = ""
     parse_ok: bool = True
+    # Runtime audit-fallback events emitted when the user-configured custom
+    # audit model failed and the auditor retried with the platform default.
+    # Empty list when no fallback occurred. See spec:
+    # openspec/changes/add-custom-audit-model/specs/custom-audit-model/spec.md
+    fallback_events: List[Dict[str, Any]] = field(default_factory=list)
 
 
 AUDIT_SYSTEM = """你是申报类文档质检员。根据“撰写任务”“参考资料”“模型草稿”判断是否可用。
@@ -66,6 +71,11 @@ class ContentAuditor:
         self._strict_model_selection = bool(strict_model_selection)
         self.last_usage: Any = None
         self.last_model: str = ""
+        # Cached across segments within a single ContentAuditor instance to
+        # avoid re-hitting the per-user custom audit model DB row on every
+        # audit call. Invalidated automatically if/when the underlying
+        # record's status changes (re-resolved on next instance).
+        self._custom_audit_client_cache: Dict[str, Any] | None = None
 
     def pop_last_usage(self) -> tuple[str, Any]:
         usage = self.last_usage
@@ -100,6 +110,103 @@ class ContentAuditor:
         )
         return chain, temperature
 
+    def _resolve_custom_audit_client(self) -> Dict[str, Any]:
+        """Resolve the user-configured custom audit model, if any.
+
+        Returns a dict with keys ``client`` (``OpenAI`` instance or None),
+        ``model_id`` (str or None), ``status`` (``"used_custom"`` when a
+        validated record is available, else ``"default"``), and
+        ``record_id`` (int or None).
+
+        The result is memoized on the instance so that repeated audit()
+        calls within the same generation session do not re-query the DB.
+        Memoization is invalidated only by instance recreation, which
+        happens at generation-session boundaries; this is acceptable
+        because a user changing their custom-audit config mid-generation
+        is an exceedingly rare UX scenario.
+        """
+        if self._custom_audit_client_cache is not None:
+            return self._custom_audit_client_cache
+
+        default_entry: Dict[str, Any] = {
+            "client": None,
+            "model_id": None,
+            "status": "default",
+            "record_id": None,
+        }
+        if self._user_id is None:
+            self._custom_audit_client_cache = default_entry
+            return default_entry
+
+        # Late import to keep the module surface tight at the top.
+        try:
+            from core import custom_audit as _custom_audit_module
+
+            record = _custom_audit_module.get_by_user_id(self._user_id)
+        except Exception as exc:  # noqa: BLE001 - DB/decryption failure path
+            _LOG.warning(
+                "content_audit_custom_resolve user=%s err=%s",
+                self._user_id, exc,
+            )
+            self._custom_audit_client_cache = default_entry
+            return default_entry
+
+        if record is None or record.status != "validated":
+            self._custom_audit_client_cache = default_entry
+            return default_entry
+
+        try:
+            from openai import OpenAI
+
+            decrypted = record.decrypted_api_key()
+        except Exception as exc:  # noqa: BLE001 - decryption failure
+            _LOG.warning(
+                "content_audit_custom_decrypt user=%s record=%s err=%s",
+                self._user_id, record.id, type(exc).__name__,
+            )
+            self._custom_audit_client_cache = default_entry
+            return default_entry
+
+        client = OpenAI(
+            api_key=decrypted,
+            base_url=record.base_url,
+            timeout=30.0,
+            max_retries=1,
+        )
+        entry = {
+            "client": client,
+            "model_id": record.model_id,
+            "status": "used_custom",
+            "record_id": record.id,
+        }
+        self._custom_audit_client_cache = entry
+        return entry
+
+    def _invoke_audit_chat(
+        self,
+        client: Any,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float,
+    ) -> tuple[str, Any, str]:
+        """Send the audit prompt to an LLM client, returning (raw, usage, model).
+
+        Raises on any transport / parsing error so the caller can decide
+        whether to retry with a fallback model.
+        """
+        resp = chat_completions_create(
+            client,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            stream=False,
+        )
+        ch0 = resp.choices[0] if resp.choices else None
+        usage = getattr(resp, "usage", None)
+        resolved_model = str(getattr(resp, "model", None) or model)
+        raw = (ch0.message.content if ch0 and ch0.message else "") or ""
+        return raw, usage, resolved_model
+
     def audit(
         self,
         task: FillTask,
@@ -126,46 +233,138 @@ class ContentAuditor:
         user_msg = "\n\n".join(user_parts)
 
         raw = ""
+        fallback_events: List[Dict[str, Any]] = []
+        custom_status: str = "default"
+        custom_model_id: str = ""
         last_error: Optional[Exception] = None
         self.last_usage = None
         self.last_model = ""
         model_chain, audit_temperature = self._resolve_model_chain_and_temp()
-        seen_models = set()
-        for model in model_chain:
-            model = (model or "").strip()
-            if not model or model in seen_models:
-                continue
-            seen_models.add(model)
+
+        # --- Phase 1: try user-configured custom audit model first ----------
+        custom_entry = self._resolve_custom_audit_client()
+        custom_status = custom_entry["status"]
+        custom_model_id = custom_entry["model_id"] or ""
+        custom_used_for_event: bool = False
+        if (
+            custom_status == "used_custom"
+            and custom_entry["client"] is not None
+            and custom_model_id
+        ):
+            custom_used_for_event = True
             try:
-                client = self._client
-                if self._user_id is not None:
-                    client = chat_client_for_model(model, self._user_id, purpose="chat")
-                resp = chat_completions_create(
-                    client,
-                    model=model,
-                    messages=[
+                raw, usage, resolved = self._invoke_audit_chat(
+                    custom_entry["client"],
+                    custom_model_id,
+                    [
                         {"role": "system", "content": AUDIT_SYSTEM},
                         {"role": "user", "content": user_msg},
                     ],
-                    temperature=audit_temperature,
-                    stream=False,
+                    audit_temperature,
                 )
-                ch0 = resp.choices[0] if resp.choices else None
-                self.last_usage = getattr(resp, "usage", None)
-                self.last_model = str(getattr(resp, "model", None) or model)
-                raw = (ch0.message.content if ch0 and ch0.message else "") or ""
                 if raw.strip():
-                    break
-                _LOG.warning("content_audit_empty model=%s, trying next fallback", model)
-            except Exception as e:
-                last_error = e
-                _LOG.warning("content_audit_api_error model=%s err=%s", model, e)
+                    self.last_usage = usage
+                    self.last_model = resolved
+                else:
+                    _LOG.warning(
+                        "content_audit_custom_empty user=%s model=%s",
+                        self._user_id, custom_model_id,
+                    )
+                    fallback_events.append({
+                        "segment_index": int(getattr(task, "index", 0) or 0),
+                        "custom_model_id": custom_model_id,
+                        "fallback_model_id": str(
+                            model_chain[0] if model_chain
+                            else getattr(config, "AUDIT_TEXT_MODEL", "qwen3.6-flash")
+                        ),
+                        "error_kind": "bad_response",
+                        "error_detail": "empty response from custom audit model",
+                        "occurred_at": __import__("datetime").datetime.now(
+                            __import__("datetime").timezone.utc
+                        ).isoformat(),
+                    })
+                    raw = ""
+            except Exception as exc:
+                fallback_kind = "network"
+                fallback_detail = str(exc)[:400]
+                try:
+                    from core.provider_errors import classify_provider_error
+
+                    classified = classify_provider_error(exc)
+                    mapped = {
+                        "invalid_api_key": "auth",
+                        "permission_denied": "auth",
+                        "quota_exceeded": "auth",
+                        "model_unavailable": "model_not_found",
+                        "network_error": "network",
+                        "timeout": "timeout",
+                    }.get(str(classified.get("code") or ""), "bad_response")
+                    fallback_kind = mapped
+                    fallback_detail = str(classified.get("message") or fallback_detail)[:400]
+                except Exception:  # noqa: BLE001
+                    pass
+                _LOG.warning(
+                    "content_audit_custom_error user=%s model=%s kind=%s err=%s",
+                    self._user_id, custom_model_id, fallback_kind, exc,
+                )
+                fallback_events.append({
+                    "segment_index": int(getattr(task, "index", 0) or 0),
+                    "custom_model_id": custom_model_id,
+                    "fallback_model_id": str(
+                        model_chain[0] if model_chain
+                        else getattr(config, "AUDIT_TEXT_MODEL", "qwen3.6-flash")
+                    ),
+                    "error_kind": fallback_kind,
+                    "error_detail": fallback_detail,
+                    "occurred_at": __import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ).isoformat(),
+                })
+                raw = ""
+                # Reset usage/model so Phase 2 chain's first success records cleanly.
+                self.last_usage = None
+                self.last_model = ""
+
+        # --- Phase 2: default model chain fallback (existing behavior) -------
+        seen_models = set()
+        if not raw.strip():
+            for model in model_chain:
+                model = (model or "").strip()
+                if not model or model in seen_models:
+                    continue
+                seen_models.add(model)
+                try:
+                    client = self._client
+                    if self._user_id is not None:
+                        client = chat_client_for_model(model, self._user_id, purpose="chat")
+                    raw, usage, resolved = self._invoke_audit_chat(
+                        client,
+                        model,
+                        [
+                            {"role": "system", "content": AUDIT_SYSTEM},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        audit_temperature,
+                    )
+                    if raw.strip():
+                        self.last_usage = usage
+                        self.last_model = resolved
+                        break
+                    _LOG.warning("content_audit_empty model=%s, trying next fallback", model)
+                except Exception as e:
+                    last_error = e
+                    _LOG.warning("content_audit_api_error model=%s err=%s", model, e)
 
         if not raw.strip():
             issue = "审核接口异常，已跳过"
             if last_error is not None:
                 issue += f"：{last_error}"
-            return AuditResult(verdict="pass", issues=[issue], parse_ok=False)
+            return AuditResult(
+                verdict="pass",
+                issues=[issue],
+                parse_ok=False,
+                fallback_events=fallback_events,
+            )
 
         try:
             data = json.loads(_strip_json_fence(raw))
@@ -175,6 +374,7 @@ class ContentAuditor:
                 verdict="pass",
                 issues=["审核 JSON 解析失败，已跳过"],
                 parse_ok=False,
+                fallback_events=fallback_events,
             )
 
         verdict = str(data.get("verdict", "pass")).strip().lower()
@@ -193,6 +393,7 @@ class ContentAuditor:
             revised_content=revised,
             one_line_summary=summary,
             parse_ok=True,
+            fallback_events=fallback_events,
         )
         _LOG.info(
             "content_gen_audit task_id=%s verdict=%s issues_n=%s",

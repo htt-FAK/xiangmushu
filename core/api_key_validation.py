@@ -104,10 +104,14 @@ def _base_url_for_provider(provider_code: str) -> str:
     return config.provider_base_url(provider_code)
 
 
-def _client_for_api_key(api_key: str, provider_code: str = "dashscope") -> Any:
+def _client_for_api_key(
+    api_key: str,
+    provider_code: str = "dashscope",
+    base_url_override: str | None = None,
+) -> Any:
     from openai import OpenAI
 
-    base_url = _base_url_for_provider(provider_code)
+    base_url = (base_url_override or "").strip() or _base_url_for_provider(provider_code)
     return OpenAI(
         api_key=api_key,
         base_url=base_url,
@@ -116,8 +120,19 @@ def _client_for_api_key(api_key: str, provider_code: str = "dashscope") -> Any:
     )
 
 
-def probe_api_key_model(api_key: str, model: str, provider_code: str = "dashscope") -> dict[str, Any]:
-    client = _client_for_api_key(api_key, provider_code)
+def probe_api_key_model(
+    api_key: str,
+    model: str,
+    provider_code: str = "dashscope",
+    base_url_override: str | None = None,
+) -> dict[str, Any]:
+    """Send a minimal chat-completion probe to verify an api key + model combo.
+
+    ``base_url_override``, when non-empty, replaces the provider-registry
+    base_url lookup; this is used by ``core.custom_audit`` to let a user
+    probe any OpenAI-compatible endpoint without a registered provider.
+    """
+    client = _client_for_api_key(api_key, provider_code, base_url_override=base_url_override)
     response = direct_chat_completions_create(
         client,
         force_client=True,

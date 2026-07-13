@@ -3,6 +3,8 @@ import type {
   ApiKeyValidationResult,
   ApiKeyStatus,
   BillingSummary,
+  CustomAuditModelError,
+  CustomAuditModelStatus,
   GenerateEvent,
   GenerateParams,
   HistoryArticlesResponse,
@@ -445,3 +447,79 @@ export async function streamTemplateAnalysisSession(
     { method: "GET", signal },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Custom (user-supplied) OpenAI-compatible content audit model
+//
+// Independent of provider_credentials; one record per user. Probe runs
+// BEFORE persisting; backend returns 422 with a structured {error:{code,message}}
+// body on failure. On success the POST returns the saved record (api_key
+// redacted to api_key_preview).
+// ---------------------------------------------------------------------------
+
+const CUSTOM_AUDIT_ENDPOINT = "/api/user/custom-audit-model";
+
+export async function fetchCustomAuditModel(): Promise<CustomAuditModelStatus | null> {
+  const response = await authedFetch(apiUrl(CUSTOM_AUDIT_ENDPOINT));
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${response.status}`));
+  }
+  return (await response.json()) as CustomAuditModelStatus;
+}
+
+export async function saveCustomAuditModel(data: {
+  name: string;
+  base_url: string;
+  model_id: string;
+  api_key: string;
+}): Promise<CustomAuditModelStatus> {
+  const response = await authedFetch(apiUrl(CUSTOM_AUDIT_ENDPOINT), {
+    method: "POST",
+    headers: {
+      ...buildAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+  const text = await response.text();
+  let parsed: unknown = {};
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = {};
+    }
+  }
+  if (!response.ok) {
+    // 422 path: backend returns { error: { code, message } }.
+    const body = (parsed && typeof parsed === "object" ? parsed : {}) as {
+      error?: { code?: string; message?: string };
+    };
+    const structured = body.error;
+    const err = new Error(
+      structured?.message || parseApiErrorMessage(text, `HTTP ${response.status}`),
+    ) as Error & { customAuditError?: CustomAuditModelError };
+    if (structured?.code) {
+      err.customAuditError = {
+        code: structured.code,
+        message: structured.message || err.message,
+      };
+    }
+    throw err;
+  }
+  return parsed as CustomAuditModelStatus;
+}
+
+export async function deleteCustomAuditModel(): Promise<void> {
+  const response = await authedFetch(apiUrl(CUSTOM_AUDIT_ENDPOINT), {
+    method: "DELETE",
+    headers: buildAuthHeaders(),
+  });
+  if (!response.ok && response.status !== 204) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${response.status}`));
+  }
+}
+

@@ -177,6 +177,32 @@ export type ApiKeyValidationResult = {
   probes: ValidationProbe[];
 };
 
+export type CustomAuditModelError = {
+  code: string;
+  message: string;
+};
+
+export type CustomAuditModel = {
+  name: string;
+  base_url: string;
+  model_id: string;
+  api_key?: string;
+};
+
+export type CustomAuditModelStatus = {
+  id: number;
+  name: string;
+  base_url: string;
+  model_id: string;
+  api_key_preview?: string | null;
+  // Three-state status returned by backend: "untested" | "validated" | "failed"
+  status?: "untested" | "validated" | "failed";
+  // ISO-8601 string when the last successful probe completed; null/undefined when never validated.
+  validated_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export interface ModelOption {
   model: string;
   recommended?: boolean;
@@ -227,6 +253,17 @@ export type GenerateEvent =
   | { type: "billing"; index: number; billing: BillingRecord }
   | { type: "progress"; index: number; total: number }
   | {
+      type: "audit_fallback";
+      seq?: number;
+      index?: number;
+      segment_index?: number;
+      custom_model_id: string;
+      fallback_model_id: string;
+      error_kind: string;
+      error_detail: string;
+      occurred_at?: string;
+    }
+  | {
       type: "quota_alert";
       seq?: number;
       module?: string;
@@ -245,10 +282,27 @@ export type GenerateEvent =
       visual_score?: number | null;
       billing?: GenerationBilling;
       billing_summary?: BillingSummary;
+      audit_fallback_events?: Array<{
+        segment_index: number;
+        custom_model_id: string;
+        fallback_model_id: string;
+        error_kind: string;
+        error_detail: string;
+        occurred_at: string;
+      }>;
     }
   | { type: "terminated"; seq?: number; message?: string }
   | { type: "error"; seq?: number; index?: number; terminal?: boolean; error: string | { code: string; message: string; retryable?: boolean; detail?: string } }
   | { type: "heartbeat"; seq?: number };
+
+export type AuditFallbackEvent = {
+  segment_index: number;
+  custom_model_id: string;
+  fallback_model_id: string;
+  error_kind: string;
+  error_detail: string;
+  occurred_at: string;
+};
 
 export type GenerationSessionSnapshot = {
   session_id: string;
@@ -266,6 +320,7 @@ export type GenerationSessionSnapshot = {
   billing?: GenerationBilling | null;
   billing_summary?: BillingSummary | null;
   last_error?: { code: string; message: string; retryable?: boolean; detail?: string } | null;
+  audit_fallback_events?: AuditFallbackEvent[] | null;
   params: GenerateParams & { [key: string]: unknown };
   created_at: string;
   updated_at: string;

@@ -7,6 +7,7 @@ import { useFocusTrap } from "../hooks";
 import { useI18n } from "../i18n";
 import { flattenModelOptions as flattenOptions, preferredModel } from "../models";
 import type { ApiKeyStatus, ApiKeyValidationResult, ModelModuleConfig, ModelOption, ModelOptionsMap, ProviderApiKeyStatus } from "../types";
+import CustomAuditModelCard from "./CustomAuditModelCard";
 
 const MODEL_ROLE_ORDER = ["main_writer", "fast_writer", "vision_layout", "template_planner", "audit_text"];
 type ApiKeyStage = "idle" | "validating" | "saving" | "saved" | "failed";
@@ -493,6 +494,10 @@ export default function SettingsPage() {
           );
         })}
       </div>
+
+      {/* Custom OpenAI-compatible audit model card. Independent of the
+          fixed 3-provider grid; uses its own endpoint + backend state. */}
+      <CustomAuditModelCard />
 
       {dialogOpen ? (
         <div ref={dialogTrapRef} className="fixed inset-0 z-50 overflow-y-auto bg-night-950/92 px-4 py-6 backdrop-blur">

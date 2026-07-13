@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -79,6 +79,7 @@ from core.billing import (
     update_provider_api_key_validation,
 )
 from core.api_key_validation import validate_user_api_key
+from core import custom_audit as custom_audit_module
 from core.audit_log import (
     ADMIN_ACCESS,
     API_KEY_DELETED,
@@ -330,6 +331,18 @@ class ApiKeyRequest(BaseModel):
 
 class ApiKeyProviderRequest(BaseModel):
     provider_code: str | None = None
+
+
+class CustomAuditModelRequest(BaseModel):
+    """User-submitted configuration for a custom OpenAI-compatible audit model.
+
+    Used by ``POST /api/user/custom-audit-model``. All four fields are
+    required and validated before any probe HTTP call is issued.
+    """
+    name: str
+    base_url: str
+    model_id: str
+    api_key: str
 
 
 SUPPORTED_API_KEY_PROVIDERS: tuple[str, ...] = ("dashscope", "deepseek", "mimo")
@@ -974,6 +987,7 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
             "route": None,
             "billing": None,
             "audit": None,
+            "audit_fallback_events": [],
             "trace": None,
             "error": None,
             "chunks": [],
@@ -1029,6 +1043,8 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                 )
                 audit_verdict = ar.verdict
                 audit_issues = audit_issues + list(ar.issues)
+                if ar.fallback_events:
+                    result["audit_fallback_events"] = list(ar.fallback_events)
                 if should_apply_revision(task, ar):
                     content = ar.revised_content.strip()
                     result["content"] = content
@@ -1108,6 +1124,16 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                         emit({"type": "error", "index": index, "error": result["error"], "terminal": False})
                     if result["audit"] is not None:
                         emit(result["audit"])
+                    # Emit inline {type:"audit_fallback",...} events as they happen,
+                    # consistent with how 'audit' events are emitted. Per the spec
+                    # (tasks 7.2 / 7.3) these events are duplicated verbatim into
+                    # the /done event's session-level audit_fallback_events list.
+                    for fb_event in result.get("audit_fallback_events") or []:
+                        emit({
+                            "type": "audit_fallback",
+                            "index": index,
+                            **fb_event,
+                        })
                     emit({"type": "progress", "index": index, "total": len(tasks)})
         finally:
             executor.shutdown(wait=not abort_generation, cancel_futures=abort_generation)
@@ -1116,6 +1142,14 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
         results: list[str] = [item["content"] for item in task_results]
         traces = [item["trace"] for item in task_results]
         billing_records = [item["billing"] for item in task_results if item["billing"] is not None]
+        # Aggregate all per-task audit fallback events into a single session-level
+        # list, ordered by occurrence (segment_index monotonically increases thanks
+        # to the per-task sort above). Empty list if no segment triggered a
+        # custom-model fallback.
+        audit_fallback_events_session: list[dict] = []
+        for _tr in task_results:
+            for _fb in _tr.get("audit_fallback_events") or []:
+                audit_fallback_events_session.append(dict(_fb))
 
         ts = time.strftime("%Y%m%d_%H%M%S")
         base_name = template.replace(".docx", "")
@@ -1178,6 +1212,11 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                 "report_summary": quality_report_summary(report),
                 "post_fill_checks": post_fill_checks,
                 "visual_score": visual_payload.get("score"),
+                # Session-level aggregated audit fallback events for this
+                # generation run. Empty list when no segment triggered fallback.
+                # Frontend renders a non-blocking warning banner (Plan B) when
+                # this list is non-empty; see spec/custom-audit-model §9.
+                "audit_fallback_events": audit_fallback_events_session,
                 "billing": {
                     "records": billing_records,
                     "input_tokens": sum(int(item.get("input_tokens") or 0) for item in billing_records),
@@ -1624,6 +1663,178 @@ async def user_apikey_delete(
         ua=_user_agent(request),
     )
     return {"ok": True, **_provider_status_payload(current_user.id)}
+
+
+# ---------------------------------------------------------------------------
+# Custom (user-supplied) OpenAI-compatible content audit model
+#
+# A per-user "side channel" for the content-audit role. Independent of the
+# existing provider_credentials / model_providers registry; one record per
+# user. Probe is run BEFORE persisting; at runtime the content auditor
+# falls back to the platform default AUDIT_TEXT_MODEL on failure.
+# ---------------------------------------------------------------------------
+
+_CUSTOM_AUDIT_ERROR_MESSAGES: dict[str, dict[str, str]] = {
+    "url_format": {
+        "zh": "Base URL 格式不正确，请输入以 http:// 或 https:// 开头的完整地址。",
+        "en": "Base URL format is invalid; please enter a full address starting with http:// or https://.",
+    },
+    "ssrf_rejected": {
+        "zh": "Base URL 指向不被允许的内网地址，请使用公网可访问的端点。",
+        "en": "Base URL resolves to a private network address; a public endpoint is required.",
+    },
+    "auth": {
+        "zh": "API Key 验证失败，请检查 Key 是否正确或是否已过期。",
+        "en": "API key validation failed; please verify it is correct and not expired.",
+    },
+    "network": {
+        "zh": "无法连接到指定服务端点，请检查 URL 是否可达。",
+        "en": "Unable to reach the specified endpoint; please verify the URL is accessible.",
+    },
+    "timeout": {
+        "zh": "连接超时，服务端点未在规定时间内响应。",
+        "en": "Connection timed out; the endpoint did not respond in time.",
+    },
+    "model_not_found": {
+        "zh": "指定的模型无法在该端点使用，请核实 Model ID。",
+        "en": "The specified model is not available at this endpoint; please verify the Model ID.",
+    },
+    "bad_response": {
+        "zh": "端点返回的响应无法解析，请确认该服务兼容 OpenAI API 协议。",
+        "en": "The endpoint returned an unparseable response; please confirm it is OpenAI API-compatible.",
+    },
+}
+
+
+def _lang_from_request(request: Request) -> str:
+    accept = (request.headers.get("accept-language") or "").lower()
+    if accept.startswith("en"):
+        return "en"
+    return "zh"
+
+
+def _localize_custom_audit_error(kind: str, detail: str, lang: str) -> str:
+    base = _CUSTOM_AUDIT_ERROR_MESSAGES.get(kind, {}).get(
+        lang, _CUSTOM_AUDIT_ERROR_MESSAGES.get(kind, {}).get("zh", detail)
+    )
+    if detail and detail not in base:
+        return f"{base} ({detail})"
+    return base
+
+
+@app.get("/api/user/custom-audit-model")
+async def user_custom_audit_model_get(current_user: User = Depends(get_current_user)):
+    record = custom_audit_module.get_by_user_id(current_user.id)
+    if record is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "no_custom_audit_model", "message": "当前用户尚未配置自定义审核模型。"}},
+        )
+    return record.as_public_dict()
+
+
+@app.post("/api/user/custom-audit-model")
+async def user_custom_audit_model_save(
+    payload: CustomAuditModelRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    name = (payload.name or "").strip()
+    base_url = (payload.base_url or "").strip()
+    model_id = (payload.model_id or "").strip()
+    api_key = (payload.api_key or "").strip()
+
+    if not name:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "url_format", "message": "请填写该审核模型的显示名称。"}},
+        )
+    if not model_id:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "model_not_found", "message": "请填写模型 ID。"}},
+        )
+    if not api_key:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "auth", "message": "请填写 API Key。"}},
+        )
+
+    # Pre-flight: URL format + SSRF guard (no HTTP call is issued here).
+    error_kind, error_detail = custom_audit_module.validate_base_url(base_url)
+    if error_kind:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": error_kind,
+                    "message": _localize_custom_audit_error(
+                        error_kind, error_detail or "", _lang_from_request(request)
+                    ),
+                }
+            },
+        )
+
+    # Live probe; on failure reject save with structured localized error.
+    probe = custom_audit_module.probe_custom_model(
+        base_url=base_url, model_id=model_id, api_key=api_key
+    )
+    if not probe.ok:
+        kind = probe.error_kind or "bad_response"
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": kind,
+                    "message": _localize_custom_audit_error(
+                        kind, probe.error_detail or "", _lang_from_request(request)
+                    ),
+                }
+            },
+        )
+
+    try:
+        record = custom_audit_module.save(
+            current_user.id,
+            name=name,
+            base_url=base_url,
+            model_id=model_id,
+            plaintext_api_key=api_key,
+            status="validated",
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist custom audit model for user %s: %s", current_user.id, exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "persist_failed", "message": "无法保存自定义审核模型配置。"}},
+        )
+
+    log_audit(
+        API_KEY_SAVED,
+        user_id=current_user.id,
+        email=current_user.email,
+        ip=_client_ip(request),
+        ua=_user_agent(request),
+        detail={"kind": "custom_audit_model", "model_id": model_id},
+    )
+    return record.as_public_dict()
+
+
+@app.delete("/api/user/custom-audit-model")
+async def user_custom_audit_model_delete(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    custom_audit_module.delete_by_user_id(current_user.id)
+    log_audit(
+        API_KEY_DELETED,
+        user_id=current_user.id,
+        email=current_user.email,
+        ip=_client_ip(request),
+        ua=_user_agent(request),
+        detail={"kind": "custom_audit_model"},
+    )
+    return Response(status_code=204)
 
 
 @app.get("/api/billing/summary")

@@ -7,6 +7,7 @@ import {
 import { useBackgroundSessions } from "../../backgroundSessions";
 import type { OutputBlockData } from "../../components/OutputBlock";
 import type {
+  AuditFallbackEvent,
   GenerateEvent,
   GenerateParams,
   GenerationBilling,
@@ -72,6 +73,7 @@ export function useGenerationSession(options: {
   const [postFillChecks, setPostFillChecks] = useState<PostFillChecks | null>(null);
   const [visualScore, setVisualScore] = useState<number | null>(null);
   const [runBilling, setRunBilling] = useState<GenerationBilling | null>(null);
+  const [auditFallbackEvents, setAuditFallbackEvents] = useState<AuditFallbackEvent[]>([]);
   const [modelChoices, setModelChoices] = useState<UserPreferences["model_choices"]>({});
   const [quotaAlertData, setQuotaAlertData] = useState<QuotaAlertData | null>(null);
   const [quotaModalOpen, setQuotaModalOpen] = useState(false);
@@ -145,6 +147,7 @@ export function useGenerationSession(options: {
     setPostFillChecks(session.post_fill_checks ?? null);
     setVisualScore(session.visual_score ?? null);
     setRunBilling(session.billing ?? null);
+    setAuditFallbackEvents(session.audit_fallback_events ?? []);
     setCurrentStep(((session.currentStep as GenerateStep) || "idle") as GenerateStep);
     setRunning(session.status === "running");
     if (session.last_error?.message) {
@@ -230,6 +233,20 @@ export function useGenerationSession(options: {
         setProgress({ done: event.index + 1, total: event.total });
         return;
       }
+      if (event.type === "audit_fallback") {
+        setAuditFallbackEvents((prev) => [
+          ...prev,
+          {
+            segment_index: event.segment_index ?? event.index ?? prev.length,
+            custom_model_id: event.custom_model_id,
+            fallback_model_id: event.fallback_model_id,
+            error_kind: event.error_kind,
+            error_detail: event.error_detail,
+            occurred_at: event.occurred_at ?? new Date().toISOString(),
+          },
+        ]);
+        return;
+      }
       if (event.type === "done") {
         setCurrentStep("done");
         setDownloadPath(event.download);
@@ -238,6 +255,9 @@ export function useGenerationSession(options: {
         setPostFillChecks(event.post_fill_checks ?? null);
         setVisualScore(event.visual_score ?? null);
         setRunBilling(event.billing ?? null);
+        if (event.audit_fallback_events?.length) {
+          setAuditFallbackEvents(event.audit_fallback_events);
+        }
         setCurrentTask(donePassLabel);
         setRunning(false);
         return;
@@ -271,6 +291,7 @@ export function useGenerationSession(options: {
     setPostFillChecks(null);
     setVisualScore(null);
     setRunBilling(null);
+    setAuditFallbackEvents([]);
     setCurrentTask("");
     setProgress({ done: 0, total: 0 });
     setCurrentStep("retrieval");
@@ -475,6 +496,7 @@ export function useGenerationSession(options: {
     postFillChecks,
     visualScore,
     runBilling,
+    auditFallbackEvents,
     modelChoices,
     quotaAlertData,
     quotaModalOpen,
