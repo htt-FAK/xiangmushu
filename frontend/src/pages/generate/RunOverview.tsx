@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import {
   CheckCircle2,
@@ -16,7 +16,7 @@ import {
 import { handleDownload } from "../../api";
 import { Panel, Stat } from "../../components/ui";
 import { useI18n } from "../../i18n";
-import type { GenerationBilling, PostFillChecks } from "../../types";
+import type { AuditFallbackEvent, GenerationBilling, PostFillChecks } from "../../types";
 import { clsx } from "../../utils";
 import { SectionTitle, StepIndicator } from "./ui";
 import type { GenerateStep, OutputBlock } from "./useGenerationSession";
@@ -88,6 +88,7 @@ export function RunOverview({
   outputs,
   qualityMode,
   onDownloadError,
+  auditFallbackEvents,
   compact = false,
 }: {
   running: boolean;
@@ -107,6 +108,8 @@ export function RunOverview({
   outputs: OutputBlock[];
   qualityMode: "balanced" | "quality" | "speed";
   onDownloadError: () => void;
+  /** Fallback events emitted when custom audit model failed; banner shown on the RunOverview. */
+  auditFallbackEvents?: AuditFallbackEvent[];
   /** Mobile running layout: tighter stats, collapse secondary panels. */
   compact?: boolean;
 }) {
@@ -192,6 +195,28 @@ export function RunOverview({
             {reportPath && (
               <DownloadButton path={reportPath} label={t("generate.downloadReport")} variant="ghost" onError={onDownloadError} />
             )}
+          </div>
+        )}
+
+        {(auditFallbackEvents?.length ?? 0) > 0 && (
+          <div
+            className={clsx(
+              "border-l-2 border-signal-amber bg-signal-amber/8 px-4 py-3 text-sm",
+              compact ? "mt-3" : "mt-5",
+            )}
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0 text-signal-amber" size={16} />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-white">{t("generate.fallbackBanner.title")}</p>
+                <p className="mt-1 text-slate-300">
+                  {t("generate.fallbackBanner.body")
+                    .replace("{0}", auditFallbackEvents?.[0]?.custom_model_id ?? "")
+                    .replace("{1}", String(auditFallbackEvents?.length ?? 0))
+                    .replace("{2}", auditFallbackEvents?.[0]?.fallback_model_id ?? "")}
+                </p>
+              </div>
+            </div>
           </div>
         )}
 

@@ -289,6 +289,7 @@ export default function GeneratePage() {
       postFillChecks={session.postFillChecks}
       outputs={session.outputs}
       qualityMode={qualityMode}
+      auditFallbackEvents={session.auditFallbackEvents}
       onDownloadError={() => session.setNotice({ kind: "plain", message: t("generate.downloadFailed") })}
       compact={mobileRunning}
     />
