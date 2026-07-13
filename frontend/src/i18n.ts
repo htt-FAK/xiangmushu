@@ -11,6 +11,7 @@ import { useAuth, type Language } from "./auth";
 const dict: Record<Language, Record<string, string>> = {
   zh: {
     "app.name": "项目书智能体",
+    "app.title": "项目书工作台",
     "app.subtitle": "AI 智能写作 · 一键生成项目书",
     "app.api": "接口",
     "app.account": "当前账号",
@@ -497,6 +498,7 @@ const dict: Record<Language, Record<string, string>> = {
   },
   en: {
     "app.name": "Xiangmushu",
+    "app.title": "Xiangmushu Workbench",
     "app.subtitle": "AI Writing · One-click Document Generation",
     "app.api": "API",
     "app.account": "Account",
@@ -1007,7 +1009,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const htmlLang = language === "en" ? "en-US" : "zh-CN";
     document.documentElement.setAttribute("lang", htmlLang);
-    document.title = t("app.title", t("app.subtitle"));
+    document.title = t("app.title");
   }, [language, t]);
 
   return createElement(I18nContext.Provider, { value }, children);
