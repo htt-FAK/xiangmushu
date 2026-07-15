@@ -73,6 +73,7 @@ Application documents (project proposals, fund prospectuses, compliance disclosu
 - **生成强度预设**：快速 / 普通 / 增强三档，自动调整 top_k、检索距离、联网开关、字数上限
 - **用户认证与计费**：JWT 认证、邮箱验证、API key 管理、用量记录
 - **artifact 存储**：支持腾讯云 COS 对象存储，生成结果可下载
+- **多模型管理**：配置多个 OpenAI 兼容自定义模型，自动测试能力（文本/视觉/向量），按角色分配（写作/视觉/审核/嵌入/轻量 LLM），详见 [多模型管理指南](docs/features/multi-model.md)
 
 ## 🇬🇧 Features
 
@@ -86,6 +87,7 @@ Application documents (project proposals, fund prospectuses, compliance disclosu
 - **Generation strength presets**: Quick / Normal / Enhanced tiers, auto-adjusting top_k, retrieval distance, web search toggle, word limits
 - **User auth & billing**: JWT authentication, email verification, API key management, usage tracking
 - **Artifact storage**: Tencent COS object storage support, generated files downloadable
+- **Multi-model management**: Configure multiple OpenAI-compatible custom models with automatic capability detection (text/vision/embedding), role-based assignment (writing/vision/audit/embedding/small LLM). See the [multi-model guide](docs/features/multi-model.md)
 
 ---
 

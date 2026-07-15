@@ -5,6 +5,11 @@ This file tracks notable changes. Engineer-maintained, factual, terse.
 
 ## Recent / Notable
 
+- **v2.0.0** (2026-07-14) — AI：feat(multi-custom-models): 多自定义模型管理（major version bump）。  
+  重构单模型 custom audit 为多模型管理系统。新增 `user_custom_models` 表（替代 `user_custom_audit_models`）、6 个 REST 端点、完整 CRUD、自动能力探测（文本/视觉/向量）、角色分配（text-gen/vision/embedding/audit/small-llm）、生成页下拉集成 + 配额替换 + localStorage 缓存。  
+  Breaking changes: DB schema 重构、`CustomAuditModelCard` 组件废弃。旧端点保留向后兼容，计划 v2.1 移除。安全加固：SSRF 防护、Fernet API key 加密、速率限制、20 模型/用户上限、audit 日志。72 pytest 测试全绿；TypeScript 零错误编译。  
+  See `docs/features/multi-model.md` for user guide; `docs/migration-guide-v2.md` for migration plan.
+
 - **d16966a** (2026-07-10) — feat(web-search): replace LLM web search with keyless Firecrawl MCP client.  
   Full replacement of DashScope enable_search / MiMo web_search with a keyless sync Firecrawl MCP client. Removed `web_search` model role end-to-end; added Firecrawl config/env vars; 12 new/rewritten tests.
 
