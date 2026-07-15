@@ -14,11 +14,66 @@ from core.query_expander import expand_query
 from core.provider_clients import chat_client_for_model
 from core.vector_store import VectorStore
 from core.web_search_agent import SessionWebEvidenceCache, fetch_web_evidence
+from core.billing import decrypt_api_key
+from core.db import get_custom_models_by_user
 
 # Lazy import to avoid circular: evidence_planner imports VectorStore too
 # import inside method when needed
 
 _LOG = logging.getLogger(__name__)
+
+
+# ── Custom-model resolution (Task 4.2) ──────────────────────────────────────
+
+
+def _maybe_use_custom_model(
+    user_id: "int | None",
+    model_choice: str,
+) -> "dict[str, Any] | None":
+    """Return ``{client, model_id, custom_model_id}`` if *model_choice* maps
+    to the user's ``user_custom_models`` table, else ``None``.
+
+    On any decryption/network-construction failure, returns ``None`` so the
+    caller can fall back to the platform default transparently.
+    """
+    if user_id is None or not str(model_choice or "").strip():
+        return None
+    try:
+        from openai import OpenAI
+
+        target = str(model_choice).strip()
+        for row in get_custom_models_by_user(user_id):
+            row_model = str(row.default_model_id or "").strip()
+            if row_model != target:
+                continue
+            try:
+                api_key = decrypt_api_key(row.encrypted_api_key)
+            except Exception as exc:
+                _LOG.warning(
+                    "custom_model_decrypt_fail user=%s model_id=%s err=%s",
+                    user_id, row.id, type(exc).__name__,
+                )
+                return None
+            base_url = str(row.base_url or "").rstrip("/")
+            if base_url and not base_url.endswith("/v1"):
+                base_url = base_url + "/v1" if not base_url.endswith("/") else base_url + "v1"
+            client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=30.0,
+                max_retries=0,
+            )
+            return {
+                "client": client,
+                "model_id": row_model,
+                "custom_model_id": row.id,
+            }
+    except Exception as exc:  # noqa: BLE001 - DB/OpenAI import failure
+        _LOG.warning(
+            "custom_model_resolve user=%s model=%s err=%s",
+            user_id, model_choice, type(exc).__name__,
+        )
+    return None
 
 
 def _max_output_tokens(word_limit: int, task_type: str) -> int:
@@ -880,7 +935,12 @@ class ContentGenerator:
         self.last_usage = None
         self.last_model = ""
         try:
-            client = self._client_for_model(model)
+            custom = _maybe_use_custom_model(self._user_id, model)
+            if custom is not None:
+                client = custom["client"]
+                bundle.route_meta["custom_model_id"] = custom["custom_model_id"]
+            else:
+                client = self._client_for_model(model)
             stream = chat_completions_create(
                 client,
                 model=model,
@@ -981,7 +1041,12 @@ class ContentGenerator:
         try:
             self.last_usage = None
             self.last_model = ""
-            client = self._client_for_model(model)
+            custom = _maybe_use_custom_model(self._user_id, model)
+            if custom is not None:
+                client = custom["client"]
+                bundle.route_meta["custom_model_id"] = custom["custom_model_id"]
+            else:
+                client = self._client_for_model(model)
             resp = chat_completions_create(
                 client,
                 model=model,

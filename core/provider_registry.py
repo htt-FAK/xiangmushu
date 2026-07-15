@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 import config
-from core.db import mysql_enabled, mysql_transaction
+from core.db import mysql_enabled, mysql_transaction, get_custom_models_by_user
 
 LOG = logging.getLogger(__name__)
 
@@ -65,6 +65,24 @@ ROLE_LEGACY_SEED_MODULES: dict[str, str] = {
     "vision_layout": "vision",
     "template_planner": "lightweight",
     "audit_text": "audit",
+}
+
+_ROLE_CAPABILITY_MAP: dict[str, tuple[str, ...]] = {
+    "main_writer": ("text",),
+    "fast_writer": ("text",),
+    "vision_layout": ("text", "vision"),
+    "template_planner": ("text",),
+    "audit_text": ("text",),
+    "embedding": ("embedding",),
+}
+
+_ROLE_LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
+    "main_writer": ("text-gen",),
+    "fast_writer": ("small-llm",),
+    "vision_layout": ("vision",),
+    "template_planner": ("text-gen",),
+    "audit_text": ("audit",),
+    "embedding": ("embedding",),
 }
 
 KNOWN_MODEL_DISPLAY_NAMES: dict[str, str] = {
@@ -476,6 +494,51 @@ def _catalog_rows_for_user(user_id: int | None) -> list[dict[str, Any]]:
     return filtered
 
 
+def _custom_model_options_for_role(
+    role: str,
+    custom_models: list[Any],
+) -> list[dict[str, Any]]:
+    """Return ModelOption dicts from *custom_models* that qualify for *role*.
+
+    A custom model qualifies when:
+    1. Its ``assigned_roles`` contains a legacy role alias that maps to *role*
+       (see ``_ROLE_LEGACY_ALIASES``), OR
+    2. Its ``capabilities`` contain ALL capabilities required by *role*
+       (see ``_ROLE_CAPABILITY_MAP``).
+
+    Returns an empty list when no models match.
+    """
+    role_key = str(role or "").strip()
+    required_caps = set(_ROLE_CAPABILITY_MAP.get(role_key, ()))
+    legacy_aliases = set(_ROLE_LEGACY_ALIASES.get(role_key, ()))
+    options: list[dict[str, Any]] = []
+    seen_model_ids: set[str] = set()
+    for row in custom_models:
+        # ``row`` is a ``CustomModel`` dataclass from core.db.
+        model_id = str(row.default_model_id or "").strip()
+        if not model_id or model_id in seen_model_ids:
+            continue
+        assigned = set(row.assigned_roles_json or [])
+        capabilities = set(row.capabilities_json or [])
+        role_match = bool(assigned & legacy_aliases)
+        cap_match = required_caps and required_caps.issubset(capabilities)
+        if not (role_match or cap_match):
+            continue
+        seen_model_ids.add(model_id)
+        options.append(
+            {
+                "model": model_id,
+                "label": f"{row.name} ({model_id})",
+                "provider_code": "custom",
+                "provider_name": "自定义 / Custom",
+                "recommended": False,
+                "source": "custom",
+                "custom_model_id": row.id,
+            }
+        )
+    return options
+
+
 def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str, Any]]:
     if not registry_enabled():
         return _legacy_model_options()
@@ -540,6 +603,38 @@ def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str
         }
         if load_warning:
             result[role]["warning"] = load_warning
+
+    # ── Merge custom models into each role's options (Task 4.1) ──────
+    if user_id is not None:
+        try:
+            custom_models = get_custom_models_by_user(user_id)
+            if custom_models:
+                for role, entry in result.items():
+                    custom_opts = _custom_model_options_for_role(role, custom_models)
+                    if not custom_opts:
+                        continue
+                    # Guard: ``options`` key may be missing when the role
+                    # fell back to ``_legacy_model_options()``; rebuild.
+                    opts = list(entry.get("options") or [])
+                    seen_ids: set[int] = {
+                        int(o.get("custom_model_id"))
+                        for o in opts
+                        if o.get("custom_model_id") is not None
+                    }
+                    for co in custom_opts:
+                        cid = co.get("custom_model_id")
+                        if cid is not None and int(cid) in seen_ids:
+                            continue
+                        opts.append(co)
+                        if cid is not None:
+                            seen_ids.add(int(cid))
+                    entry["options"] = opts
+        except Exception as exc:  # noqa: BLE001 - DB/custom fetch failure
+            LOG.warning(
+                "model_options custom_merge user=%s err=%s",
+                user_id, exc,
+            )
+
     return result
 
 

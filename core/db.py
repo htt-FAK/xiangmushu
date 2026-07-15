@@ -261,3 +261,598 @@ def mysql_database_url(mask_password: bool = True) -> str:
 
 if os.getenv("APP_CONSOLE_LOG", "").strip().lower() in {"1", "true", "yes"}:
     logging.basicConfig(level=logging.INFO)
+
+
+# ============================================================================
+# Custom Models CRUD Methods
+# ============================================================================
+
+@dataclass
+class CustomModel:
+    """Data class for custom AI models"""
+    id: int
+    user_id: int
+    name: str
+    base_url: str
+    model_id: str
+    encrypted_api_key: str
+    api_key_hint: str | None
+    capabilities_json: list[str] | None
+    assigned_roles_json: list[str] | None
+    default_model_id: str | None
+    status: str
+    last_tested_at: str | None
+    last_error: str | None
+    created_at: str
+    updated_at: str
+
+
+def create_custom_model(
+    user_id: int,
+    name: str,
+    base_url: str,
+    model_id: str,
+    encrypted_api_key: str,
+    api_key_hint: str | None,
+    capabilities_json: list[str] | None = None,
+    assigned_roles_json: list[str] | None = None,
+    default_model_id: str | None = None,
+    status: str = "untested"
+) -> CustomModel:
+    """
+    Create a new custom model for a user.
+    
+    Args:
+        user_id: User ID who owns this model
+        name: Display name for the model
+        base_url: API base URL
+        model_id: Model identifier
+        encrypted_api_key: Encrypted API key
+        api_key_hint: Masked API key hint (e.g., "sk-a1...ef")
+        capabilities_json: List of detected capabilities (optional)
+        assigned_roles_json: List of assigned roles (optional)
+        default_model_id: Default model ID for this entry (optional)
+        status: Model status (default: "untested")
+    
+    Returns:
+        CustomModel object with the created record
+    
+    Raises:
+        DatabaseConfigurationError: If database is not configured or operation fails
+    """
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO user_custom_models 
+                    (user_id, name, base_url, model_id, encrypted_api_key, api_key_hint,
+                     capabilities_json, assigned_roles_json, default_model_id, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        user_id, name, base_url, model_id, encrypted_api_key, api_key_hint,
+                        json.dumps(capabilities_json) if capabilities_json else None,
+                        json.dumps(assigned_roles_json) if assigned_roles_json else None,
+                        default_model_id, status
+                    )
+                )
+                model_id_created = cur.lastrowid
+                
+                # Fetch the created record
+                cur.execute(
+                    """
+                    SELECT * FROM user_custom_models WHERE id = %s
+                    """,
+                    (model_id_created,)
+                )
+                row = cur.fetchone()
+        
+        return CustomModel(
+            id=row['id'],
+            user_id=row['user_id'],
+            name=row['name'],
+            base_url=row['base_url'],
+            model_id=row['model_id'],
+            encrypted_api_key=row['encrypted_api_key'],
+            api_key_hint=row['api_key_hint'],
+            capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
+            assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+            default_model_id=row['default_model_id'],
+            status=row['status'],
+            last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
+            last_error=row['last_error'],
+            created_at=row['created_at'].isoformat() if row['created_at'] else None,
+            updated_at=row['updated_at'].isoformat() if row['updated_at'] else None
+        )
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_custom_models 
+                (user_id, name, base_url, model_id, encrypted_api_key, api_key_hint,
+                 capabilities_json, assigned_roles_json, default_model_id, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id, name, base_url, model_id, encrypted_api_key, api_key_hint,
+                    json.dumps(capabilities_json) if capabilities_json else None,
+                    json.dumps(assigned_roles_json) if assigned_roles_json else None,
+                    default_model_id, status,
+                    iso(utc_now()), iso(utc_now())
+                )
+            )
+            conn.commit()
+            model_id_created = cursor.lastrowid
+            
+            cursor.execute(
+                """
+                SELECT * FROM user_custom_models WHERE id = ?
+                """,
+                (model_id_created,)
+            )
+            row = cursor.fetchone()
+        
+        return CustomModel(
+            id=row[0],
+            user_id=row[1],
+            name=row[2],
+            base_url=row[3],
+            model_id=row[4],
+            encrypted_api_key=row[5],
+            api_key_hint=row[6],
+            capabilities_json=json.loads(row[7]) if row[7] else None,
+            assigned_roles_json=json.loads(row[8]) if row[8] else None,
+            default_model_id=row[9],
+            status=row[10],
+            last_tested_at=row[11],
+            last_error=row[12],
+            created_at=row[13],
+            updated_at=row[14]
+        )
+
+
+def get_custom_models_by_user(user_id: int) -> list[CustomModel]:
+    """
+    Get all custom models for a user.
+    
+    Args:
+        user_id: User ID
+    
+    Returns:
+        List of CustomModel objects (empty list if none found)
+    """
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM user_custom_models 
+                    WHERE user_id = %s 
+                    ORDER BY created_at DESC
+                    """,
+                    (user_id,)
+                )
+                rows = cur.fetchall()
+        
+        return [
+            CustomModel(
+                id=row['id'],
+                user_id=row['user_id'],
+                name=row['name'],
+                base_url=row['base_url'],
+                model_id=row['model_id'],
+                encrypted_api_key=row['encrypted_api_key'],
+                api_key_hint=row['api_key_hint'],
+                capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
+                assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+                default_model_id=row['default_model_id'],
+                status=row['status'],
+                last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
+                last_error=row['last_error'],
+                created_at=row['created_at'].isoformat() if row['created_at'] else None,
+                updated_at=row['updated_at'].isoformat() if row['updated_at'] else None
+            )
+            for row in rows
+        ]
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM user_custom_models 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC
+                """,
+                (user_id,)
+            )
+            rows = cursor.fetchall()
+        
+        return [
+            CustomModel(
+                id=row[0],
+                user_id=row[1],
+                name=row[2],
+                base_url=row[3],
+                model_id=row[4],
+                encrypted_api_key=row[5],
+                api_key_hint=row[6],
+                capabilities_json=json.loads(row[7]) if row[7] else None,
+                assigned_roles_json=json.loads(row[8]) if row[8] else None,
+                default_model_id=row[9],
+                status=row[10],
+                last_tested_at=row[11],
+                last_error=row[12],
+                created_at=row[13],
+                updated_at=row[14]
+            )
+            for row in rows
+        ]
+
+
+def get_custom_model_by_id(model_id: int, user_id: int) -> CustomModel | None:
+    """
+    Get a specific custom model by ID and user ID.
+    
+    Args:
+        model_id: Model ID
+        user_id: User ID (for security - only return models owned by this user)
+    
+    Returns:
+        CustomModel object or None if not found or not owned by user
+    """
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM user_custom_models 
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (model_id, user_id)
+                )
+                row = cur.fetchone()
+        
+        if row is None:
+            return None
+        
+        return CustomModel(
+            id=row['id'],
+            user_id=row['user_id'],
+            name=row['name'],
+            base_url=row['base_url'],
+            model_id=row['model_id'],
+            encrypted_api_key=row['encrypted_api_key'],
+            api_key_hint=row['api_key_hint'],
+            capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
+            assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+            default_model_id=row['default_model_id'],
+            status=row['status'],
+            last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
+            last_error=row['last_error'],
+            created_at=row['created_at'].isoformat() if row['created_at'] else None,
+            updated_at=row['updated_at'].isoformat() if row['updated_at'] else None
+        )
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM user_custom_models 
+                WHERE id = ? AND user_id = ?
+                """,
+                (model_id, user_id)
+            )
+            row = cursor.fetchone()
+        
+        if row is None:
+            return None
+        
+        return CustomModel(
+            id=row[0],
+            user_id=row[1],
+            name=row[2],
+            base_url=row[3],
+            model_id=row[4],
+            encrypted_api_key=row[5],
+            api_key_hint=row[6],
+            capabilities_json=json.loads(row[7]) if row[7] else None,
+            assigned_roles_json=json.loads(row[8]) if row[8] else None,
+            default_model_id=row[9],
+            status=row[10],
+            last_tested_at=row[11],
+            last_error=row[12],
+            created_at=row[13],
+            updated_at=row[14]
+        )
+
+
+def update_custom_model(
+    model_id: int,
+    user_id: int,
+    **kwargs
+) -> CustomModel | None:
+    """
+    Update a custom model. Only updates provided fields.
+    
+    Args:
+        model_id: Model ID
+        user_id: User ID (for security - only update models owned by this user)
+        **kwargs: Fields to update (name, base_url, model_id, encrypted_api_key, 
+                  api_key_hint, capabilities_json, assigned_roles_json, 
+                  default_model_id, status, last_tested_at, last_error)
+    
+    Returns:
+        Updated CustomModel object or None if not found or not owned by user
+    
+    Raises:
+        ValueError: If no fields provided for update
+    """
+    if not kwargs:
+        raise ValueError("No fields provided for update")
+    
+    # Build dynamic update query
+    allowed_fields = {
+        'name', 'base_url', 'model_id', 'encrypted_api_key', 'api_key_hint',
+        'capabilities_json', 'assigned_roles_json', 'default_model_id',
+        'status', 'last_tested_at', 'last_error'
+    }
+    
+    update_fields = []
+    update_values = []
+    
+    for field in allowed_fields:
+        if field in kwargs:
+            if field in ['capabilities_json', 'assigned_roles_json']:
+                update_fields.append(f"{field} = %s")
+                update_values.append(json.dumps(kwargs[field]) if kwargs[field] else None)
+            else:
+                update_fields.append(f"{field} = %s")
+                update_values.append(kwargs[field])
+    
+    if not update_fields:
+        raise ValueError("No valid fields provided for update")
+    
+    # Add updated_at to the update
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                query = f"""
+                    UPDATE user_custom_models 
+                    SET {', '.join(update_fields)}, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                """
+                cur.execute(query, update_values + [model_id, user_id])
+                affected = cur.rowcount
+        
+        if affected == 0:
+            return None
+        
+        return get_custom_model_by_id(model_id, user_id)
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            query = f"""
+                UPDATE user_custom_models 
+                SET {', '.join(update_fields)}, updated_at = ?
+                WHERE id = ? AND user_id = ?
+            """
+            cursor.execute(query, update_values + [iso(utc_now()), model_id, user_id])
+            conn.commit()
+            affected = cursor.rowcount
+        
+        if affected == 0:
+            return None
+        
+        return get_custom_model_by_id(model_id, user_id)
+
+
+def delete_custom_model(model_id: int, user_id: int) -> bool:
+    """
+    Delete a custom model.
+    
+    Args:
+        model_id: Model ID
+        user_id: User ID (for security - only delete models owned by this user)
+    
+    Returns:
+        True if deleted, False if not found or not owned by user
+    """
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM user_custom_models 
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (model_id, user_id)
+                )
+                affected = cur.rowcount
+        
+        return affected > 0
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM user_custom_models 
+                WHERE id = ? AND user_id = ?
+                """,
+                (model_id, user_id)
+            )
+            conn.commit()
+            affected = cursor.rowcount
+        
+        return affected > 0
+
+
+def get_custom_models_by_capability(user_id: int, capability: str) -> list[CustomModel]:
+    """
+    Get custom models that have a specific capability.
+    
+    Args:
+        user_id: User ID
+        capability: Capability to filter by (e.g., "text", "vision", "embedding")
+    
+    Returns:
+        List of CustomModel objects that have the specified capability
+    """
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM user_custom_models 
+                    WHERE user_id = %s 
+                    AND capabilities_json IS NOT NULL
+                    AND JSON_CONTAINS(capabilities_json, %s, '$')
+                    ORDER BY created_at DESC
+                    """,
+                    (user_id, json.dumps(capability))
+                )
+                rows = cur.fetchall()
+        
+        return [
+            CustomModel(
+                id=row['id'],
+                user_id=row['user_id'],
+                name=row['name'],
+                base_url=row['base_url'],
+                model_id=row['model_id'],
+                encrypted_api_key=row['encrypted_api_key'],
+                api_key_hint=row['api_key_hint'],
+                capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
+                assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+                default_model_id=row['default_model_id'],
+                status=row['status'],
+                last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
+                last_error=row['last_error'],
+                created_at=row['created_at'].isoformat() if row['created_at'] else None,
+                updated_at=row['updated_at'].isoformat() if row['updated_at'] else None
+            )
+            for row in rows
+        ]
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM user_custom_models 
+                WHERE user_id = ? 
+                AND capabilities_json IS NOT NULL
+                ORDER BY created_at DESC
+                """,
+                (user_id,)
+            )
+            rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            caps = json.loads(row[7]) if row[7] else []
+            if capability in caps:
+                result.append(CustomModel(
+                    id=row[0],
+                    user_id=row[1],
+                    name=row[2],
+                    base_url=row[3],
+                    model_id=row[4],
+                    encrypted_api_key=row[5],
+                    api_key_hint=row[6],
+                    capabilities_json=caps,
+                    assigned_roles_json=json.loads(row[8]) if row[8] else None,
+                    default_model_id=row[9],
+                    status=row[10],
+                    last_tested_at=row[11],
+                    last_error=row[12],
+                    created_at=row[13],
+                    updated_at=row[14]
+                ))
+        
+        return result
+
+
+def get_custom_models_by_role(user_id: int, role: str) -> list[CustomModel]:
+    """
+    Get custom models that have a specific role assigned.
+    
+    Args:
+        user_id: User ID
+        role: Role to filter by (e.g., "text-gen", "vision", "embedding", "audit")
+    
+    Returns:
+        List of CustomModel objects that have the specified role assigned
+    """
+    if mysql_enabled():
+        with mysql_transaction() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM user_custom_models 
+                    WHERE user_id = %s 
+                    AND assigned_roles_json IS NOT NULL
+                    AND JSON_CONTAINS(assigned_roles_json, %s, '$')
+                    ORDER BY created_at DESC
+                    """,
+                    (user_id, json.dumps(role))
+                )
+                rows = cur.fetchall()
+        
+        return [
+            CustomModel(
+                id=row['id'],
+                user_id=row['user_id'],
+                name=row['name'],
+                base_url=row['base_url'],
+                model_id=row['model_id'],
+                encrypted_api_key=row['encrypted_api_key'],
+                api_key_hint=row['api_key_hint'],
+                capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
+                assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+                default_model_id=row['default_model_id'],
+                status=row['status'],
+                last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
+                last_error=row['last_error'],
+                created_at=row['created_at'].isoformat() if row['created_at'] else None,
+                updated_at=row['updated_at'].isoformat() if row['updated_at'] else None
+            )
+            for row in rows
+        ]
+    else:
+        with sqlite3.connect(config.AUTH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM user_custom_models 
+                WHERE user_id = ? 
+                AND assigned_roles_json IS NOT NULL
+                ORDER BY created_at DESC
+                """,
+                (user_id,)
+            )
+            rows = cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            roles = json.loads(row[8]) if row[8] else []
+            if role in roles:
+                result.append(CustomModel(
+                    id=row[0],
+                    user_id=row[1],
+                    name=row[2],
+                    base_url=row[3],
+                    model_id=row[4],
+                    encrypted_api_key=row[5],
+                    api_key_hint=row[6],
+                    capabilities_json=json.loads(row[7]) if row[7] else None,
+                    assigned_roles_json=roles,
+                    default_model_id=row[9],
+                    status=row[10],
+                    last_tested_at=row[11],
+                    last_error=row[12],
+                    created_at=row[13],
+                    updated_at=row[14]
+                ))
+        
+        return result

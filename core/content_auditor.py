@@ -8,7 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import config
+from core import custom_audit as _custom_audit_module
+from core.billing import decrypt_api_key
 from core.dashscope_chat import chat_completions_create
+from core.db import get_custom_models_by_role
 from core.fill_task import FillTask
 from core.model_router import AUDIT_TEXT, resolve_model_profile
 from core.provider_clients import chat_client_for_model
@@ -138,12 +141,60 @@ class ContentAuditor:
             self._custom_audit_client_cache = default_entry
             return default_entry
 
-        # Late import to keep the module surface tight at the top.
+        # ── Task 4.3: Prefer the new user_custom_models table for the
+        #    ``audit`` role.  Falls through to the legacy path below when
+        #    no matching row exists (backward compatible). ────────────
         try:
-            from core import custom_audit as _custom_audit_module
+            _new_rows = get_custom_models_by_role(self._user_id, "audit")
+            if _new_rows:
+                _new_row = _new_rows[0]
+                try:
+                    _new_decrypted = decrypt_api_key(_new_row.encrypted_api_key)
+                except Exception as _exc:  # noqa: BLE001
+                    _LOG.warning(
+                        "content_audit_custom_new_decrypt user=%s row=%s err=%s",
+                        self._user_id, _new_row.id, type(_exc).__name__,
+                    )
+                else:
+                    _new_base = str(_new_row.base_url or "").rstrip("/")
+                    if _new_base and not _new_base.endswith("/v1"):
+                        _new_base = (
+                            _new_base + "/v1"
+                            if not _new_base.endswith("/")
+                            else _new_base + "v1"
+                        )
+                    try:
+                        from openai import OpenAI
+                        _new_client = OpenAI(
+                            api_key=_new_decrypted,
+                            base_url=_new_base,
+                            timeout=30.0,
+                            max_retries=1,
+                        )
+                    except Exception as _exc:  # noqa: BLE001
+                        _LOG.warning(
+                            "content_audit_custom_new_client user=%s row=%s err=%s",
+                            self._user_id, _new_row.id, type(_exc).__name__,
+                        )
+                    else:
+                        _new_entry: Dict[str, Any] = {
+                            "client": _new_client,
+                            "model_id": str(_new_row.default_model_id or _new_row.model_id),
+                            "status": "used_custom_new",
+                            "record_id": _new_row.id,
+                        }
+                        self._custom_audit_client_cache = _new_entry
+                        return _new_entry
+        except Exception as exc:  # noqa: BLE001 - DB failure
+            _LOG.warning(
+                "content_audit_custom_new_resolve user=%s err=%s",
+                self._user_id, exc,
+            )
 
+        # Legacy path: old user_custom_audit_models table (backward compat).
+        try:
             record = _custom_audit_module.get_by_user_id(self._user_id)
-        except Exception as exc:  # noqa: BLE001 - DB/decryption failure path
+        except Exception as exc:  # noqa: BLE001 - DB lookup failure
             _LOG.warning(
                 "content_audit_custom_resolve user=%s err=%s",
                 self._user_id, exc,
