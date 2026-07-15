@@ -249,6 +249,7 @@ export interface CapabilityTestResult {
   passed: boolean;
   latency_ms: number;
   detail: string | null;
+  detail_i18n?: { zh: string; en: string } | null;
 }
 
 export interface TestResult {

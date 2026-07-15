@@ -298,6 +298,7 @@ async def test_model_capabilities(
     test_results: Dict[str, Dict[str, Any]] = {}
     capabilities: List[str] = []
     first_error: Optional[str] = None
+    first_error_i18n: Optional[Dict[str, str]] = None
     auth_failed = False
 
     # Sequential execution (spec: respect rate limits).
@@ -319,10 +320,20 @@ async def test_model_capabilities(
             # Per spec: auth failure rejects the entire test with 422.
             auth_failed = True
             first_error = result["detail"]
+            first_error_i18n = result.get("detail_i18n")
             break
         else:
             if first_error is None:
-                first_error = f"{ttype}: {result['detail']}"
+                detail = result["detail"]
+                # ``detail`` may be a string or a bilingual dict.
+                if isinstance(detail, dict):
+                    first_error = f"{ttype}: {detail.get('en', str(detail))}"
+                    first_error_i18n = {
+                        "zh": f"{ttype}: {detail.get('zh', '')}",
+                        "en": f"{ttype}: {detail.get('en', '')}",
+                    }
+                else:
+                    first_error = f"{ttype}: {detail}"
 
     if auth_failed:
         raise _ModelError("auth", "API key is invalid or expired. Please update the model configuration.")
@@ -371,11 +382,12 @@ async def _probe_text(base_url: str, api_key: str, model_id: str) -> Dict[str, A
         _LOG.debug("text probe ok model=%s latency=%dms", model_id, _ms(started))
         return {"passed": True, "latency_ms": _ms(started), "detail": None}
     except Exception as exc:
-        detail, is_auth = _classify_probe_error(exc)
+        detail, is_auth, detail_i18n = _classify_probe_error(exc)
         return {
             "passed": False,
             "latency_ms": _ms(started),
             "detail": detail,
+            "detail_i18n": detail_i18n,
             "auth_error": is_auth,
         }
 
@@ -405,17 +417,50 @@ async def _probe_vision(base_url: str, api_key: str, model_id: str) -> Dict[str,
         content = (response.choices[0].message.content or "").strip()
         if not content:
             return {"passed": False, "latency_ms": _ms(started), "detail": "empty response"}
+
+        # Detect "fake vision" — text-only models often reply with a polite
+        # refusal ("Cannot read image.png", "this model does not support image
+        # input", "我不支持图片输入") instead of throwing HTTP 400. Treat such
+        # responses as vision NOT supported.
+        content_lower = content.lower()
+        fake_vision_markers = (
+            "cannot read", "can't read", "does not support image",
+            "doesn't support image", "no support for image", "image input is not",
+            "multimodal not supported", "multimodal input not",
+            "不支持图片", "不支持图像", "无法识别图片", "无法读取图片",
+            "仅支持文本", "暂不支持图片",
+        )
+        if any(marker in content_lower for marker in fake_vision_markers):
+            _LOG.debug(
+                "vision probe rejected (fake-vision text) model=%s latency=%dms content=%.80s",
+                model_id, _ms(started), content,
+            )
+            return {
+                "passed": False,
+                "latency_ms": _ms(started),
+                "detail": "model does not support image input",
+                "detail_i18n": {
+                    "zh": "该模型不支持图片输入",
+                    "en": "This model does not support image input",
+                },
+            }
+
         _LOG.debug("vision probe ok model=%s latency=%dms", model_id, _ms(started))
         return {"passed": True, "latency_ms": _ms(started), "detail": None}
     except Exception as exc:
-        detail, is_auth = _classify_probe_error(exc)
+        detail, is_auth, detail_i18n = _classify_probe_error(exc)
         # Model may reject image input with a 400/422.
         if "image" in detail.lower() or "vision" in detail.lower() or "multimodal" in detail.lower():
             detail = "model does not support image input"
+            detail_i18n = {
+                "zh": "该模型不支持图片输入",
+                "en": "This model does not support image input",
+            }
         return {
             "passed": False,
             "latency_ms": _ms(started),
             "detail": detail,
+            "detail_i18n": detail_i18n,
             "auth_error": is_auth,
         }
 
@@ -430,6 +475,7 @@ async def _probe_embedding(base_url: str, api_key: str, model_id: str) -> Dict[s
         candidates.append(f"text-embedding-{model_id}")
 
     last_detail = ""
+    last_detail_i18n: Optional[Dict[str, str]] = None
     for candidate in candidates:
         try:
             client = _openai_client(base_url, api_key, timeout=30.0)
@@ -441,22 +487,26 @@ async def _probe_embedding(base_url: str, api_key: str, model_id: str) -> Dict[s
                 _LOG.debug("embedding probe ok model=%s latency=%dms", candidate, _ms(started))
                 return {"passed": True, "latency_ms": _ms(started), "detail": None}
             last_detail = "empty embedding array"
+            last_detail_i18n = {"zh": "嵌入响应为空", "en": "Empty embedding response"}
         except Exception as exc:
-            detail, is_auth = _classify_probe_error(exc)
+            detail, is_auth, detail_i18n = _classify_probe_error(exc)
             if is_auth:
                 # Auth error is terminal — no point trying fallback variants.
                 return {
                     "passed": False,
                     "latency_ms": _ms(started),
                     "detail": detail,
+                    "detail_i18n": detail_i18n,
                     "auth_error": True,
                 }
             last_detail = detail
+            last_detail_i18n = detail_i18n
 
     return {
         "passed": False,
         "latency_ms": _ms(started),
         "detail": last_detail or "endpoint /embeddings returned 404",
+        "detail_i18n": last_detail_i18n or {"zh": "嵌入端点不可用或返回 404", "en": "Embedding endpoint unavailable or returned 404"},
     }
 
 
@@ -501,22 +551,47 @@ def _ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
-def _classify_probe_error(exc: BaseException) -> tuple[str, bool]:
-    """Return ``(detail, is_auth)``. ``is_auth=True`` signals 401/403."""
+def _classify_probe_error(exc: BaseException) -> tuple[str, bool, Dict[str, str]]:
+    """Return ``(detail, is_auth, detail_i18n)``.
+
+    ``is_auth=True`` signals 401/403. ``detail_i18n`` is a bilingual dict
+    ``{"zh": ..., "en": ...}`` suitable for user-facing display.
+    """
     msg = str(exc).lower()
     # OpenAI SDK raises API errors with ``.status_code`` attribute.
     status = getattr(exc, "status_code", None)
     if status in (401, 403):
-        return "API key is invalid or expired. Please update the model configuration.", True
+        return (
+            "API key is invalid or expired. Please update the model configuration.",
+            True,
+            {"zh": "API Key 无效或已过期，请更新后重试", "en": "API key is invalid or expired"},
+        )
     if "authentication" in msg or "unauthorized" in msg or "invalid_api_key" in msg:
-        return "API key is invalid or expired. Please update the model configuration.", True
+        return (
+            "API key is invalid or expired. Please update the model configuration.",
+            True,
+            {"zh": "API Key 无效或已过期，请更新后重试", "en": "API key is invalid or expired"},
+        )
     if "timeout" in msg or "timed out" in msg:
-        return "connection timeout", False
+        return (
+            "connection timeout",
+            False,
+            {"zh": "连接超时，服务端点未在规定时间内响应", "en": "Connection timeout"},
+        )
     if "connection" in msg or "network" in msg:
-        return "network error", False
+        return (
+            "network error",
+            False,
+            {"zh": "网络错误，无法连接到服务端点", "en": "Network error"},
+        )
     if "model_not_found" in msg or "does not exist" in msg:
-        return "model not found", False
-    return str(exc)[:200], False
+        return (
+            "model not found",
+            False,
+            {"zh": "指定的模型在该端点不存在", "en": "Model not found"},
+        )
+    raw = str(exc)[:200]
+    return raw, False, {"zh": raw, "en": raw}
 
 
 class _ModelError(ValueError):

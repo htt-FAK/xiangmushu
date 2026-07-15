@@ -36,8 +36,18 @@ export default function TestResultPanel({
   onRetry,
   onClose,
 }: TestResultPanelProps) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [saving, setSaving] = useState(false);
+
+  // Pick the user-language detail string when available (``detail_i18n``);
+  // fall back to the English ``detail`` string for backward compatibility.
+  function detailText(data: { detail?: string | null; detail_i18n?: { zh: string; en: string } | null } | undefined | null): string | null {
+    if (!data) return null;
+    if (data.detail_i18n) {
+      return data.detail_i18n[language] ?? data.detail_i18n.en;
+    }
+    return data.detail ?? null;
+  }
 
   const capabilities = [
     { key: "text", label: t("settings.customModels.capabilityText"), data: result.test_results.text },
@@ -69,15 +79,15 @@ export default function TestResultPanel({
               <div className="flex items-center gap-3">
                 {cap.data?.passed ? (
                   <CheckCircle2 size={18} className="text-signal-lime" />
-                ) : cap.data?.detail ? (
+                ) : detailText(cap.data) ? (
                   <XCircle size={18} className="text-signal-rose" />
                 ) : (
                   <MinusCircle size={18} className="text-slate-500" />
                 )}
                 <div>
                   <p className="text-sm font-medium text-white">{cap.label}</p>
-                  {cap.data?.detail && (
-                    <p className="text-xs text-signal-rose/80">{cap.data.detail}</p>
+                  {detailText(cap.data) && (
+                    <p className="text-xs text-signal-rose/80">{detailText(cap.data)}</p>
                   )}
                 </div>
               </div>
