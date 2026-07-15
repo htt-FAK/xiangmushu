@@ -3,6 +3,8 @@ import logging
 import re
 from copy import deepcopy
 
+from core.fill_intent import FillIntent
+
 _LOG = logging.getLogger(__name__)
 
 from docx import Document
@@ -517,7 +519,11 @@ class WordFiller:
     def _collect_chapter_region(
         self, doc: Document, target_chapter: str
     ) -> Tuple[int, List[int], List[int]]:
-        """按 body 顺序返回 (标题段落下标, 本章段落下标, 本章表格 doc.tables 下标)。"""
+        """按 body 顺序返回 (标题段落下标, 本章段落下标, 本章表格 doc.tables 下标)。
+
+        Normal-style fallback: 当所有段落均无 Heading style 时，调用
+        normal_heading_detector 识别加粗编号段落作为章节边界。
+        """
         paras = doc.paragraphs
         start_idx = -1
         chapter_lvl: Optional[int] = 1
@@ -526,13 +532,46 @@ class WordFiller:
         in_chapter = False
         para_idx = 0
 
+        # ── 优先扫描 Heading style ──────────────────────────────────────
+        has_any_heading_style = any(
+            self._para_heading_level(p) is not None for p in paras
+        )
+
+        # ── Heading style 全缺时启用 Normal-style heading 检测 ──────────
+        import config as cfg
+        normal_headings: Dict[int, int] = {}
+        if not has_any_heading_style and getattr(cfg, "APPLY_TEMPLATE_STYLE", True):
+            try:
+                from core.normal_heading_detector import find_all_headings
+                threshold = int(getattr(cfg, "NORMAL_HEADING_THRESHOLD", 50))
+                normal_headings = {
+                    idx: lvl for idx, lvl in find_all_headings(doc, threshold)
+                }
+                _LOG.info(
+                    "_collect_chapter_region: Normal-heading fallback, found %d headings",
+                    len(normal_headings),
+                )
+            except Exception as exc:
+                _LOG.warning("normal_heading_detector failed: %s", exc)
+
+        def _effective_heading_level(p: Paragraph) -> Optional[int]:
+            lvl = self._para_heading_level(p)
+            if lvl is not None:
+                return lvl
+            # Normal-heading fallback lookup
+            try:
+                idx = paras.index(p)
+                return normal_headings.get(idx)
+            except ValueError:
+                return None
+
         for child in doc.element.body:
             if child.tag == qn("w:p"):
                 if para_idx >= len(paras):
                     break
                 para = paras[para_idx]
                 t = (para.text or "").strip()
-                lvl = self._para_heading_level(para)
+                lvl = _effective_heading_level(para)
                 if not in_chapter:
                     if target_chapter and self._heading_matches_chapter(
                         target_chapter, t
@@ -676,13 +715,20 @@ class WordFiller:
             return None
         return heading_level_from_style(para.style.name or "")
 
+    def __init__(self) -> None:
+        # 三级合并后的样式档案，由 fill_template() 在运行前注入
+        # APPLY_TEMPLATE_STYLE=True 时生效，False 时保留旧逻辑
+        self._merged_profile: Optional[Any] = None
+
     def fill_template(
         self,
         template_path: str,
         tasks: List[FillTask],
         contents: List[str],
         output_path: str,
+        merged_profile: Optional[Any] = None,
     ):
+        self._merged_profile = merged_profile
         doc = Document(template_path)
 
         # 提取水印（如果启用）
@@ -738,10 +784,15 @@ class WordFiller:
             for table in doc.tables:
                 self._ensure_table_readability(table)
 
-        if getattr(config, "APPLY_UNIFIED_TYPOGRAPHY", True):
+        # ── 排版：智能样式（doc-gen-revamp）vs 旧硬编码 ─────────────────────
+        from core.smart_style import apply_smart_style_to_document, should_use_smart_style
+        if should_use_smart_style() and self._merged_profile is not None:
+            apply_smart_style_to_document(doc, self._merged_profile)
+        elif getattr(config, "APPLY_UNIFIED_TYPOGRAPHY", True):
             apply_document_typography(doc)
             apply_abstract_body_formats_in_document(doc)
 
+        self._merged_profile = None  # 清理实例属性，避免泄漏到下次调用
         doc.save(output_path)
 
     def _replace_anchor_everywhere(self, doc: Document, anchor: str, content: str):
@@ -771,10 +822,23 @@ class WordFiller:
                 continue
             tc.remove(child)
 
-    @staticmethod
-    def _set_paragraph_text_keep_style(para: Paragraph, text: str) -> None:
-        """写入整段文本并应用统一宋体规格（按段落样式分档），保留段落中的图片/Drawing。"""
-        rpr = build_rPr_for_paragraph(para)
+    def _set_paragraph_text_keep_style(self, para: Paragraph, text: str) -> None:
+        """写入整段文本并应用统一规格（按段落样式分档），保留段落中的图片/Drawing。
+
+        smart_style 模式：从 self._merged_profile 中选取 RunStyle 构造 rPr（模板提取字体）。
+        回退模式：使用 build_rPr_for_paragraph(para)（硬编码宋体）。
+        """
+        if getattr(self, "_merged_profile", None) is not None:
+            from core.smart_style import _build_rPr_from_runstyle
+
+            lvl = self._para_heading_level(para)
+            if lvl is not None:
+                rs = self._merged_profile.heading_style_for_level(lvl)
+            else:
+                rs = self._merged_profile.body_style
+            rpr = _build_rPr_from_runstyle(rs)
+        else:
+            rpr = build_rPr_for_paragraph(para)
         
         # 备份段落中的 drawing 元素（图片/WordArt）
         drawings_backup = []
@@ -824,14 +888,13 @@ class WordFiller:
             last = np
         return last
 
-    @staticmethod
-    def _replace_cell_text_preserve_format(cell, text: str) -> None:
+    def _replace_cell_text_preserve_format(self, cell, text: str) -> None:
         """替换单元格文本但保留原有格式（字体、颜色、大小等）。"""
         try:
             paragraphs = cell.paragraphs
             if not paragraphs:
                 # 没有段落，回退到标准方法
-                WordFiller._set_cell_text_keep_style(cell, text)
+                self._set_cell_text_keep_style(cell, text)
                 return
 
             first_para = paragraphs[0]
@@ -866,7 +929,7 @@ class WordFiller:
             _LOG.debug("表格单元格格式保留成功")
         except Exception as e:
             _LOG.warning("表格格式保留失败，回退到标准方法: %s", e)
-            WordFiller._set_cell_text_keep_style(cell, text)
+            self._set_cell_text_keep_style(cell, text)
 
     @staticmethod
     def _sample_cell_rPr(cell):
@@ -918,29 +981,35 @@ class WordFiller:
                     return _enrich_rPr(rpr, run)
         return None
 
-    @staticmethod
-    def _set_cell_text_keep_style(cell, text: str) -> None:
-        """清空单元格正文但保留 tcPr，写入单段并优先保留原始字体/字号。"""
+    def _set_cell_text_keep_style(self, cell, text: str) -> None:
+        """清空单元格正文但保留 tcPr，写入单段并优先保留原始字体/字号。
+
+        smart_style 模式：当单元格无原始 rPr 时，使用 self._merged_profile.table_cell_style 作为回退。
+        回退模式：使用 build_body_rPr()（硬编码宋体）。
+        """
         # 先采样原始格式
-        preserved_rPr = WordFiller._sample_cell_rPr(cell)
-        WordFiller._clear_cell_body_keep_tcPr(cell)
+        preserved_rPr = self._sample_cell_rPr(cell)
+        self._clear_cell_body_keep_tcPr(cell)
         p = cell.add_paragraph()
         run = p.add_run(text or "")
         if preserved_rPr is not None:
             apply_rPr_to_run(run, preserved_rPr)
+        elif getattr(self, "_merged_profile", None) is not None:
+            from core.smart_style import _build_rPr_from_runstyle
+
+            rpr = _build_rPr_from_runstyle(self._merged_profile.table_cell_style)
+            apply_rPr_to_run(run, rpr)
         else:
             apply_rPr_to_run(run, build_body_rPr())
 
-    @staticmethod
-    def _replace_once_in_paragraph(para: Paragraph, anchor: str, content: str):
+    def _replace_once_in_paragraph(self, para: Paragraph, anchor: str, content: str):
         if anchor not in para.text:
             return
         merged = para.text.replace(anchor, content, 1)
-        WordFiller._set_paragraph_text_keep_style(para, merged)
+        self._set_paragraph_text_keep_style(para, merged)
 
-    @staticmethod
-    def _set_paragraph_plain(para: Paragraph, text: str):
-        WordFiller._set_paragraph_text_keep_style(para, text)
+    def _set_paragraph_plain(self, para: Paragraph, text: str):
+        self._set_paragraph_text_keep_style(para, text)
 
     @staticmethod
     def _first_placeholder_span(
@@ -957,19 +1026,18 @@ class WordFiller:
                 return (i, i + len(a))
         return None
 
-    @staticmethod
     def _fill_paragraph_placeholder_only(
-        para: Paragraph, content: str, hint: Dict[str, Any]
+        self, para: Paragraph, content: str, hint: Dict[str, Any]
     ) -> bool:
         full = para.text or ""
         anchor = hint.get("anchor")
         anchor_s = str(anchor).strip() if anchor else None
-        span = WordFiller._first_placeholder_span(full, anchor=anchor_s or None)
+        span = self._first_placeholder_span(full, anchor=anchor_s or None)
         if span is None:
             return False
         start, end = span
         new_text = full[:start] + (content or "") + full[end:]
-        WordFiller._set_paragraph_text_keep_style(para, new_text)
+        self._set_paragraph_text_keep_style(para, new_text)
         return True
 
     def _collect_chapter_scope(
@@ -1317,6 +1385,23 @@ class WordFiller:
 
     def _fill_table_cell(self, doc: Document, task: FillTask, content: str):
         hint = task.location_hint or {}
+
+        # --- fill_intent early skip (task 4.4) ---
+        fill_intent_val = hint.get("fill_intent")
+        if fill_intent_val is not None:
+            # Normalize: accept FillIntent enum or raw str value
+            intent_str = (
+                fill_intent_val.value
+                if isinstance(fill_intent_val, FillIntent)
+                else str(fill_intent_val)
+            )
+            if intent_str != FillIntent.FILL.value:
+                _LOG.debug(
+                    "_fill_table_cell: skip cell, fill_intent=%r (not FILL)",
+                    intent_str,
+                )
+                return
+
         table_idx = hint.get("table_index", 0)
         row_idx = hint.get("row", 0)
         col_idx = hint.get("col", 0)
@@ -1422,16 +1507,100 @@ class WordFiller:
         tblW.set(qn("w:w"), "5000")
         tblW.set(qn("w:type"), "pct")
 
-        usable = 6.35
-        try:
-            col_w = Inches(usable / ncols)
-        except Exception:
-            return
+        # ---- Column width handling ----
+        preserve = getattr(config, "PRESERVE_ORIGINAL_COLUMN_WIDTHS", True)
+        if not preserve:
+            # OLD BEHAVIOR: equalize column widths
+            try:
+                usable = 6.35
+                col_w = Inches(usable / ncols)
+                for row in rows:
+                    for cell in row.cells:
+                        try:
+                            cell.width = col_w
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
+        # ---- Minimum column width guard (Task 6.2 + 6.3) ----
+        try:
+            min_width = int(getattr(config, "MIN_COLUMN_WIDTH_DXA", 500))
+            first_row_tr = rows[0]._tr
+            physical_tcs = first_row_tr.findall(qn("w:tc"))
+            # Collect (tc, width_dxa, gridSpan) for each physical cell
+            widths: list[tuple] = []
+            for tc in physical_tcs:
+                tcPr_el = tc.find(qn("w:tcPr"))
+                gs = tcPr_el.find(qn("w:gridSpan")) if tcPr_el is not None else None
+                span = int(gs.get(qn("w:val"))) if gs is not None else 1
+                if span > 1:
+                    # gridSpan safety: skip merged cells in adjustment
+                    widths.append((tc, -1, span))
+                    continue
+                tw = tcPr_el.find(qn("w:tcW")) if tcPr_el is not None else None
+                w_val = tw.get(qn("w:w")) if tw is not None else None
+                if w_val is not None and w_val != "auto":
+                    try:
+                        w = int(w_val)
+                    except (ValueError, TypeError):
+                        w = 0
+                else:
+                    w = 0
+                widths.append((tc, w, span))
+
+            # Expand narrow columns to min_width, compensate from widest
+            narrow_indices = [
+                i for i, (tc, w, span) in enumerate(widths)
+                if w >= 0 and w < min_width
+            ]
+            if narrow_indices:
+                adjustable = [
+                    i for i, (tc, w, span) in enumerate(widths)
+                    if w >= 0 and w >= min_width
+                ]
+                for ni in narrow_indices:
+                    tc_el, old_w, sp = widths[ni]
+                    deficit = min_width - old_w
+                    # Find the widest adjustable cell to compensate
+                    if adjustable:
+                        widest_i = max(adjustable, key=lambda i: widths[i][1])
+                        tc_w, w_w, sp_w = widths[widest_i]
+                        if w_w - deficit >= min_width:
+                            # Expand narrow cell
+                            tcPr_el = tc_el.find(qn("w:tcPr"))
+                            if tcPr_el is None:
+                                tcPr_el = OxmlElement("w:tcPr")
+                                tc_el.insert(0, tcPr_el)
+                            tw_el = tcPr_el.find(qn("w:tcW"))
+                            if tw_el is None:
+                                tw_el = OxmlElement("w:tcW")
+                                tcPr_el.append(tw_el)
+                            tw_el.set(qn("w:w"), str(min_width))
+                            tw_el.set(qn("w:type"), "dxa")
+                            # Shrink widest cell
+                            tc_w2, w_w2, sp_w2 = widths[widest_i]
+                            new_widest = w_w2 - deficit
+                            tcPr_w = tc_w2.find(qn("w:tcPr"))
+                            if tcPr_w is not None:
+                                tw_w = tcPr_w.find(qn("w:tcW"))
+                                if tw_w is not None:
+                                    tw_w.set(qn("w:w"), str(new_widest))
+                            # Update tracked widths
+                            widths[ni] = (tc_el, min_width, sp)
+                            widths[widest_i] = (tc_w2, new_widest, sp_w2)
+        except Exception:
+            pass
+
+        # ---- noWrap removal + vAlign=top (always applied) ----
         for row in rows:
+            seen_tc_ids: set = set()
             for cell in row.cells:
+                tc_id = id(cell._tc)
+                if tc_id in seen_tc_ids:
+                    continue
+                seen_tc_ids.add(tc_id)
                 try:
-                    cell.width = col_w
                     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
                 except Exception:
                     pass

@@ -879,6 +879,7 @@ def _build_generation_params(
     enable_audit: bool,
     enable_visual_audit: bool,
     custom_instructions: str,
+    format_overrides: str = "",
 ) -> dict[str, object]:
     return {
         "slug": slug,
@@ -891,6 +892,7 @@ def _build_generation_params(
         "enable_audit": enable_audit,
         "enable_visual_audit": enable_visual_audit,
         "custom_instructions": custom_instructions.strip(),
+        "format_overrides": format_overrides.strip() if format_overrides else "",
     }
 
 
@@ -990,6 +992,34 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
     enable_visual_audit = bool(params["enable_visual_audit"])
     billing_lock = threading.Lock()
 
+    # ── doc-gen-revamp: 用户格式偏好 + 模板样式档案合并 ──────────────────
+    merged_style_profile = None
+    try:
+        from core.format_overrides import build_overrides_from_api
+        from core.template_style_extractor import get_or_extract_style_profile
+        from core.smart_style import merge_style, should_use_smart_style
+        import json as _json
+
+        raw_overrides = str(params.get("format_overrides") or "").strip()
+        overrides_dict: dict = {}
+        if raw_overrides:
+            try:
+                overrides_dict = _json.loads(raw_overrides)
+            except _json.JSONDecodeError as _je:
+                _LOG.warning("format_overrides JSON parse failed: %s", _je)
+        user_overrides = build_overrides_from_api(overrides_dict).to_merge_dict()
+        if should_use_smart_style():
+            template_profile = get_or_extract_style_profile(template_path)
+            merged_style_profile = merge_style(template_profile, user_overrides)
+            _LOG.info(
+                "smart_style: merged profile from %s (over=%d keys)",
+                merged_style_profile.source_template or "?",
+                len(overrides_dict),
+            )
+    except Exception as _exc:
+        _LOG.warning("smart_style profile init failed, fallback to legacy: %s", _exc)
+        merged_style_profile = None
+
     def emit(event: dict[str, object]) -> None:
         session_manager.append_event(session_id, event)
 
@@ -1027,6 +1057,7 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
                 enable_web=enable_web,
                 retrieval_max_distance=max_distance,
                 language=language,
+                template_path=template_path,
             )
             result["route_meta"] = gen_bundle.route_meta
             result["route"] = {
@@ -1183,7 +1214,13 @@ def _run_generation_session(session_id: str, current_user: User, params: dict[st
         base_name = template.replace(".docx", "")
         output_name = f"{base_name}_u{current_user.id}_{ts}.docx"
         output_path = os.path.join(config.OUTPUT_DIR, output_name)
-        _filler.fill_template(template_path, tasks, results, output_path)
+        _filler.fill_template(
+            template_path,
+            tasks,
+            results,
+            output_path,
+            merged_profile=merged_style_profile,
+        )
         post_fill_checks = verify_filled_document(template_path, output_path, tasks)
         visual_payload = {}
         if enable_visual_audit and config.VISUAL_AUDIT_ENABLED:
@@ -2562,6 +2599,7 @@ async def generate_session_start(
     enable_audit: bool = Form(False),
     enable_visual_audit: bool = Form(True),
     custom_instructions: str = Form(""),
+    format_overrides: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -2578,6 +2616,7 @@ async def generate_session_start(
                 enable_audit,
                 enable_visual_audit,
                 custom_instructions,
+                format_overrides,
             ),
         )
     except ActiveGenerationExistsError as exc:
@@ -2665,6 +2704,7 @@ async def generate(
     enable_audit: bool = Form(False),
     enable_visual_audit: bool = Form(True),
     custom_instructions: str = Form(""),
+    format_overrides: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -2681,6 +2721,7 @@ async def generate(
                 enable_audit,
                 enable_visual_audit,
                 custom_instructions,
+                format_overrides,
             ),
         )
     except ActiveGenerationExistsError as exc:

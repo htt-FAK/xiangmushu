@@ -19,6 +19,7 @@ import { RunOverview } from "./generate/RunOverview";
 import { SetupPanel, type RecommendedConfig } from "./generate/SetupPanel";
 import { NoticeBanner } from "./generate/ui";
 import { useGenerationSession } from "./generate/useGenerationSession";
+import { type FormatOverrides } from "./generate/FormatOverridesPanel";
 
 type RailItem = { value: string; title: string; meta?: string };
 
@@ -49,6 +50,7 @@ export default function GeneratePage() {
   const useStream = true;
   const [enableAudit, setEnableAudit] = useState(false);
   const [enableVisualAudit, setEnableVisualAudit] = useState(true);
+  const [formatOverrides, setFormatOverrides] = useState<FormatOverrides>({});
   const [selectedKnowledgeStats, setSelectedKnowledgeStats] = useState<KnowledgeSourceStats | null>(workflowState.knowledge.stats);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
@@ -72,9 +74,10 @@ export default function GeneratePage() {
         useStream,
         enableAudit,
         enableVisualAudit,
+        format_overrides: Object.keys(formatOverrides).length > 0 ? JSON.stringify(formatOverrides) : undefined,
       };
     },
-    [enableAudit, enableVisualAudit, enableWeb, generationBrief, qualityMode, slug, template],
+    [enableAudit, enableVisualAudit, enableWeb, formatOverrides, generationBrief, qualityMode, slug, template],
   );
 
   const session = useGenerationSession({
@@ -269,6 +272,7 @@ export default function GeneratePage() {
       onToggleWeb={markOverride(setEnableWeb)}
       onToggleAudit={markOverride(setEnableAudit)}
       onToggleVisualAudit={markOverride(setEnableVisualAudit)}
+      onFormatOverridesChange={setFormatOverrides}
     />
   );
 

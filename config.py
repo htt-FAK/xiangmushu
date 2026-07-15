@@ -476,6 +476,20 @@ ADJUST_TABLE_READABILITY = _ADJ_TR not in ("0", "false", "no", "off")
 _APPLY_TYPO = os.getenv("APPLY_UNIFIED_TYPOGRAPHY", "1").strip().lower()
 APPLY_UNIFIED_TYPOGRAPHY = _APPLY_TYPO not in ("0", "false", "no", "off")
 
+# ── doc-gen-revamp 新增配置 ─────────────────────────────────────────────────────
+# 是否从模板提取样式并保留（True 时不使用硬编码宋体，改用模板原始字体/字号）
+_APPLY_TMPL_STYLE = os.getenv("APPLY_TEMPLATE_STYLE", "1").strip().lower()
+APPLY_TEMPLATE_STYLE = _APPLY_TMPL_STYLE not in ("0", "false", "no", "off")
+# 是否保留表格原始列宽（不强制等分）
+_PRESERVE_CW = os.getenv("PRESERVE_ORIGINAL_COLUMN_WIDTHS", "1").strip().lower()
+PRESERVE_ORIGINAL_COLUMN_WIDTHS = _PRESERVE_CW not in ("0", "false", "no", "off")
+# Normal-style 标题检测分数阈值（0-100，默认 50）
+NORMAL_HEADING_THRESHOLD = int(os.getenv("NORMAL_HEADING_THRESHOLD", "50"))
+# Prompt 模板版本（用于路由元数据追踪）
+PROMPT_TEMPLATE_VERSION = os.getenv("PROMPT_TEMPLATE_VERSION", "v2.1").strip() or "v2.1"
+# 表格列最小宽度（dxa），低于此值时自动扩展到该值防止内容溢出
+MIN_COLUMN_WIDTH_DXA = int(os.getenv("MIN_COLUMN_WIDTH_DXA", "500"))
+
 # 路径配置
 HISTORICAL_DIR = os.path.join(os.path.dirname(__file__), "data", "historical")
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "data", "templates")

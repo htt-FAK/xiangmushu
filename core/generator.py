@@ -150,7 +150,7 @@ TABLE_CLOSING_CREATIVE = (
     "优先依据片段与联网检索作答，写满该格；勿单写「资料未载明」敷衍；仍勿编造编码、费率、精确日期等。"
 )
 
-USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
+USER_PROMPT_PARA = """{context_block}【撰写任务】章节：{target_chapter}
 要求：{description}
 字数：约 {word_limit} 字{hint_block}{vision_block}
 
@@ -165,7 +165,7 @@ USER_PROMPT_PARA = """【撰写任务】章节：{target_chapter}
 {kb_note}
 {para_closing}"""
 
-USER_PROMPT_TABLE = """【表格填写任务】章节：{target_chapter}
+USER_PROMPT_TABLE = """{context_block}【表格填写任务】章节：{target_chapter}
 单元格要求：{description}
 字数上限：{word_limit} 字{hint_block}{vision_block}
 
@@ -175,6 +175,39 @@ USER_PROMPT_TABLE = """【表格填写任务】章节：{target_chapter}
 只输出应填入该格的**简短答案**（通常一行），直接依据参考资料，不写分析、不复述整行表头。
 **只回答本列表头/本格要求所问**；勿粘贴其它列的问题全文或说明；勿输出「资料N：____」等模板占位骨架；勿在一格内写多列混合内容或长段方案叙述。
 {table_closing}"""
+
+
+def _build_context_block(task: "FillTask", template_path: str | None = None) -> str:
+    """构建注入 USER_PROMPT 的上下文块（文档类型 + 章节路径 + 表格角色）。"""
+    import os as _os
+    lines: list[str] = []
+
+    # 文档类型
+    try:
+        from core.document_type_detector import infer_document_type, format_document_type_block
+        explicit = (task.location_hint or {}).get("document_type")
+        if template_path or explicit:
+            doc_type = infer_document_type(template_path or "", explicit_type=explicit)
+            block = format_document_type_block(doc_type)
+            if block:
+                lines.append(block)
+    except Exception:
+        pass
+
+    # 表格角色（仅表格任务）
+    if task.task_type == "table_cell":
+        hint = task.location_hint or {}
+        lbl = hint.get("label_text") or hint.get("col_0_text") or ""
+        tbl_type = hint.get("table_type") or ""
+        if lbl:
+            lines.append(
+                f"📋 表格类型：{tbl_type or '标签-内容对'}；"
+                f"本格的标签为「{lbl.strip()}」，请据参考资料填写。"
+            )
+
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n\n"
 
 
 def _normalize_web_writing_mode(mode: Optional[str]) -> str:
@@ -437,6 +470,7 @@ class ContentGenerator:
         table_cell_vision_pngs: Optional[List[bytes]] = None,
         fast_mode: bool = False,
         language: Optional[str] = None,
+        template_path: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], str, float, Dict[str, Any], Dict[str, Any], str]:
         query = expand_query(task.target_chapter, task.description, task.task_type)
         max_d = (
@@ -535,6 +569,7 @@ class ContentGenerator:
             else ""
         )
         vision_block = format_template_vision_block(task)
+        context_block = _build_context_block(task, template_path)
 
         if task.task_type == "table_cell":
             table_ctx_block = (
@@ -552,6 +587,7 @@ class ContentGenerator:
                 table_ctx_block=table_ctx_block,
                 kb_note=kb_note,
                 table_closing=table_closing,
+                context_block=context_block,
             )
             use_tbl_vis = (
                 not _fast_table_cell_route(task, fast_mode)
@@ -573,6 +609,7 @@ class ContentGenerator:
                 retrieved_texts=ref_texts,
                 kb_note=kb_note,
                 para_closing=para_closing,
+                context_block=context_block,
             )
             user_content = user_msg
 
@@ -684,6 +721,7 @@ class ContentGenerator:
             "full_recall_mode": bool(config.FULL_RECALL_MODE),
             "evidence_pack": evidence_pack.summary(),
             "evidence_refs": evidence_refs,
+            "prompt_version": getattr(config, "PROMPT_TEMPLATE_VERSION", "v2.1"),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route %s", route_meta)
@@ -701,6 +739,7 @@ class ContentGenerator:
         table_cell_vision_pngs: Optional[List[bytes]] = None,
         fast_mode: bool = False,
         language: Optional[str] = None,
+        template_path: Optional[str] = None,
     ) -> GenerationBundle:
         """使用预检索的 Evidence 构建 GenerationBundle，避免重复向量检索。"""
         from core.evidence_planner import compress_evidence, Evidence
@@ -747,6 +786,7 @@ class ContentGenerator:
             else ""
         )
         vision_block = format_template_vision_block(task)
+        context_block = _build_context_block(task, template_path)
 
         # Firecrawl web evidence → inject into ref_texts before user-msg formatting
         if use_plus:
@@ -780,6 +820,7 @@ class ContentGenerator:
                 table_ctx_block=table_ctx_block,
                 kb_note=kb_note,
                 table_closing=table_closing,
+                context_block=context_block,
             )
             use_tbl_vis = (
                 not _fast_table_cell_route(task, fast_mode)
@@ -801,6 +842,7 @@ class ContentGenerator:
                 retrieved_texts=ref_texts,
                 kb_note=kb_note,
                 para_closing=para_closing,
+                context_block=context_block,
             )
             user_content = user_msg
 
@@ -873,6 +915,7 @@ class ContentGenerator:
             "table_vision_n_images": len(table_cell_vision_pngs or []),
             "fast_mode": bool(fast_mode),
             "evidence_refs": evidence_refs,
+            "prompt_version": getattr(config, "PROMPT_TEMPLATE_VERSION", "v2.1"),
         }
         _ensure_gen_logger()
         _LOG.info("content_gen_route_evidence %s", route_meta)
@@ -898,6 +941,7 @@ class ContentGenerator:
         table_cell_vision_pngs: Optional[List[bytes]] = None,
         fast_mode: bool = False,
         language: Optional[str] = None,
+        template_path: Optional[str] = None,
     ) -> GenerationBundle:
         messages, model, temperature, extra_body, route_meta, ref_texts = (
             self._build_chat_request(
@@ -911,6 +955,7 @@ class ContentGenerator:
                 table_cell_vision_pngs=table_cell_vision_pngs,
                 fast_mode=fast_mode,
                 language=language,
+                template_path=template_path,
             )
         )
         return GenerationBundle(

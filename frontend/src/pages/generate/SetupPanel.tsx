@@ -4,6 +4,7 @@ import { Panel } from "../../components/ui";
 import { useI18n } from "../../i18n";
 import type { CustomModel } from "../../types";
 import { clsx } from "../../utils";
+import { FormatOverridesPanel, type FormatOverrides } from "./FormatOverridesPanel";
 import { SectionTitle, SetupField, TextArea } from "./ui";
 
 type RailItem = { value: string; title: string; meta?: string };
@@ -35,6 +36,7 @@ export function SetupPanel({
   onToggleWeb,
   onToggleAudit,
   onToggleVisualAudit,
+  onFormatOverridesChange,
 }: {
   knowledgeItems: RailItem[];
   templateItems: RailItem[];
@@ -55,6 +57,7 @@ export function SetupPanel({
   onToggleWeb: (value: boolean) => void;
   onToggleAudit: (value: boolean) => void;
   onToggleVisualAudit: (value: boolean) => void;
+  onFormatOverridesChange: (overrides: FormatOverrides) => void;
 }) {
   const { t } = useI18n();
   const isLocked = busy;
@@ -85,6 +88,13 @@ export function SetupPanel({
     main_writer: ["text"],
     fast_writer: ["text"],
     audit_text: ["text"],
+  };
+  const roleLabels: Record<string, string> = {
+    "text-gen": t("settings.customModels.roleTextGen"),
+    vision: t("settings.customModels.roleVision"),
+    embedding: t("settings.customModels.roleEmbedding"),
+    audit: t("settings.customModels.roleAudit"),
+    "small-llm": t("settings.customModels.roleSmallLlm"),
   };
 
   return (
@@ -178,6 +188,12 @@ export function SetupPanel({
           </div>
         </SetupField>
 
+        <FormatOverridesPanel 
+          templateId={template} 
+          onChange={onFormatOverridesChange}
+          disabled={isLocked} 
+        />
+
         {customModels.filter(m => m.assigned_roles.length > 0).length > 0 && (
           <SetupField label={t("settings.customModels.title")} compact={true}>
             <div className="space-y-2">
@@ -192,16 +208,16 @@ export function SetupPanel({
                       <Settings className="shrink-0 text-signal-cyan" size={14} />
                       <span className="text-xs font-semibold text-white">{model.name}</span>
                       <span className="bg-signal-cyan/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-signal-cyan">
-                        Custom
+                        {t("settings.customModels.customBadge")}
                       </span>
                     </div>
                     <div className="mt-1.5 font-mono text-[10px] text-slate-500">
-                      ID: {model.default_model_id}
+                      {t("settings.customModels.modelIdShort")}：{model.default_model_id}
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {model.assigned_roles.map(role => (
                         <span key={role} className="border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] uppercase tracking-tighter text-slate-400">
-                          {role}
+                          {roleLabels[role] || role}
                         </span>
                       ))}
                     </div>

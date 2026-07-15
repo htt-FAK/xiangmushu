@@ -2032,6 +2032,176 @@ def _offline_custom_audit_fallback() -> bool:
     return True
 
 
+# ── doc-gen-revamp 离线断言（task 9.4）───────────────────────────────────
+def _offline_normal_heading_detection() -> bool:
+    """Normal-style heading detector 离线断言：中文编号标题/正文/封面标题。"""
+    print("=== normal_heading_detector 离线断言 ===")
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from core.normal_heading_detector import (
+            classify_heading, score_normal_heading, find_all_headings,
+        )
+
+        doc = Document()
+        # 中文编号标题（应识别为 level 1）
+        p1 = doc.add_paragraph("一、项目基本信息")
+        for r in p1.runs:
+            r.font.bold = True
+            r.font.size = Pt(14)
+        doc.add_paragraph("正文内容，不应识别为标题")
+        # 十进制子标题（level 2）
+        p2 = doc.add_paragraph("1.1 项目背景")
+        for r in p2.runs:
+            r.font.bold = True
+            r.font.size = Pt(14)
+        # 封面大标题（不应识别）
+        p3 = doc.add_paragraph("大学生创新大赛")
+        for r in p3.runs:
+            r.font.bold = True
+            r.font.size = Pt(36)
+
+        if classify_heading(doc.paragraphs[0], threshold=50, doc=doc) != 1:
+            print("  [FAIL] 中文编号标题未识别 level 1")
+            return False
+        if classify_heading(doc.paragraphs[1], threshold=50, doc=doc) is not None:
+            print("  [FAIL] 普通正文误识别为标题")
+            return False
+        if classify_heading(doc.paragraphs[2], threshold=50, doc=doc) != 2:
+            print("  [FAIL] 十进制子标题未识别 level 2")
+            return False
+        if score_normal_heading(doc.paragraphs[3], doc=doc) != 0:
+            print("  [FAIL] 封面大评分应 = 0")
+            return False
+
+        headings = find_all_headings(doc, threshold=50)
+        lvl1 = [i for i, lvl in headings if lvl == 1]
+        if len(lvl1) < 1:
+            print(f"  [FAIL] find_all_headings 未发现 level-1 标题: {headings}")
+            return False
+        print(f"  [OK] headings={headings}")
+        return True
+    except Exception as e:
+        print(f"  [FAIL] {e}")
+        import traceback; traceback.print_exc()
+        return False
+
+
+def _offline_table_semantic_classification() -> bool:
+    """TableSemanticType 离线分类断言：label_value_pair / cover / rubric。"""
+    print("=== table_semantic_analyzer 离线断言 ===")
+    try:
+        from docx import Document
+        from docx.oxml.ns import qn
+        from core.table_semantic_analyzer import classify_table_type
+        from core.fill_intent import TableSemanticType
+
+        # Label-value pair
+        doc1 = Document()
+        t1 = doc1.add_table(rows=2, cols=2)
+        t1.cell(0, 0).text = "项目背景"
+        t1.cell(0, 1).text = ""
+        t1.cell(1, 0).text = "项目意义"
+        t1.cell(1, 1).text = ""
+        # 设置不等宽：col 0 窄，col 1 宽
+        for i, w in enumerate([1500, 7500]):
+            tc = t1.rows[0]._tr.findall(qn("w:tc"))[i]
+            from docx.oxml import OxmlElement
+            tcPr = tc.find(qn("w:tcPr"))
+            if tcPr is None:
+                tcPr = OxmlElement("w:tcPr")
+                tc.insert(0, tcPr)
+            tw_el = tcPr.find(qn("w:tcW"))
+            if tw_el is None:
+                tw_el = OxmlElement("w:tcW")
+                tcPr.append(tw_el)
+            tw_el.set(qn("w:w"), str(w))
+            tw_el.set(qn("w:type"), "dxa")
+        if classify_table_type(t1) != TableSemanticType.LABEL_VALUE_PAIR:
+            print(f"  [FAIL] 窄标签表应 LABEL_VALUE_PAIR, got {classify_table_type(t1)}")
+            return False
+
+        # Rubric / scoring table
+        doc2 = Document()
+        t2 = doc2.add_table(rows=3, cols=3)
+        t2.cell(0, 0).text = "评分项目及权重"
+        t2.cell(0, 1).text = "信息"
+        t2.cell(0, 2).text = "总分"
+        if classify_table_type(t2) != TableSemanticType.RUBRIC_SCORING:
+            print(f"  [FAIL] 评分表应 RUBRIC_SCORING, got {classify_table_type(t2)}")
+            return False
+
+        # Cover info table
+        doc3 = Document()
+        t3 = doc3.add_table(rows=2, cols=2)
+        t3.cell(0, 0).text = "姓名"
+        t3.cell(0, 1).text = "学号"
+        t3.cell(1, 0).text = "学院"
+        t3.cell(1, 1).text = "专业"
+        if classify_table_type(t3) != TableSemanticType.COVER_INFO:
+            print(f"  [FAIL] 封面表应 COVER_INFO, got {classify_table_type(t3)}")
+            return False
+
+        print("  [OK] label_value_pair/rubric_scoring/cover_info 全部通过")
+        return True
+    except Exception as e:
+        print(f"  [FAIL] {e}")
+        import traceback; traceback.print_exc()
+        return False
+
+
+def _offline_template_style_extraction() -> bool:
+    """TemplateStyleProfile 离线提取断言：synthetic + JSON roundtrip。"""
+    print("=== template_style_extractor 离线断言 ===")
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        import tempfile, os, json
+        from core.template_style_extractor import extract_style_profile
+        from core.style_models import TemplateStyleProfile, RunStyle
+
+        # Synthetic doc
+        doc = Document()
+        body = doc.add_paragraph("正文内容")
+        for r in body.runs:
+            r.font.name = "FangSong"
+            r.font.size = Pt(12)
+        h1 = doc.add_paragraph("一、章节标题")
+        for r in h1.runs:
+            r.font.bold = True
+            r.font.size = Pt(14)
+
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "test.docx")
+            doc.save(path)
+            profile = extract_style_profile(path)
+
+        if not isinstance(profile, TemplateStyleProfile):
+            print(f"  [FAIL] profile type = {type(profile)}")
+            return False
+
+        # JSON roundtrip
+        raw = profile.to_json()
+        back = TemplateStyleProfile.from_json(raw)
+        if back.body_style.size_pt != profile.body_style.size_pt:
+            print("  [FAIL] JSON roundtrip body size mismatch")
+            return False
+
+        # Merged style profile with user overrides
+        merged = profile.merge_user_overrides({"body_size_pt": 14})
+        if merged.body_style.size_pt != 14.0:
+            print("  [FAIL] user override body_size_pt not applied")
+            return False
+
+        print(f"  [OK] profile body={profile.body_style.font_east_asia} "
+              f"{profile.body_style.size_pt}pt, #headings={len(profile.heading_styles)}")
+        return True
+    except Exception as e:
+        print(f"  [FAIL] {e}")
+        import traceback; traceback.print_exc()
+        return False
+
+
 def _run_all_offline() -> bool:
     steps = [
         ("路由", _routing_tests),
@@ -2051,6 +2221,10 @@ def _run_all_offline() -> bool:
         ("multiformat_parsed_blocks", _offline_multiformat_parsed_blocks),
         ("quality_report_verifier", _offline_quality_report_and_verifier),
         ("custom_audit_fallback", _offline_custom_audit_fallback),
+        # doc-gen-revamp 离线断言（task 9.4）
+        ("normal_heading_detection", _offline_normal_heading_detection),
+        ("table_semantic_classification", _offline_table_semantic_classification),
+        ("template_style_extraction", _offline_template_style_extraction),
     ]
     ok_all = True
     for name, fn in steps:

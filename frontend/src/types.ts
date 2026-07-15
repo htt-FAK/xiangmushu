@@ -440,6 +440,7 @@ export type GenerateParams = {
   useStream: boolean;
   enableAudit: boolean;
   enableVisualAudit: boolean;
+  format_overrides?: string;
 };
 
 export type HistoryArticleStatus = "completed" | "review" | "failed";

@@ -388,6 +388,9 @@ export async function streamGenerate(
   form.append("use_stream", String(params.useStream));
   form.append("enable_audit", String(params.enableAudit));
   form.append("enable_visual_audit", String(params.enableVisualAudit));
+  if (params.format_overrides) {
+    form.append("format_overrides", params.format_overrides);
+  }
 
   return streamSSE<GenerateEvent>("/api/generate", onEvent, {
     method: "POST",
@@ -408,6 +411,9 @@ export async function startGenerateSession(params: GenerateParams): Promise<Gene
   form.append("use_stream", String(params.useStream));
   form.append("enable_audit", String(params.enableAudit));
   form.append("enable_visual_audit", String(params.enableVisualAudit));
+  if (params.format_overrides) {
+    form.append("format_overrides", params.format_overrides);
+  }
 
   return requestJsonAllowError<GenerationSessionStartResult>("/api/generate/sessions", {
     method: "POST",

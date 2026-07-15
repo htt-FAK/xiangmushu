@@ -1,12 +1,17 @@
 """多列表格扫槽：处理纵向合并单元格，并为创新点三列表补全任务。"""
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from typing import Any, Dict, List, Tuple
 
+from core.fill_intent import FillIntent
 from core.fill_task import FillTask
+from core.table_semantic_analyzer import analyze_table
 from core.template_slots import cell_needs_fill
+
+_LOG = logging.getLogger(__name__)
 
 ANCHOR_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 
@@ -66,9 +71,17 @@ def scan_table_fill_tasks(
 ) -> List[FillTask]:
     """
     扫描单表待填格；按物理单元格去重（纵向合并只占一行一列锚点）。
+
+    task 4.5 集成：通过 analyze_table 获取 fill_intent，
+    仅对意图为 FILL 的单元格生成 FillTask，跳过 LABEL / READ_ONLY。
     """
     if not table.rows:
         return []
+
+    # Semantic analysis (task 4.5)
+    analysis = analyze_table(table, table_index, chapter)
+    fill_intents = analysis.fill_intents
+
     headers = _header_cells(table)
     innovation = is_innovation_style_table(table)
     physical: Dict[Tuple[int, int, int], FillTask] = {}
@@ -81,9 +94,15 @@ def scan_table_fill_tasks(
                 continue
             row_seen.add(tc_id)
 
+            # Skip cells that are not FILL per semantic analysis (task 4.5)
+            cell_intent = fill_intents.get((r, c), FillIntent.LABEL)
+            if cell_intent != FillIntent.FILL:
+                continue
+
             raw = cell.text or ""
             if ANCHOR_PATTERN.search(raw):
                 continue
+            # Keep cell_needs_fill as secondary guard
             if not cell_needs_fill(raw):
                 continue
             if r == 0 and c < len(headers):
@@ -104,6 +123,7 @@ def scan_table_fill_tasks(
                 "table_index": table_index,
                 "row": anchor_r,
                 "col": c,
+                "fill_intent": cell_intent.value,
             }
             if innovation and anchor_r < r and c > 0:
                 hint["merged_column"] = True
