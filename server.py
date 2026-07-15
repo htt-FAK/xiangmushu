@@ -80,6 +80,7 @@ from core.billing import (
 )
 from core.api_key_validation import validate_user_api_key
 from core import custom_audit as custom_audit_module
+from core import custom_models as custom_models_module
 from core.audit_log import (
     ADMIN_ACCESS,
     API_KEY_DELETED,
@@ -343,6 +344,33 @@ class CustomAuditModelRequest(BaseModel):
     base_url: str
     model_id: str
     api_key: str
+
+
+class CustomModelRequest(BaseModel):
+    name: str
+    base_url: str
+    model_id: str
+    api_key: str
+    default_model_id: str | None = None
+
+
+class CustomModelUpdateRequest(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    model_id: str | None = None
+    api_key: str | None = None
+    default_model_id: str | None = None
+    capabilities: list[str] | None = None
+    assigned_roles: list[str] | None = None
+
+
+class CustomModelTestRequest(BaseModel):
+    test_types: list[str] | None = None
+
+
+class CustomModelAssignRequest(BaseModel):
+    assigned_roles: list[str]
+    default_model_id: str | None = None
 
 
 SUPPORTED_API_KEY_PROVIDERS: tuple[str, ...] = ("dashscope", "deepseek", "mimo")
@@ -1722,6 +1750,73 @@ def _localize_custom_audit_error(kind: str, detail: str, lang: str) -> str:
     return base
 
 
+_CUSTOM_MODELS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
+    "name_required": {
+        "zh": "请填写模型的显示名称。",
+        "en": "Please provide a display name for the model.",
+    },
+    "url_format": {
+        "zh": "Base URL 格式不正确，请输入以 http:// 或 https:// 开头的完整地址。",
+        "en": "Base URL format is invalid; please enter a full address starting with http:// or https://.",
+    },
+    "ssrf_rejected": {
+        "zh": "Base URL 指向不被允许的内网地址，请使用公网可访问的端点。",
+        "en": "Base URL resolves to a private network address; a public endpoint is required.",
+    },
+    "model_id_required": {
+        "zh": "请填写模型 ID。",
+        "en": "Please provide the Model ID.",
+    },
+    "api_key_length": {
+        "zh": "API Key 不能为空或长度不足。",
+        "en": "API key is empty or too short.",
+    },
+    "limit_exceeded": {
+        "zh": "已达自定义模型数量上限，请删除不再使用的模型后再试。",
+        "en": "You have reached the maximum number of custom models; please delete unused ones before adding more.",
+    },
+    "not_found": {
+        "zh": "未找到对应的自定义模型记录。",
+        "en": "No matching custom model record was found.",
+    },
+    "auth": {
+        "zh": "API Key 验证失败，请检查 Key 是否正确或是否已过期。",
+        "en": "API key validation failed; please verify it is correct and not expired.",
+    },
+    "network": {
+        "zh": "无法连接到指定的端点，请确认 Base URL 可访问。",
+        "en": "Unable to connect to the specified endpoint; please confirm the Base URL is reachable.",
+    },
+    "timeout": {
+        "zh": "连接端点超时，请稍后重试或确认端点可用。",
+        "en": "Connection to the endpoint timed out; please retry later or verify the endpoint is live.",
+    },
+    "model_not_found": {
+        "zh": "指定的模型 ID 在该端点下不可用，请核实 Model ID。",
+        "en": "The specified model is not available at this endpoint; please verify the Model ID.",
+    },
+    "bad_response": {
+        "zh": "端点返回的响应无法解析，请确认该服务兼容 OpenAI API 协议。",
+        "en": "The endpoint returned an unparseable response; please confirm it is OpenAI API-compatible.",
+    },
+    "invalid_role": {
+        "zh": "指定的角色名称无效。",
+        "en": "One or more of the specified role names are invalid.",
+    },
+    "rate_limited": {
+        "zh": "操作过于频繁，请稍后再试。",
+        "en": "Too many requests; please wait a moment and try again.",
+    },
+}
+
+
+def _localize_custom_models_error(kind: str, detail: str, lang: str) -> str:
+    base = _CUSTOM_MODELS_ERROR_MESSAGES.get(kind, {}).get(
+        lang, _CUSTOM_MODELS_ERROR_MESSAGES.get(kind, {}).get("en", kind)
+    )
+    return f"{base} ({detail})" if detail else base
+
+
 @app.get("/api/user/custom-audit-model")
 async def user_custom_audit_model_get(current_user: User = Depends(get_current_user)):
     record = custom_audit_module.get_by_user_id(current_user.id)
@@ -1835,6 +1930,158 @@ async def user_custom_audit_model_delete(
         detail={"kind": "custom_audit_model"},
     )
     return Response(status_code=204)
+
+
+# ── Multi-custom-models ─────────────────────────────────────────────────
+
+
+@app.get("/api/user/custom-models")
+async def user_custom_models_list(current_user: User = Depends(get_current_user)):
+    return {"models": custom_models_module.list_custom_models(current_user.id)}
+
+
+@app.post("/api/user/custom-models", status_code=201)
+async def user_custom_models_create(
+    payload: CustomModelRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    # Rate limit: max 10 creations per user per hour
+    if not rate_limiter.allow(
+        f"custom-model-create:{current_user.id}", [(10, 3600)]
+    ):
+        return JSONResponse(
+            status_code=429,
+            content={"error": {"code": "rate_limited", "message": _localize_custom_models_error("rate_limited", "", _lang_from_request(request))}},
+        )
+
+    # Validate + create (includes SSRF check + limit check inside)
+    try:
+        model = custom_models_module.create_custom_model(
+            user_id=current_user.id,
+            name=payload.name,
+            base_url=payload.base_url,
+            model_id=payload.model_id,
+            api_key=payload.api_key,
+            default_model_id=payload.default_model_id,
+        )
+    except custom_models_module._ModelError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": exc.code, "message": _localize_custom_models_error(exc.code, "", _lang_from_request(request))}},
+        )
+
+    log_audit(API_KEY_SAVED, user_id=current_user.id, email=current_user.email,
+              ip=_client_ip(request), ua=_user_agent(request),
+              detail={"kind": "custom_model", "model_id": model["model_id"], "id": model["id"]})
+    return JSONResponse(status_code=201, content=model)
+
+
+@app.put("/api/user/custom-models/{model_id}")
+async def user_custom_models_update(
+    model_id: int,
+    payload: CustomModelUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    fields = payload.model_dump(exclude_none=True)
+    if not fields:
+        model = custom_models_module.get_custom_model(current_user.id, model_id)
+        if not model:
+            return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": _localize_custom_models_error("not_found", "", _lang_from_request(request))}})
+        return model
+
+    # SSRF re-check if connection fields changed
+    if "base_url" in fields:
+        err_kind, err_detail = custom_models_module.validate_base_url(fields["base_url"])
+        if err_kind:
+            return JSONResponse(status_code=422, content={"error": {"code": err_kind, "message": _localize_custom_models_error(err_kind, err_detail or "", _lang_from_request(request))}})
+
+    # Validate roles if provided
+    if "assigned_roles" in fields:
+        invalid = [r for r in fields["assigned_roles"] if r not in custom_models_module.ALLOWED_ROLES]
+        if invalid:
+            return JSONResponse(status_code=422, content={"error": {"code": "invalid_role", "message": _localize_custom_models_error("invalid_role", ", ".join(invalid), _lang_from_request(request))}})
+
+    updated = custom_models_module.update_custom_model(
+        user_id=current_user.id, model_id=model_id, **fields,
+    )
+    if not updated:
+        return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": _localize_custom_models_error("not_found", "", _lang_from_request(request))}})
+    return updated
+
+
+@app.delete("/api/user/custom-models/{model_id}")
+async def user_custom_models_delete(
+    model_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    ok = custom_models_module.delete_custom_model(user_id=current_user.id, model_id=model_id)
+    if not ok:
+        return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": _localize_custom_models_error("not_found", "", _lang_from_request(request))}})
+    log_audit(API_KEY_DELETED, user_id=current_user.id, email=current_user.email,
+              ip=_client_ip(request), ua=_user_agent(request),
+              detail={"kind": "custom_model", "model_id": model_id})
+    return Response(status_code=204)
+
+
+@app.post("/api/user/custom-models/{model_id}/test")
+async def user_custom_models_test(
+    model_id: int,
+    payload: CustomModelTestRequest = None,
+    request: Request = None,
+    current_user: User = Depends(get_current_user),
+):
+    # Rate limit: max 5 tests per model per hour
+    if not rate_limiter.allow(
+        f"custom-model-test:{current_user.id}:{model_id}", [(5, 3600)]
+    ):
+        return JSONResponse(
+            status_code=429,
+            content={"error": {"code": "rate_limited", "message": _localize_custom_models_error("rate_limited", "", _lang_from_request(request))}},
+        )
+
+    test_types = payload.test_types if payload else None
+    try:
+        result = await custom_models_module.test_model_capabilities(
+            user_id=current_user.id,
+            model_id=model_id,
+            test_types=test_types,
+        )
+    except custom_models_module._ModelError as exc:
+        code = exc.code
+        status_code = 422 if code in ("auth", "not_found") else 500
+        return JSONResponse(
+            status_code=status_code,
+            content={"error": {"code": code, "message": _localize_custom_models_error(code, exc.message, _lang_from_request(request))}},
+        )
+    return result
+
+
+@app.post("/api/user/custom-models/{model_id}/assign")
+async def user_custom_models_assign(
+    model_id: int,
+    payload: CustomModelAssignRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = custom_models_module.assign_model_roles(
+            user_id=current_user.id,
+            model_id=model_id,
+            assigned_roles=payload.assigned_roles,
+            default_model_id=payload.default_model_id,
+        )
+    except custom_models_module._ModelError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": exc.code, "message": _localize_custom_models_error(exc.code, exc.message, _lang_from_request(request))}},
+        )
+
+    if result is None:
+        return JSONResponse(status_code=404, content={"error": {"code": "not_found", "message": _localize_custom_models_error("not_found", "", _lang_from_request(request))}})
+    return result
 
 
 @app.get("/api/billing/summary")

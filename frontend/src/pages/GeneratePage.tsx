@@ -261,6 +261,7 @@ export default function GeneratePage() {
       enableVisualAudit={enableVisualAudit}
       recommendedConfig={recommendedConfig}
       busy={busy}
+      customModels={session.customModels}
       onSlugChange={setSlug}
       onTemplateChange={setTemplate}
       onQualityModeChange={setQualityMode}
@@ -420,8 +421,10 @@ export default function GeneratePage() {
           data={session.quotaAlertData}
           title={t("generate.quotaDialogTitle")}
           cancelLabel={t("generate.cancel")}
-          saving={session.savingQuotaSwitch}
-          onSwitch={(model) => void session.switchQuotaModel(model)}
+      saving={session.savingQuotaSwitch}
+      customModels={session.customModels}
+      onSwitch={(model) => void session.switchQuotaModel(model)}
+
           onCancel={() => {
             session.closeQuotaModal();
             session.stop();

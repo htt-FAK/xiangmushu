@@ -1,7 +1,8 @@
-import { MessageSquareText, Sparkles } from "lucide-react";
+import { AlertTriangle, MessageSquareText, Settings, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Panel } from "../../components/ui";
 import { useI18n } from "../../i18n";
+import type { CustomModel } from "../../types";
 import { clsx } from "../../utils";
 import { SectionTitle, SetupField, TextArea } from "./ui";
 
@@ -26,6 +27,7 @@ export function SetupPanel({
   enableVisualAudit,
   recommendedConfig,
   busy,
+  customModels = [],
   onSlugChange,
   onTemplateChange,
   onQualityModeChange,
@@ -45,6 +47,7 @@ export function SetupPanel({
   enableVisualAudit: boolean;
   recommendedConfig: RecommendedConfig | null;
   busy: boolean;
+  customModels?: CustomModel[];
   onSlugChange: (value: string) => void;
   onTemplateChange: (value: string) => void;
   onQualityModeChange: (value: QualityMode) => void;
@@ -76,6 +79,12 @@ export function SetupPanel({
     speed: t("generate.modeSpeedDesc"),
     balanced: t("generate.modeBalancedDesc"),
     quality: t("generate.modeQualityDesc"),
+  };
+
+  const rolesByModule: Record<string, string[]> = {
+    main_writer: ["text"],
+    fast_writer: ["text"],
+    audit_text: ["text"],
   };
 
   return (
@@ -168,6 +177,39 @@ export function SetupPanel({
             ))}
           </div>
         </SetupField>
+
+        {customModels.filter(m => m.assigned_roles.length > 0).length > 0 && (
+          <SetupField label={t("settings.customModels.title")} compact={true}>
+            <div className="space-y-2">
+              {customModels
+                .filter(m => m.assigned_roles.length > 0)
+                .map((model) => (
+                  <div
+                    key={model.id}
+                    className="flex flex-col border border-signal-cyan/20 bg-night-900/50 p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Settings className="shrink-0 text-signal-cyan" size={14} />
+                      <span className="text-xs font-semibold text-white">{model.name}</span>
+                      <span className="bg-signal-cyan/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-signal-cyan">
+                        Custom
+                      </span>
+                    </div>
+                    <div className="mt-1.5 font-mono text-[10px] text-slate-500">
+                      ID: {model.default_model_id}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {model.assigned_roles.map(role => (
+                        <span key={role} className="border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] uppercase tracking-tighter text-slate-400">
+                          {role}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </SetupField>
+        )}
 
         <details className="border border-white/10 bg-night-950/55 p-3">
           <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-[0.12em] text-signal-cyan">

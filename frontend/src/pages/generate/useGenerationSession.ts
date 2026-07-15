@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchCustomModels,
   startGenerateSession,
   streamGenerate,
   updateUserPreferences,
 } from "../../api";
+import { useAuth } from "../../auth";
 import { useBackgroundSessions } from "../../backgroundSessions";
 import type { OutputBlockData } from "../../components/OutputBlock";
+import { useCustomModelsCache } from "../../useCustomModels";
 import type {
   AuditFallbackEvent,
+  CustomModel,
   GenerateEvent,
   GenerateParams,
   GenerationBilling,
   GenerationSessionSnapshot,
+  ModelOption,
   PostFillChecks,
   UserPreferences,
 } from "../../types";
@@ -78,6 +83,10 @@ export function useGenerationSession(options: {
   const [quotaAlertData, setQuotaAlertData] = useState<QuotaAlertData | null>(null);
   const [quotaModalOpen, setQuotaModalOpen] = useState(false);
   const [savingQuotaSwitch, setSavingQuotaSwitch] = useState(false);
+  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
+
+  const { userEmail } = useAuth();
+  const { getModels, setModels } = useCustomModelsCache(userEmail || null);
 
   const abortRef = useRef<AbortController | null>(null);
   const sectionAbortRef = useRef<AbortController | null>(null);
@@ -453,6 +462,14 @@ export function useGenerationSession(options: {
   );
 
   const recoverActiveSession = useCallback(() => {
+    // Background fetch custom models with caching
+    const cached = getModels();
+    if (cached) setCustomModels(cached);
+    fetchCustomModels().then((models) => {
+      setCustomModels(models);
+      setModels(models);
+    }).catch(() => {});
+
     const session = workflowState.generate.session;
     if (session) {
       applyLocalFromSnapshot(session);
@@ -498,6 +515,7 @@ export function useGenerationSession(options: {
     runBilling,
     auditFallbackEvents,
     modelChoices,
+    customModels,
     quotaAlertData,
     quotaModalOpen,
     savingQuotaSwitch,

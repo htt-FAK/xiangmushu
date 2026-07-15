@@ -2,9 +2,14 @@ import type {
   AnalyzeResult,
   ApiKeyValidationResult,
   ApiKeyStatus,
+  AssignRolesResponse,
   BillingSummary,
+  CreateCustomModelRequest,
   CustomAuditModelError,
   CustomAuditModelStatus,
+  CustomModel,
+  CustomModelError,
+  CustomModelsListResponse,
   GenerateEvent,
   GenerateParams,
   HistoryArticlesResponse,
@@ -18,6 +23,8 @@ import type {
   TemplateAnalysisSessionEnvelope,
   TemplateAnalysisSessionStartResult,
   TemplateItem,
+  TestResult,
+  UpdateCustomModelRequest,
   UploadResult,
   UserPreferences,
 } from "./types";
@@ -521,5 +528,128 @@ export async function deleteCustomAuditModel(): Promise<void> {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw, `HTTP ${response.status}`));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Multi Custom Models
+//
+// CRUD + capability testing + role assignment for user-supplied OpenAI-
+// compatible models. Mirrors the custom-audit pattern above but supports
+// multiple records per user.
+// ---------------------------------------------------------------------------
+
+const CUSTOM_MODELS_ENDPOINT = "/api/user/custom-models";
+
+export async function fetchCustomModels(): Promise<CustomModel[]> {
+  const res = await authedFetch(apiUrl(CUSTOM_MODELS_ENDPOINT));
+  if (res.status === 401) return []; // unauthenticated edge case
+  if (!res.ok) {
+    const raw = await res.text();
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${res.status}`));
+  }
+  const data: CustomModelsListResponse = await res.json();
+  return data.models || [];
+}
+
+export async function createCustomModel(
+  data: CreateCustomModelRequest,
+): Promise<CustomModel> {
+  const res = await fetch(apiUrl(CUSTOM_MODELS_ENDPOINT), {
+    method: "POST",
+    headers: { ...buildAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const raw = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(raw); } catch { /* not JSON */ }
+    const structured = (parsed as { error?: CustomModelError }).error;
+    const err = new Error(
+      structured?.message || parseApiErrorMessage(raw, `HTTP ${res.status}`),
+    ) as Error & { customModelError?: CustomModelError };
+    if (structured) err.customModelError = structured;
+    throw err;
+  }
+  return res.json() as Promise<CustomModel>;
+}
+
+export async function updateCustomModel(
+  id: number,
+  data: UpdateCustomModelRequest,
+): Promise<CustomModel> {
+  const res = await authedFetch(`${apiUrl(CUSTOM_MODELS_ENDPOINT)}/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (res.status === 404) throw new Error("Model not found");
+  if (!res.ok) {
+    const raw = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(raw); } catch { /* not JSON */ }
+    const structured = (parsed as { error?: CustomModelError }).error;
+    const err = new Error(
+      structured?.message || parseApiErrorMessage(raw, `HTTP ${res.status}`),
+    ) as Error & { customModelError?: CustomModelError };
+    if (structured) err.customModelError = structured;
+    throw err;
+  }
+  return res.json() as Promise<CustomModel>;
+}
+
+export async function deleteCustomModel(id: number): Promise<void> {
+  const res = await authedFetch(`${apiUrl(CUSTOM_MODELS_ENDPOINT)}/${id}`, {
+    method: "DELETE",
+  });
+  if (res.status === 404) throw new Error("Model not found");
+  if (!res.ok && res.status !== 204) {
+    const raw = await res.text();
+    throw new Error(parseApiErrorMessage(raw, `HTTP ${res.status}`));
+  }
+}
+
+export async function testModelCapabilities(
+  id: number,
+  testTypes?: string[],
+): Promise<TestResult> {
+  const res = await authedFetch(`${apiUrl(CUSTOM_MODELS_ENDPOINT)}/${id}/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ test_types: testTypes }),
+  });
+  if (!res.ok) {
+    const raw = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(raw); } catch { /* not JSON */ }
+    const structured = (parsed as { error?: CustomModelError }).error;
+    const err = new Error(
+      structured?.message || parseApiErrorMessage(raw, `HTTP ${res.status}`),
+    ) as Error & { customModelError?: CustomModelError };
+    if (structured) err.customModelError = structured;
+    throw err;
+  }
+  return res.json() as Promise<TestResult>;
+}
+
+export async function assignModelRoles(
+  id: number,
+  roles: string[],
+  defaultModelId?: string,
+): Promise<AssignRolesResponse> {
+  const res = await authedFetch(`${apiUrl(CUSTOM_MODELS_ENDPOINT)}/${id}/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ assigned_roles: roles, default_model_id: defaultModelId }),
+  });
+  if (!res.ok) {
+    const raw = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(raw); } catch { /* not JSON */ }
+    const structured = (parsed as { error?: CustomModelError }).error;
+    throw new Error(
+      structured?.message || parseApiErrorMessage(raw, `HTTP ${res.status}`),
+    );
+  }
+  return res.json() as Promise<AssignRolesResponse>;
 }
 

@@ -203,6 +203,81 @@ export type CustomAuditModelStatus = {
   updated_at?: string | null;
 };
 
+// ── Multi Custom Models ──────────────────────────────────────────────
+
+export interface CustomModelError {
+  code: string;
+  message: string;
+}
+
+export interface CustomModel {
+  id: number;
+  user_id: number;
+  name: string;
+  base_url: string;
+  model_id: string;
+  default_model_id: string;
+  capabilities: string[];
+  assigned_roles: string[];
+  status: "untested" | "tested" | "validated" | "override" | "active";
+  last_tested_at: string | null;
+  last_error: string | null;
+  api_key_preview: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCustomModelRequest {
+  name: string;
+  base_url: string;
+  model_id: string;
+  api_key: string;
+  default_model_id?: string;
+}
+
+export interface UpdateCustomModelRequest {
+  name?: string;
+  base_url?: string;
+  model_id?: string;
+  api_key?: string;
+  default_model_id?: string;
+  capabilities?: string[];
+  assigned_roles?: string[];
+}
+
+export interface CapabilityTestResult {
+  passed: boolean;
+  latency_ms: number;
+  detail: string | null;
+}
+
+export interface TestResult {
+  id: number;
+  capabilities: string[];
+  status: string;
+  last_tested_at: string;
+  last_error: string | null;
+  suggested_roles: string[];
+  test_results: {
+    text?: CapabilityTestResult;
+    vision?: CapabilityTestResult;
+    embedding?: CapabilityTestResult;
+  };
+}
+
+export interface AssignRolesResponse {
+  id: number;
+  name: string;
+  assigned_roles: string[];
+  default_model_id: string;
+  capabilities: string[];
+  warnings?: string[];
+}
+
+export interface CustomModelsListResponse {
+  models: CustomModel[];
+}
+
 export interface ModelOption {
   model: string;
   recommended?: boolean;

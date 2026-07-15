@@ -1,3 +1,5 @@
+// DEPRECATED: replaced by frontend/src/components/CustomModelsManager.tsx
+// Kept for backward compatibility; remove in v2.1.0
 import { Check, KeyRound, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {

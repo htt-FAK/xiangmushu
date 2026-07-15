@@ -1,7 +1,9 @@
-import { Cpu, Layers3, Loader2, Play } from "lucide-react";
+import { Cpu, Layers3, Loader2, Play, Settings } from "lucide-react";
 import { Button } from "../../components/ui";
 import { useFocusTrap } from "../../hooks";
+import type { CustomModel } from "../../types";
 import type { QuotaAlertData } from "./useGenerationSession";
+import { clsx } from "../../utils";
 
 export function ConfirmModal({
   title,
@@ -48,6 +50,7 @@ export function QuotaSwitchModal({
   title,
   cancelLabel,
   saving,
+  customModels = [],
   onSwitch,
   onCancel,
 }: {
@@ -55,6 +58,7 @@ export function QuotaSwitchModal({
   title: string;
   cancelLabel: string;
   saving: boolean;
+  customModels?: CustomModel[];
   onSwitch: (model: string) => void;
   onCancel: () => void;
 }) {
@@ -70,18 +74,38 @@ export function QuotaSwitchModal({
         </div>
         <p className="text-sm leading-7 text-slate-300">{data.message}</p>
         <div className="mt-5 grid gap-2">
-          {data.available_models.map((model) => (
-            <button
-              key={model}
-              type="button"
-              onClick={() => onSwitch(model)}
-              disabled={saving}
-              className="flex items-center justify-between gap-3 border border-white/10 bg-night-950 px-3 py-3 text-left text-slate-300 transition hover:border-white/25 hover:text-white disabled:opacity-60"
-            >
-              <span className="block min-w-0 break-all text-sm font-semibold">{model}</span>
-              {saving ? <Loader2 aria-hidden="true" className="shrink-0 animate-spin" size={16} /> : <Cpu aria-hidden="true" className="shrink-0" size={16} />}
-            </button>
-          ))}
+          {data.available_models.map((model) => {
+            const isCustom = customModels.some(m => m.default_model_id === model);
+            return (
+              <button
+                key={model}
+                type="button"
+                onClick={() => onSwitch(model)}
+                disabled={saving}
+                className={clsx(
+                  "flex items-center justify-between gap-3 border px-3 py-3 text-left transition disabled:opacity-60",
+                  isCustom 
+                    ? "border-signal-cyan/30 bg-night-900 text-cyan-50 hover:border-signal-cyan/60" 
+                    : "border-white/10 bg-night-950 text-slate-300 hover:border-white/25 hover:text-white"
+                )}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  {isCustom && <Settings size={14} className="shrink-0 text-signal-cyan" />}
+                  <span className="block min-w-0 break-all text-sm font-semibold">{model}</span>
+                  {isCustom && (
+                    <span className="ml-1 bg-signal-cyan/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-signal-cyan">
+                      No quota limit
+                    </span>
+                  )}
+                </span>
+                {saving ? (
+                  <Loader2 aria-hidden="true" className="shrink-0 animate-spin" size={16} />
+                ) : (
+                  <Cpu aria-hidden="true" className="shrink-0" size={16} />
+                )}
+              </button>
+            );
+          })}
         </div>
         <div className="mt-5 grid gap-3 sm:flex sm:justify-end">
           <Button className="min-h-12 w-full sm:w-auto" variant="ghost" onClick={onCancel} disabled={saving}>
