@@ -189,6 +189,31 @@ class TestProbeVision:
         detail = (result.get("detail") or "").lower()
         assert "image" in detail or "vision" in detail or "multimodal" in detail
 
+    @patch("core.custom_models._openai_client")
+    def test_vision_refusal_text_is_not_misclassified_as_supported(self, mock_client_factory):
+        """Regression: text-only models may return refusal prose instead of HTTP 4xx.
+
+        A response such as
+        ``Cannot read \"image.png\" (this model does not support image input).``
+        must be treated as *vision unsupported*, not a successful vision probe.
+        """
+        from core.custom_models import _probe_vision
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _fake_chat_response(
+            'ERROR: Cannot read "image.png" (this model does not support image input). Inform the user.'
+        )
+        mock_client_factory.return_value = mock_client
+
+        result = _run_async(_probe_vision("http://example.com", "sk-key", "deepseek-chat"))
+
+        assert result["passed"] is False
+        assert result["detail"] == "model does not support image input"
+        assert result.get("detail_i18n") == {
+            "zh": "该模型不支持图片输入",
+            "en": "This model does not support image input",
+        }
+
 
 # ── _probe_embedding ──────────────────────────────────────────────────────────
 

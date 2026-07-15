@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import json
 import logging
 import os
 from pathlib import Path
@@ -10,6 +11,27 @@ from typing import Any, Iterator
 import config
 
 LOG = logging.getLogger(__name__)
+
+
+def _decode_json_field(value: Any) -> Any:
+    """Decode JSON columns from MySQL / SQLite in an idempotent way.
+
+    MySQL drivers may return JSON columns as:
+    - raw JSON strings (most common)
+    - already-decoded Python lists/dicts (driver/version dependent)
+    - bytes
+
+    This helper accepts all three so callers don't need to care.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -356,8 +378,8 @@ def create_custom_model(
             model_id=row['model_id'],
             encrypted_api_key=row['encrypted_api_key'],
             api_key_hint=row['api_key_hint'],
-            capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
-            assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+            capabilities_json=_decode_json_field(row['capabilities_json']),
+            assigned_roles_json=_decode_json_field(row['assigned_roles_json']),
             default_model_id=row['default_model_id'],
             status=row['status'],
             last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
@@ -402,8 +424,8 @@ def create_custom_model(
             model_id=row[4],
             encrypted_api_key=row[5],
             api_key_hint=row[6],
-            capabilities_json=json.loads(row[7]) if row[7] else None,
-            assigned_roles_json=json.loads(row[8]) if row[8] else None,
+            capabilities_json=_decode_json_field(row[7]),
+            assigned_roles_json=_decode_json_field(row[8]),
             default_model_id=row[9],
             status=row[10],
             last_tested_at=row[11],
@@ -445,8 +467,8 @@ def get_custom_models_by_user(user_id: int) -> list[CustomModel]:
                 model_id=row['model_id'],
                 encrypted_api_key=row['encrypted_api_key'],
                 api_key_hint=row['api_key_hint'],
-                capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
-                assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+                capabilities_json=_decode_json_field(row['capabilities_json']),
+                assigned_roles_json=_decode_json_field(row['assigned_roles_json']),
                 default_model_id=row['default_model_id'],
                 status=row['status'],
                 last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
@@ -478,8 +500,8 @@ def get_custom_models_by_user(user_id: int) -> list[CustomModel]:
                 model_id=row[4],
                 encrypted_api_key=row[5],
                 api_key_hint=row[6],
-                capabilities_json=json.loads(row[7]) if row[7] else None,
-                assigned_roles_json=json.loads(row[8]) if row[8] else None,
+                capabilities_json=_decode_json_field(row[7]),
+                assigned_roles_json=_decode_json_field(row[8]),
                 default_model_id=row[9],
                 status=row[10],
                 last_tested_at=row[11],
@@ -525,8 +547,8 @@ def get_custom_model_by_id(model_id: int, user_id: int) -> CustomModel | None:
             model_id=row['model_id'],
             encrypted_api_key=row['encrypted_api_key'],
             api_key_hint=row['api_key_hint'],
-            capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
-            assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+            capabilities_json=_decode_json_field(row['capabilities_json']),
+            assigned_roles_json=_decode_json_field(row['assigned_roles_json']),
             default_model_id=row['default_model_id'],
             status=row['status'],
             last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
@@ -557,8 +579,8 @@ def get_custom_model_by_id(model_id: int, user_id: int) -> CustomModel | None:
             model_id=row[4],
             encrypted_api_key=row[5],
             api_key_hint=row[6],
-            capabilities_json=json.loads(row[7]) if row[7] else None,
-            assigned_roles_json=json.loads(row[8]) if row[8] else None,
+            capabilities_json=_decode_json_field(row[7]),
+            assigned_roles_json=_decode_json_field(row[8]),
             default_model_id=row[9],
             status=row[10],
             last_tested_at=row[11],
@@ -723,8 +745,8 @@ def get_custom_models_by_capability(user_id: int, capability: str) -> list[Custo
                 model_id=row['model_id'],
                 encrypted_api_key=row['encrypted_api_key'],
                 api_key_hint=row['api_key_hint'],
-                capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
-                assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+                capabilities_json=_decode_json_field(row['capabilities_json']),
+                assigned_roles_json=_decode_json_field(row['assigned_roles_json']),
                 default_model_id=row['default_model_id'],
                 status=row['status'],
                 last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
@@ -750,7 +772,7 @@ def get_custom_models_by_capability(user_id: int, capability: str) -> list[Custo
         
         result = []
         for row in rows:
-            caps = json.loads(row[7]) if row[7] else []
+            caps = _decode_json_field(row[7]) or []
             if capability in caps:
                 result.append(CustomModel(
                     id=row[0],
@@ -761,7 +783,7 @@ def get_custom_models_by_capability(user_id: int, capability: str) -> list[Custo
                     encrypted_api_key=row[5],
                     api_key_hint=row[6],
                     capabilities_json=caps,
-                    assigned_roles_json=json.loads(row[8]) if row[8] else None,
+                    assigned_roles_json=_decode_json_field(row[8]),
                     default_model_id=row[9],
                     status=row[10],
                     last_tested_at=row[11],
@@ -808,8 +830,8 @@ def get_custom_models_by_role(user_id: int, role: str) -> list[CustomModel]:
                 model_id=row['model_id'],
                 encrypted_api_key=row['encrypted_api_key'],
                 api_key_hint=row['api_key_hint'],
-                capabilities_json=json.loads(row['capabilities_json']) if row['capabilities_json'] else None,
-                assigned_roles_json=json.loads(row['assigned_roles_json']) if row['assigned_roles_json'] else None,
+                capabilities_json=_decode_json_field(row['capabilities_json']),
+                assigned_roles_json=_decode_json_field(row['assigned_roles_json']),
                 default_model_id=row['default_model_id'],
                 status=row['status'],
                 last_tested_at=row['last_tested_at'].isoformat() if row['last_tested_at'] else None,
@@ -835,7 +857,7 @@ def get_custom_models_by_role(user_id: int, role: str) -> list[CustomModel]:
         
         result = []
         for row in rows:
-            roles = json.loads(row[8]) if row[8] else []
+            roles = _decode_json_field(row[8]) or []
             if role in roles:
                 result.append(CustomModel(
                     id=row[0],
