@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchCustomModels,
+  fetchModelOptions,
   startGenerateSession,
   streamGenerate,
   updateUserPreferences,
@@ -16,7 +17,7 @@ import type {
   GenerateParams,
   GenerationBilling,
   GenerationSessionSnapshot,
-  ModelOption,
+  ModelOptionsMap,
   PostFillChecks,
   UserPreferences,
 } from "../../types";
@@ -84,6 +85,7 @@ export function useGenerationSession(options: {
   const [quotaModalOpen, setQuotaModalOpen] = useState(false);
   const [savingQuotaSwitch, setSavingQuotaSwitch] = useState(false);
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
+  const [modelOptions, setModelOptions] = useState<ModelOptionsMap | null>(null);
 
   const { userEmail } = useAuth();
   const { getModels, setModels } = useCustomModelsCache(userEmail || null);
@@ -470,6 +472,9 @@ export function useGenerationSession(options: {
       setModels(models);
     }).catch(() => {});
 
+    // Fetch model options for selectors
+    fetchModelOptions().then(setModelOptions).catch(() => {});
+
     const session = workflowState.generate.session;
     if (session) {
       applyLocalFromSnapshot(session);
@@ -516,11 +521,13 @@ export function useGenerationSession(options: {
     auditFallbackEvents,
     modelChoices,
     customModels,
+    modelOptions,
     quotaAlertData,
     quotaModalOpen,
     savingQuotaSwitch,
     // setters / actions
     setModelChoices,
+    setModelOptions,
     setNotice,
     dismissNotice,
     start,
@@ -530,5 +537,6 @@ export function useGenerationSession(options: {
     closeQuotaModal,
     recoverActiveSession,
     reportFailedLoads,
+    refreshModelOptions: () => fetchModelOptions().then(setModelOptions).catch(() => {}),
   };
 }

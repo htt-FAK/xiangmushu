@@ -1,10 +1,12 @@
-import { AlertTriangle, MessageSquareText, Settings, Sparkles } from "lucide-react";
+import { AlertTriangle, MessageSquareText, Settings, Sparkles, Zap, ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Panel } from "../../components/ui";
 import { useI18n } from "../../i18n";
-import type { CustomModel } from "../../types";
+import type { CustomModel, ModelOptionsMap, ModelOption } from "../../types";
 import { clsx } from "../../utils";
+import { flattenModelOptions } from "../../models";
 import { FormatOverridesPanel, type FormatOverrides } from "./FormatOverridesPanel";
+import { detectCustomModelEmptyState, type CustomModelEmptyState } from "./modelSelectorEmpty";
 import { SectionTitle, SetupField, TextArea } from "./ui";
 
 type RailItem = { value: string; title: string; meta?: string };
@@ -29,6 +31,8 @@ export function SetupPanel({
   recommendedConfig,
   busy,
   customModels = [],
+  modelOptions,
+  modelChoices = {},
   onSlugChange,
   onTemplateChange,
   onQualityModeChange,
@@ -37,6 +41,7 @@ export function SetupPanel({
   onToggleAudit,
   onToggleVisualAudit,
   onFormatOverridesChange,
+  onModelChoiceChange,
 }: {
   knowledgeItems: RailItem[];
   templateItems: RailItem[];
@@ -50,6 +55,8 @@ export function SetupPanel({
   recommendedConfig: RecommendedConfig | null;
   busy: boolean;
   customModels?: CustomModel[];
+  modelOptions: ModelOptionsMap | null;
+  modelChoices?: Record<string, string>;
   onSlugChange: (value: string) => void;
   onTemplateChange: (value: string) => void;
   onQualityModeChange: (value: QualityMode) => void;
@@ -58,6 +65,7 @@ export function SetupPanel({
   onToggleAudit: (value: boolean) => void;
   onToggleVisualAudit: (value: boolean) => void;
   onFormatOverridesChange: (overrides: FormatOverrides) => void;
+  onModelChoiceChange: (role: string, model: string) => void;
 }) {
   const { t } = useI18n();
   const isLocked = busy;
@@ -84,18 +92,19 @@ export function SetupPanel({
     quality: t("generate.modeQualityDesc"),
   };
 
-  const rolesByModule: Record<string, string[]> = {
-    main_writer: ["text"],
-    fast_writer: ["text"],
-    audit_text: ["text"],
-  };
-  const roleLabels: Record<string, string> = {
-    "text-gen": t("settings.customModels.roleTextGen"),
-    vision: t("settings.customModels.roleVision"),
-    embedding: t("settings.customModels.roleEmbedding"),
-    audit: t("settings.customModels.roleAudit"),
-    "small-llm": t("settings.customModels.roleSmallLlm"),
-  };
+  const mainWriterOptions = flattenModelOptions(modelOptions?.main_writer);
+  const fastWriterOptions = flattenModelOptions(modelOptions?.fast_writer);
+  const auditOptions = flattenModelOptions(modelOptions?.audit_text);
+
+  const mainWriterEmptyState = isLocked
+    ? undefined
+    : detectCustomModelEmptyState(mainWriterOptions, customModels);
+  const fastWriterEmptyState = isLocked
+    ? undefined
+    : detectCustomModelEmptyState(fastWriterOptions, customModels);
+  const auditEmptyState = isLocked
+    ? undefined
+    : detectCustomModelEmptyState(auditOptions, customModels);
 
   return (
     <Panel className="min-w-0">
@@ -194,37 +203,47 @@ export function SetupPanel({
           disabled={isLocked} 
         />
 
-        {customModels.filter(m => m.assigned_roles.length > 0).length > 0 && (
-          <SetupField label={t("settings.customModels.title")} compact={true}>
-            <div className="space-y-2">
-              {customModels
-                .filter(m => m.assigned_roles.length > 0)
-                .map((model) => (
-                  <div
-                    key={model.id}
-                    className="flex flex-col border border-signal-cyan/20 bg-night-900/50 p-3"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Settings className="shrink-0 text-signal-cyan" size={14} />
-                      <span className="text-xs font-semibold text-white">{model.name}</span>
-                      <span className="bg-signal-cyan/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-signal-cyan">
-                        {t("settings.customModels.customBadge")}
-                      </span>
-                    </div>
-                    <div className="mt-1.5 font-mono text-[10px] text-slate-500">
-                      {t("settings.customModels.modelIdShort")}：{model.default_model_id}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {model.assigned_roles.map(role => (
-                        <span key={role} className="border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] uppercase tracking-tighter text-slate-400">
-                          {roleLabels[role] || role}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </SetupField>
+        {modelOptions && (
+          <div className="space-y-3">
+            <SetupField label={t("settings.modelChoices.main_writer")} compact={true}>
+              <ModelSelector
+                role="main_writer"
+                icon={<Zap size={14} className="text-signal-cyan" />}
+                options={mainWriterOptions}
+                value={modelChoices.main_writer || ""}
+                disabled={isLocked}
+                emptyState={mainWriterEmptyState}
+                t={t}
+                onChange={onModelChoiceChange}
+              />
+            </SetupField>
+            <SetupField label={t("settings.modelChoices.fast_writer")} compact={true}>
+              <ModelSelector
+                role="fast_writer"
+                icon={<Sparkles size={14} className="text-signal-lime" />}
+                options={fastWriterOptions}
+                value={modelChoices.fast_writer || ""}
+                disabled={isLocked}
+                emptyState={fastWriterEmptyState}
+                t={t}
+                onChange={onModelChoiceChange}
+              />
+            </SetupField>
+            {enableAudit && (
+              <SetupField label={t("settings.modelChoices.audit_text")} compact={true}>
+                <ModelSelector
+                  role="audit_text"
+                  icon={<ShieldCheck size={14} className="text-signal-amber" />}
+                  options={auditOptions}
+                  value={modelChoices.audit_text || ""}
+                  disabled={isLocked}
+                  emptyState={auditEmptyState}
+                  t={t}
+                  onChange={onModelChoiceChange}
+                />
+              </SetupField>
+            )}
+          </div>
         )}
 
         <details className="border border-white/10 bg-night-950/55 p-3">
@@ -285,5 +304,62 @@ export function SetupPanel({
         </SetupField>
       </div>
     </Panel>
+  );
+}
+
+function ModelSelector({
+  role,
+  icon,
+  options,
+  value,
+  disabled,
+  emptyState,
+  t,
+  onChange,
+}: {
+  role: string;
+  icon: React.ReactNode;
+  options: ModelOption[];
+  value: string;
+  disabled: boolean;
+  emptyState?: CustomModelEmptyState;
+  t: (key: string) => string;
+  onChange: (role: string, model: string) => void;
+}) {
+  const warningKey =
+    emptyState === "no_custom_models_global"
+      ? "generate.noCustomModelsGlobal"
+      : emptyState === "no_custom_models_for_role"
+        ? "generate.noCustomModelsForRole"
+        : null;
+
+  return (
+    <div className="relative">
+      <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+        {icon}
+      </div>
+      <select
+        className="min-h-11 w-full border border-white/10 bg-night-950/80 pl-9 pr-3 text-sm font-semibold text-white outline-none transition focus:border-signal-cyan/70 disabled:opacity-50"
+        value={value}
+        onChange={(e) => onChange(role, e.target.value)}
+        disabled={disabled}
+      >
+        <option value="">{t("settings.modelChoices.default")}</option>
+        {options.map((opt) => (
+          <option key={opt.model} value={opt.model}>
+            {opt.label || opt.model} {opt.provider_code === "custom" ? `[${t("settings.customModels.customBadge")}]` : ""}
+          </option>
+        ))}
+      </select>
+      {warningKey ? (
+        <div className="mt-2 flex flex-wrap items-start gap-2 text-xs text-signal-amber">
+          <AlertTriangle aria-hidden="true" size={14} className="mt-0.5 shrink-0" />
+          <span className="min-w-0 flex-1 break-words">{t(warningKey)}</span>
+          <Link to="/settings" className="shrink-0 font-semibold text-signal-cyan transition hover:text-white">
+            {t("generate.goAssignRoles")}
+          </Link>
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   fetchKnowledgeSources,
   fetchTemplates,
   fetchUserPreferences,
+  updateUserPreferences,
 } from "../api";
 import { Button } from "../components/ui";
 import { useMediaQuery } from "../hooks";
@@ -91,6 +92,7 @@ export default function GeneratePage() {
   const { busy, running } = session;
 
   const refreshPreferences = useCallback(() => {
+    session.refreshModelOptions();
     fetchUserPreferences()
       .then((prefs) => {
         session.setModelChoices(prefs.model_choices ?? {});
@@ -228,6 +230,19 @@ export default function GeneratePage() {
     setter(value);
   };
 
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleModelChoiceChange = useCallback(
+    (role: string, model: string) => {
+      const nextChoices = { ...(session.modelChoices ?? {}), [role]: model };
+      session.setModelChoices(nextChoices);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        updateUserPreferences({ model_choices: nextChoices }).catch(() => {});
+      }, 400);
+    },
+    [session],
+  );
+
   const providerWarning = useMemo(() => {
     const keys = ["main_writer", "fast_writer", "template_planner", "audit_text"];
     for (const key of keys) {
@@ -265,6 +280,8 @@ export default function GeneratePage() {
       recommendedConfig={recommendedConfig}
       busy={busy}
       customModels={session.customModels}
+      modelOptions={session.modelOptions}
+      modelChoices={session.modelChoices ?? {}}
       onSlugChange={setSlug}
       onTemplateChange={setTemplate}
       onQualityModeChange={setQualityMode}
@@ -273,6 +290,7 @@ export default function GeneratePage() {
       onToggleAudit={markOverride(setEnableAudit)}
       onToggleVisualAudit={markOverride(setEnableVisualAudit)}
       onFormatOverridesChange={setFormatOverrides}
+      onModelChoiceChange={handleModelChoiceChange}
     />
   );
 
