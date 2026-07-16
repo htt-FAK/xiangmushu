@@ -1,4 +1,4 @@
-import { AlertTriangle, MessageSquareText, Settings, Sparkles, Zap, ShieldCheck } from "lucide-react";
+import { AlertTriangle, MessageSquareText, Sparkles, Zap, ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Panel } from "../../components/ui";
 import { useI18n } from "../../i18n";
@@ -346,11 +346,27 @@ function ModelSelector({
       >
         <option value="">{t("settings.modelChoices.default")}</option>
         {options.map((opt) => (
-          <option key={opt.model} value={opt.model}>
+          <option key={String(opt.value || opt.model)} value={String(opt.value || opt.model)}>
             {opt.label || opt.model} {opt.provider_code === "custom" ? `[${t("settings.customModels.customBadge")}]` : ""}
           </option>
         ))}
       </select>
+      {options.length > 0 ? (
+        <div className="mt-2 text-[11px] text-slate-500">
+          {(() => {
+            const current = options.find((item) => String(item.value || item.model) === value);
+            if (!current) return null;
+            const provider = current.provider_name || current.provider_code || current.model;
+            const source = current.provider_code === "custom" ? t("settings.customModels.customBadge") : provider;
+            return (
+              <span className="break-words">
+                {current.label || current.model}
+                <span className="ml-1 text-slate-600">({source})</span>
+              </span>
+            );
+          })()}
+        </div>
+      ) : null}
       {warningKey ? (
         <div className="mt-2 flex flex-wrap items-start gap-2 text-xs text-signal-amber">
           <AlertTriangle aria-hidden="true" size={14} className="mt-0.5 shrink-0" />

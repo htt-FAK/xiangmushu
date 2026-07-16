@@ -42,9 +42,20 @@ def _maybe_use_custom_model(
         from openai import OpenAI
 
         target = str(model_choice).strip()
+        target_custom_id: str | None = None
+        target_model_id = target
+        if target.startswith("custom:"):
+            target_custom_id = target.split(":", 1)[1].strip()
+            target_model_id = ""
+        elif target.startswith("builtin:"):
+            target_model_id = target.split(":", 1)[1].strip()
         for row in get_custom_models_by_user(user_id):
             row_model = str(row.default_model_id or "").strip()
-            if row_model != target:
+            row_id = str(row.id)
+            if target_custom_id is not None:
+                if row_id != target_custom_id:
+                    continue
+            elif row_model != target_model_id:
                 continue
             try:
                 api_key = decrypt_api_key(row.encrypted_api_key)

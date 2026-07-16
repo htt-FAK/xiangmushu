@@ -280,11 +280,14 @@ export interface CustomModelsListResponse {
 }
 
 export interface ModelOption {
+  value?: string;
   model: string;
   recommended?: boolean;
   label?: string;
   provider_code?: string;
   provider_name?: string;
+  source?: "builtin" | "custom" | string;
+  custom_model_id?: number;
 }
 
 export interface ModelModuleConfig {

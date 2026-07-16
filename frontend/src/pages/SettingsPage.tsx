@@ -76,7 +76,9 @@ function ModelSelector({
   }, [open]);
 
   const flatOptions: ModelOption[] = useMemo(() => flattenOptions(config), [config]);
-  const selectedOption = flatOptions.find((o) => o.model === selected);
+  const selectedOption = flatOptions.find(
+    (o) => String(o.value || o.model || "") === selected,
+  );
   const selectedLabel = selectedOption?.label || selectedOption?.model || selected || "...";
 
   return (
@@ -109,17 +111,17 @@ function ModelSelector({
         <div className="absolute right-0 z-[100] mt-1 max-h-[360px] w-full min-w-[260px] max-w-[360px] overflow-y-auto border border-white/15 bg-night-900 shadow-xl">
           {flatOptions.map((option) => (
             <button
-              key={`${option.provider_code || "default"}-${option.model}`}
-              type="button"
-              onClick={() => {
-                onSelect(moduleKey, option.model);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
-                selected === option.model
-                  ? "bg-signal-lime/12 text-white"
-                  : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
-              }`}
+                key={`${option.provider_code || "default"}-${option.value || option.model}`}
+                type="button"
+                onClick={() => {
+                  onSelect(moduleKey, String(option.value || option.model || ""));
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition ${
+                  selected === String(option.value || option.model || "")
+                    ? "bg-signal-lime/12 text-white"
+                    : "text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                }`}
             >
               <span className="min-w-0">
                 <span className="block truncate">{option.label || option.model}</span>
@@ -131,7 +133,7 @@ function ModelSelector({
                 {option.recommended ? (
                   <span className="rounded bg-signal-lime/20 px-1.5 py-0.5 text-[10px] font-bold text-signal-lime">{t("settings.modelRecommended")}</span>
                 ) : null}
-                {selected === option.model ? <Check aria-hidden="true" size={14} className="text-signal-lime" /> : null}
+                {selected === String(option.value || option.model || "") ? <Check aria-hidden="true" size={14} className="text-signal-lime" /> : null}
               </span>
             </button>
           ))}
@@ -188,7 +190,7 @@ export default function SettingsPage() {
       const warnings: Record<string, string> = { ...(prefs.warnings ?? {}) };
       for (const key of MODEL_ROLE_ORDER) {
         const cfg = options[key];
-        const availableModels = flattenOptions(cfg).map((item) => item.model);
+        const availableModels = flattenOptions(cfg).map((item) => String(item.value || item.model || ""));
         const savedChoice = merged[key];
         if (savedChoice && availableModels.length > 0 && !availableModels.includes(savedChoice)) {
           const fallbackModel = preferredModel(cfg, savedChoice);

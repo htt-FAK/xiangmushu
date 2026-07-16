@@ -467,6 +467,7 @@ export function useGenerationSession(options: {
     // Background fetch custom models with caching
     const cached = getModels();
     if (cached) setCustomModels(cached);
+    void fetchModelOptions().then(setModelOptions).catch(() => {});
     fetchCustomModels().then((models) => {
       setCustomModels(models);
       setModels(models);

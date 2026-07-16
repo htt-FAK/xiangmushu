@@ -527,8 +527,9 @@ def _custom_model_options_for_role(
         seen_model_ids.add(model_id)
         options.append(
             {
+                "value": f"custom:{row.id}",
                 "model": model_id,
-                "label": f"{row.name} ({model_id})",
+                "label": row.name,
                 "provider_code": "custom",
                 "provider_name": "自定义 / Custom",
                 "recommended": False,
@@ -537,6 +538,22 @@ def _custom_model_options_for_role(
             }
         )
     return options
+
+
+def _builtin_option_value(model_id: str) -> str:
+    return f"builtin:{str(model_id or '').strip()}"
+
+
+def _normalize_saved_model_choice(choice: str) -> tuple[str | None, str]:
+    raw = str(choice or "").strip()
+    if not raw:
+        return None, ""
+    if raw.startswith("custom:"):
+        return "custom", raw.split(":", 1)[1].strip()
+    if raw.startswith("builtin:"):
+        return "builtin", raw.split(":", 1)[1].strip()
+    # legacy raw model id
+    return None, raw
 
 
 def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str, Any]]:
@@ -565,10 +582,12 @@ def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str
         seen: set[tuple[str, str]] = set()
         for item in models:
             option = {
+                "value": _builtin_option_value(str(item["model"])),
                 "model": item["model"],
                 "label": item["display_name"],
                 "provider_code": item["provider_code"],
                 "provider_name": item["provider_name"],
+                "source": "builtin",
                 "recommended": item["model"] == role_cfg.get("default_model"),
             }
             dedupe_key = (str(option["provider_code"]), str(option["model"]))
@@ -583,7 +602,11 @@ def model_options_map_for_user(user_id: int | None = None) -> dict[str, dict[str
             continue
 
         selected = str(saved.get(role) or "").strip()
-        if selected and all(str(item["model"]) != selected for item in options):
+        option_values = {
+            str(item.get("value") or item.get("model") or "").strip()
+            for item in options
+        }
+        if selected and selected not in option_values:
             result[role] = {
                 "label": role_cfg["label"],
                 "description": role_cfg["description"],
@@ -693,18 +716,24 @@ def sanitize_user_model_choices(
         return raw, {role: warning for role in raw}
     available: dict[str, set[str]] = {}
     for item in catalog_rows:
-        available.setdefault(str(item["role"]), set()).add(str(item["model"]))
+        available.setdefault(str(item["role"]), set()).add(_builtin_option_value(str(item["model"])))
+        available[str(item["role"])].add(str(item["model"]))
+    custom_rows = get_custom_models_by_user(user_id) if user_id is not None else []
+    custom_values_by_role: dict[str, set[str]] = {}
+    for role in known_roles:
+        for option in _custom_model_options_for_role(role, custom_rows):
+            custom_values_by_role.setdefault(role, set()).add(str(option.get("value") or ""))
     clean: dict[str, str] = {}
     warnings: dict[str, str] = {}
     for role, model in raw.items():
         if role not in ROLE_DEFAULTS:
             continue
-        if model in available.get(role, set()):
+        if model in available.get(role, set()) or model in custom_values_by_role.get(role, set()):
             clean[role] = model
             continue
         fallback_model, _ = default_model_for_role(role)
         if fallback_model:
-            clean[role] = fallback_model
+            clean[role] = _builtin_option_value(fallback_model)
             warnings[role] = f"所选模型 '{model}' 暂时不可用，已自动降级至默认模型 '{fallback_model}'"
     return clean, warnings
 
@@ -729,10 +758,34 @@ def save_user_model_choices(user_id: int, choices: dict[str, str] | None) -> tup
         with conn.cursor() as cur:
             cur.execute("DELETE FROM user_model_choices WHERE user_id = %s", (user_id,))
             for role, model in clean.items():
+                selected_kind, selected_payload = _normalize_saved_model_choice(model)
+                if selected_kind == "custom":
+                    custom_rows = get_custom_models_by_user(user_id)
+                    custom_row = next(
+                        (row for row in custom_rows if str(row.id) == selected_payload),
+                        None,
+                    )
+                    if custom_row is not None:
+                        cur.execute(
+                            """
+                            INSERT INTO user_model_choices(user_id, module_key, provider_id, model_catalog_id, provider_code, model_id)
+                            VALUES(%s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                user_id,
+                                role,
+                                None,
+                                None,
+                                "custom",
+                                str(custom_row.default_model_id or "").strip(),
+                            ),
+                        )
+                        continue
                 catalog = by_role.get(role)
-                if catalog is None or str(catalog["model"]) != model:
+                model_id = selected_payload if selected_kind in {"builtin", None} else model
+                if catalog is None or str(catalog["model"]) != model_id:
                     for candidate in catalog_rows:
-                        if candidate["role"] == role and candidate["model"] == model:
+                        if candidate["role"] == role and candidate["model"] == model_id:
                             catalog = candidate
                             break
                 if catalog is None:
@@ -763,14 +816,34 @@ def resolve_role_choice(role: str, user_id: int | None = None) -> dict[str, Any]
         saved = load_user_model_choices(user_id)
         selected = str(saved.get(role_key) or "").strip()
         if selected:
+            selected_kind, selected_payload = _normalize_saved_model_choice(selected)
+            if selected_kind == "custom":
+                try:
+                    custom_rows = get_custom_models_by_user(user_id)
+                    custom_row = next(
+                        (row for row in custom_rows if str(row.id) == selected_payload),
+                        None,
+                    )
+                    if custom_row is not None:
+                        return {
+                            "role": role_key,
+                            "model": str(custom_row.default_model_id or "").strip(),
+                            "provider_code": "custom",
+                            "source": f"user:{role_key}",
+                            "custom_model_id": custom_row.id,
+                        }
+                except Exception:
+                    pass
             if not registry_enabled():
-                return {"role": role_key, "model": selected, "provider_code": provider_code_for_model(selected), "source": f"user:{role_key}"}
+                raw_model = selected_payload if selected_kind == "builtin" else selected
+                return {"role": role_key, "model": raw_model, "provider_code": provider_code_for_model(raw_model), "source": f"user:{role_key}"}
             allowed = {item["model"]: item for item in _catalog_rows_for_user(user_id) if item["role"] == role_key}
-            if selected in allowed:
-                item = allowed[selected]
+            raw_model = selected_payload if selected_kind == "builtin" else selected
+            if raw_model in allowed:
+                item = allowed[raw_model]
                 return {
                     "role": role_key,
-                    "model": selected,
+                    "model": raw_model,
                     "provider_code": str(item["provider_code"]),
                     "extra_body": dict(item.get("config") or {}),
                     "source": f"user:{role_key}",
